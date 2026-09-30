@@ -21,15 +21,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -154,7 +157,7 @@ type wbCheckiner struct {
 }
 
 func newWBCheckiner() wbCheckiner {
-	return wbCheckiner{path: wbCheckinPath(), now: time.Now, accounts: func() []wbAccount { return wbLogins(wbCN) }}
+	return wbCheckiner{path: wbCheckinPath(), now: time.Now, accounts: wbCheckinAccounts}
 }
 
 // checkinNow checks each account in use in for today that isn't yet, and
@@ -202,13 +205,18 @@ func (c wbCheckiner) checkinNow(ctx context.Context, soon bool) []WorkBuddyCheck
 // wbCheckin checks a in for the day as WorkBuddy's 签到 does: the event's
 // status first, and a claim only while it runs and today's isn't in.
 func wbCheckin(ctx context.Context, a wbAccount) WorkBuddyCheckin {
-	creds, err := wbFresh(ctx, a)
-	if err != nil {
-		return wbCheckinFailed(err)
+	var h map[string]string
+	do := a.via
+	if do == nil {
+		do = http.DefaultClient.Do
+		creds, err := wbFresh(ctx, a)
+		if err != nil {
+			return wbCheckinFailed(err)
+		}
+		h = wbAuthHeaders(a.site, creds)
 	}
-	h := wbAuthHeaders(a.site, creds)
 	var st wbCheckinStatus
-	if err := wbCall(ctx, http.MethodPost, a.site.api()+"/v2/billing/meter/checkin-activity-status", h, map[string]any{}, &st); err != nil {
+	if err := wbCallVia(ctx, do, http.MethodPost, a.site.api()+"/v2/billing/meter/checkin-activity-status", h, map[string]any{}, &st); err != nil {
 		return wbCheckinRefused(err)
 	}
 	switch {
@@ -218,7 +226,7 @@ func wbCheckin(ctx context.Context, a wbAccount) WorkBuddyCheckin {
 		return WorkBuddyCheckin{Outcome: CheckinDone, Credit: float64(st.TodayCredit), Streak: int(st.StreakDays)}
 	}
 	var got wbCheckinClaim
-	if err := wbCall(ctx, http.MethodPost, a.site.api()+"/v2/billing/meter/daily-checkin", h, map[string]any{}, &got); err != nil {
+	if err := wbCallVia(ctx, do, http.MethodPost, a.site.api()+"/v2/billing/meter/daily-checkin", h, map[string]any{}, &got); err != nil {
 		r := wbCheckinRefused(err)
 		if r.Outcome == CheckinDone {
 			r.Streak = int(st.StreakDays)
@@ -264,7 +272,7 @@ func CheckInWorkBuddy(ctx context.Context) []WorkBuddyCheckin {
 func WorkBuddyCheckins() []WorkBuddyCheckin {
 	st := readCheckins(wbCheckinPath())
 	var out []WorkBuddyCheckin
-	for _, a := range wbLogins(wbCN) {
+	for _, a := range wbCheckinAccounts() {
 		if r, ok := st[wbCheckinKey(a)]; ok && a.On {
 			r.User = a.User
 			out = append(out, r)
@@ -275,7 +283,37 @@ func WorkBuddyCheckins() []WorkBuddyCheckin {
 }
 
 // HasWorkBuddy says whether a WorkBuddy (China) account is signed in.
-func HasWorkBuddy() bool { return len(wbLogins(wbCN)) > 0 }
+func HasWorkBuddy() bool { return len(wbCheckinAccounts()) > 0 }
+
+// wbCheckinAccounts are the WorkBuddy (China) accounts checked in: the
+// plugin's once WorkBuddy is moved onto it, checked in through it.
+func wbCheckinAccounts() []wbAccount {
+	if !Moved(wbCN.id) {
+		return wbLogins(wbCN)
+	}
+	pp, ok := PluginOf(wbCN.id)
+	if !ok {
+		return nil
+	}
+	auths := plugin.Auths(pp.ID)
+	var out []wbAccount
+	for _, l := range pluginLogins(pp) {
+		key := l.acct.Key
+		out = append(out, wbAccount{Login: l.Login, site: wbCN, creds: wbCreds{UID: str(auths[key]["uid"])},
+			via: func(req *http.Request) (*http.Response, error) {
+				h := map[string]string{}
+				for k, vs := range req.Header {
+					h[strings.ToLower(k)] = vs[0]
+				}
+				var body []byte
+				if req.Body != nil {
+					body, _ = io.ReadAll(req.Body)
+				}
+				return plugin.Fetch(req.Context(), plugin.FetchRequest{Provider: pp.ID, Account: key, URL: req.URL.String(), Method: req.Method, Headers: h, Body: body})
+			}})
+	}
+	return out
+}
 
 // KeepWorkBuddyCheckedIn checks the WorkBuddy accounts in each day while
 // settings say to: two minutes after it starts, every wbCheckinEvery after

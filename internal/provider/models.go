@@ -569,22 +569,6 @@ func EffectivePrice(providerID, model string) (catalog.Price, bool) {
 // the list is one snapshot of the prices rather than a reading per row, and
 // a price changed while it is read takes effect in the next call.
 func EffectivePriceIn(s settings.Settings, providerID, model string) (catalog.Price, bool) {
-	if pr, ok := ConfiguredPriceIn(s, providerID, model); ok {
-		return pr, true
-	}
-	p, known := byIDOrWas(providerID)
-	if known {
-		if pr, ok := p.ListPrice(model); ok {
-			return pr, true
-		}
-	}
-	return MakerPrice(model)
-}
-
-// ConfiguredPriceIn returns only an explicit provider/model or provider-wide
-// price, including zero, using the supplied settings snapshot. It resolves
-// renamed providers in the same way as EffectivePriceIn and has no catalog fallback.
-func ConfiguredPriceIn(s settings.Settings, providerID, model string) (catalog.Price, bool) {
 	// A price is keyed by the id the provider has now, so one written before
 	// a rename is read under the id it has. Only an id, or one the provider
 	// was renamed from, resolves; anything else is looked up as given, so a
@@ -603,7 +587,12 @@ func ConfiguredPriceIn(s settings.Settings, providerID, model string) (catalog.P
 			}
 		}
 	}
-	return catalog.Price{}, false
+	if known {
+		if pr, ok := p.ListPrice(model); ok {
+			return pr, true
+		}
+	}
+	return MakerPrice(model)
 }
 
 // byIDOrWas is the provider with that id, else the one it was renamed from.

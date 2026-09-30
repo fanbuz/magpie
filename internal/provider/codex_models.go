@@ -333,11 +333,14 @@ func CodexNativePicked() (map[string]bool, bool) {
 // account (buildResponses).
 func codexListed(shown []Entry, members func(id string) []Member) []catalog.Model {
 	var ms []catalog.Model
-	for _, e := range shown {
+	// named among all shown: the account's own, which the backend lists,
+	// are in Codex's picker beside these
+	labels := Labels(shown)
+	for i, e := range shown {
 		if e.Group == "" && e.Provider.Account != nil && e.Provider.Account.Agent == "codex" {
 			continue
 		}
-		m := catalog.Model{ID: e.ID, Name: e.Label(), Efforts: e.Efforts, Images: e.Images, Context: e.Context}
+		m := catalog.Model{ID: e.ID, Name: labels[i], Efforts: e.Efforts, Images: e.Images, Context: e.Context}
 		if e.Group != "" {
 			for _, mb := range members(e.ID) {
 				if a := mb.Provider.Account; a != nil && a.Agent == "codex" && strings.HasPrefix(mb.Model, "gpt-") {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -148,6 +149,9 @@ type mcpFile struct {
 	// library, but not written: Pi's mcp.json that pi-mcp-adapter no longer
 	// reads, with what couldn't be moved from it.
 	Extra []string
+	// WSL: the agent runs in a WSL distro, where a Windows program isn't
+	// one it can start
+	WSL bool
 }
 
 // files are every file the servers are written into.
@@ -179,8 +183,15 @@ func (f *mcpFile) supports(s *Server) error {
 	if f.Format == fmtDsh && s.Name != "" && !dshServerName.MatchString(s.Name) {
 		return errDshName
 	}
+	if f.WSL && !s.Remote() && windowsPath.MatchString(s.Command) {
+		return fmt.Errorf("it runs a Windows program (%s), which an agent in WSL can't start: give it a command WSL has", s.Command)
+	}
 	return nil
 }
+
+// windowsPath is a program named as Windows names one: C:/…, a path with a
+// backslash in it, or …/npx.cmd.
+var windowsPath = regexp.MustCompile(`^[A-Za-z]:[\\/]|\\|(?i)\.(?:exe|cmd|bat|ps1)$`)
 
 // errNoRemote is what the page says of an app that reaches only a server
 // it runs itself (Claude Desktop, whose remote ones are its Connectors).

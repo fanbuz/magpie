@@ -68,6 +68,23 @@ const (
 // run started with the whole conversation, as its next turn would be.
 var parkLongest = 5 * time.Minute
 
+// A run whose reply called nothing but a tool that ends its caller's turn
+// (finalTools: an Agent SDK or workflow subagent's StructuredOutput, answered
+// by the client itself) hears no result for it when the call was good, the
+// subagent done: it waits finalGrace, for the error result a call that
+// broke its schema gets at once, and is let go (#345).
+var (
+	finalGrace = 30 * time.Second
+	finalTools = map[string]bool{"StructuredOutput": true}
+)
+
+// Of the runs waiting on their caller's tool calls, parkedMost are kept
+// once they have waited parkLongest, the longest waiting let go first: a
+// caller stopped with its calls unanswered (a subagent its workflow ended)
+// sends none, and each is a Claude Code process. One let go that does get
+// its results is started anew with the whole conversation.
+const parkedMost = 16
+
 type subscriptionRun struct {
 	bridge *subscriptionBridge
 	token  string
@@ -118,6 +135,11 @@ type subscriptionRun struct {
 	// reply's two tool calls the second is made only once the first has its
 	// result, while the client ran both and sent both results back at once.
 	early map[string]mcpToolResult
+
+	// asked is the client's tools its reply called, and parkedAt when it
+	// began waiting on them
+	asked    []string
+	parkedAt time.Time
 }
 
 // waitTool collects a tool result that took longer than an agent's patience.
@@ -383,9 +405,7 @@ func (r *subscriptionRun) ended(req *Request, said, stop string, ok bool) {
 		r.abort()
 		return
 	case stop == "tool":
-		if r.stdin == nil && r.timer != nil {
-			r.timer.Reset(parkLongest)
-		}
+		r.park()
 		return // it waits on its tool calls
 	case r.stdin == nil:
 		return // it ends by itself
@@ -429,6 +449,56 @@ func (r *subscriptionRun) ended(req *Request, said, stop string, ok bool) {
 	r.timer.Reset(idleLongest)
 	for _, run := range drop {
 		run.abort()
+	}
+}
+
+// park leaves the run waiting on its reply's tool calls: parkLongest for
+// a run started anew for each turn, finalGrace when they end the caller's
+// turn, and among the parkedMost longest waiting otherwise.
+func (r *subscriptionRun) park() {
+	r.mu.Lock()
+	final := len(r.asked) > 0
+	for _, name := range r.asked {
+		final = final && finalTools[name]
+	}
+	now := time.Now()
+	r.parkedAt = now
+	r.mu.Unlock()
+	switch {
+	case r.timer == nil:
+		return
+	case final:
+		r.timer.Reset(finalGrace)
+		return
+	case r.stdin == nil:
+		r.timer.Reset(parkLongest)
+		return
+	}
+	b := r.bridge
+	if b == nil {
+		return
+	}
+	type waiting struct {
+		run *subscriptionRun
+		at  time.Time
+	}
+	var parked []waiting
+	b.mu.Lock()
+	for _, run := range b.runs {
+		run.mu.Lock()
+		at, closed := run.parkedAt, run.closed
+		run.mu.Unlock()
+		if !closed && !at.IsZero() && now.Sub(at) >= parkLongest {
+			parked = append(parked, waiting{run, at})
+		}
+	}
+	b.mu.Unlock()
+	if len(parked) <= parkedMost {
+		return
+	}
+	slices.SortFunc(parked, func(a, b waiting) int { return a.at.Compare(b.at) })
+	for _, w := range parked[:len(parked)-parkedMost] {
+		w.run.abort()
 	}
 }
 
@@ -700,6 +770,9 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 				continue
 			}
 			before, this = Usage{}, Usage{}
+			r.mu.Lock()
+			r.asked = nil
+			r.mu.Unlock()
 			r.emit(Event{Kind: KStart, MsgID: e.Message.ID, Model: e.Message.Model, Usage: usage(e.Message.Usage)})
 		case "content_block_start":
 			switch e.ContentBlock.Type {
@@ -715,6 +788,9 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 					continue
 				}
 				theirs = true
+				r.mu.Lock()
+				r.asked = append(r.asked, name)
+				r.mu.Unlock()
 				r.emit(Event{Kind: KToolStart, ID: e.ContentBlock.ID, Name: name})
 			case "text":
 				if e.ContentBlock.Text != "" {
@@ -972,6 +1048,9 @@ func (r *subscriptionRun) continueWith(results []Part) (<-chan Event, error) {
 	if r.timer != nil {
 		r.timer.Reset(30 * time.Minute)
 	}
+	r.mu.Lock()
+	r.parkedAt = time.Time{}
+	r.mu.Unlock()
 	ch := r.attach()
 	if r.begin != nil {
 		r.emit(r.begin())

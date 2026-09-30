@@ -1016,6 +1016,11 @@ body.panel .profiles #save { height: 25px; } /* the field's: the line keeps its 
 .resets-until { color: var(--faint); }
 .pq-use { margin-left: auto; flex: none; height: 20px; padding: 0 9px; border-radius: 999px; background: color-mix(in srgb, var(--fg) 7%, transparent); color: var(--fg-2); font-size: 11px; white-space: nowrap; transition: background .12s, color .12s; }
 .pq-use:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); color: var(--fg); }
+/* spending a reset by itself, beside the button that spends one now */
+.pq-use.pq-auto { margin-left: auto; }
+.pq-auto + .pq-use { margin-left: 0; }
+.pq-use.pq-auto.on, .quota-resets .auto-reset.on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.quota-resets .auto-reset + .text { margin-left: 0; }
 .pq-bals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .pq-card.bal { grid-template-columns: minmax(0, 1fr); }
 .pq-bn { display: flex; align-items: center; gap: 6px; }
@@ -1580,6 +1585,9 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .editor .side .text { padding: 3px 6px; }
 .editor .headers .pair .side .text { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border-radius: 6px; }
 .editor .stack { display: flex; flex-direction: column; gap: 6px; }
+.editor .move { align-items: flex-start; font-size: 12px; line-height: 1.5; padding-top: 4px; }
+.editor .move .hint { margin-top: 0; }
+.editor .move > button { padding-left: 0; padding-right: 0; }
 .editor .headers { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .editor .headers .pair { width: 100%; }
 .editor .headers .hadds { display: flex; flex-wrap: wrap; gap: 2px 12px; }

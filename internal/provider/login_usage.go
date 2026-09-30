@@ -26,39 +26,13 @@ type loginUsageEntry struct {
 // user. What was fetched less than a minute ago comes from the cache; the
 // rest is asked for at once, as long as ctx allows.
 func LoginUsage(ctx context.Context, agent string) map[string]SubscriptionQuota {
-	if agent == "grok" {
-		return grokLoginUsage(ctx)
-	}
 	out := map[string]SubscriptionQuota{}
 	var logins []Login
-	switch agent {
-	case "claude", "codex":
-		logins = Logins(agent)
-	case "copilot":
-		logins = copilotLoginList()
-	case "zcode":
-		logins = zcodeLoginList()
-	case "kiro":
-		logins = kiroLoginList()
-	case "workbuddy", WorkBuddyAIID:
-		logins = wbLoginList(wbSiteOf(agent))
-	case CommandCodePlanID:
-		logins = cmdLoginList()
-	case "qoder":
-		logins = loginsOf(qoderLogins())
-	case "zed":
-		logins = zedLoginList()
-	case "factory":
-		logins = factoryLoginList()
-	case MiMoID:
-		logins = mimoLoginList()
-	case "gemini", "antigravity":
-		logins = googleLoginList(agent)
-	case "cursor": // one account, the one cursor-agent is signed in to
-		if user, plan, ok := cursorIdentity(); ok {
-			logins = []Login{{Agent: agent, User: user, Plan: plan, Active: true, On: true}}
-		}
-	default:
+	if pp, ok := pluginOfAgent(agent); ok {
+		logins = pluginUsageLogins(pp)
+	} else if agent == "grok" {
+		return grokLoginUsage(ctx)
+	} else if logins, ok = builtinLogins(agent); !ok {
 		return out
 	}
 	c := &loginUsageCache
@@ -98,8 +72,47 @@ func LoginUsage(ctx context.Context, agent string) map[string]SubscriptionQuota 
 	return out
 }
 
+// builtinLogins are the accounts of a built-in subscription whose
+// allowance can be asked; false for an agent that tells none.
+func builtinLogins(agent string) (logins []Login, ok bool) {
+	switch agent {
+	case "claude", "codex":
+		logins = Logins(agent)
+	case "copilot":
+		logins = copilotLoginList()
+	case "zcode":
+		logins = zcodeLoginList()
+	case "kiro":
+		logins = kiroLoginList()
+	case "workbuddy", WorkBuddyAIID:
+		logins = wbLoginList(wbSiteOf(agent))
+	case CommandCodePlanID:
+		logins = cmdLoginList()
+	case "qoder":
+		logins = loginsOf(qoderLogins())
+	case "zed":
+		logins = zedLoginList()
+	case "factory":
+		logins = factoryLoginList()
+	case MiMoID:
+		logins = mimoLoginList()
+	case "gemini", "antigravity":
+		logins = googleLoginList(agent)
+	case "cursor": // one account, the one cursor-agent is signed in to
+		if user, plan, ok := cursorIdentity(); ok {
+			logins = []Login{{Agent: agent, User: user, Plan: plan, Active: true, On: true}}
+		}
+	default:
+		return nil, false
+	}
+	return logins, true
+}
+
 func loginQuota(ctx context.Context, l Login) SubscriptionQuota {
 	ctx = ViaLogin(ctx, l.Agent, l.User) // asked through the account's own proxy
+	if strings.HasPrefix(l.Agent, "plugin:") {
+		return pluginLoginQuota(ctx, l)
+	}
 	if l.Agent == "qoder" {
 		return qoderLoginQuota(ctx, l)
 	}
@@ -152,6 +165,7 @@ func loginQuota(ctx context.Context, l Login) SubscriptionQuota {
 	if err == nil {
 		if l.Agent == "claude" {
 			q.Windows, err = claudeWindows(ctx, l.User, tok)
+			q.Resets = claudeResetsOf(l.User)
 		} else {
 			var plan string
 			if plan, q.Windows, q.Resets, err = codexWindows(ctx, tok, accountID); plan != "" {

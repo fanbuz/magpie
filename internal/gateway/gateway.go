@@ -275,6 +275,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	go provider.KeepClaudeWindowsWarm(ctx, warmClaude)
 	// and checks the WorkBuddy accounts in for the day's credits
 	go provider.KeepWorkBuddyCheckedIn(ctx)
+	// and moves the built-in subscriptions being retired onto their plugins
+	go provider.KeepRetiringMoved(ctx)
 	for _, f := range WhileServing {
 		go f(ctx)
 	}
@@ -561,6 +563,9 @@ func (s *Server) handle(from provider.Protocol) http.HandlerFunc {
 		if err != nil {
 			writeError(w, from, 400, err.Error())
 			return
+		}
+		if from == provider.Chat {
+			body = thinkingEffort(body)
 		}
 		s.serve(w, r, from, body)
 	}
@@ -891,18 +896,31 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 		}
 	}
+	pin := strings.TrimSpace(r.Header.Get(AccountHeader))
+	if pin != "" {
+		var status int
+		var msg string
+		if cands, pl, status, msg = pinTo(pin, cands, pl); status != 0 {
+			call.Status, call.Error = status, "account pinned: "+pin
+			writeError(w, from, status, msg)
+			finishCapture()
+			s.record(call)
+			return
+		}
+	}
 	shown := aff
 	if len(cands) == 1 {
 		shown = nil // nobody else to stay away from
 	}
-	tr := s.trace.begin(Route{Time: start, Agent: call.Agent, Kind: call.Kind, For: call.For, Model: call.Model, Effort: requestEffort(from, body), Provider: p.ID, Group: group, Rule: hit, Nested: nested, Affinity: shown, Order: pl.order, Left: pl.left})
+	tr := s.trace.begin(Route{Pinned: pin, Time: start, Agent: call.Agent, Kind: call.Kind, For: call.For, Model: call.Model, Effort: requestEffort(from, body), Provider: p.ID, Group: group, Rule: hit, Nested: nested, Affinity: shown, Order: pl.order, Left: pl.left})
 	var skipped []string
-	sent := ""       // the reasoning the last try's model was asked for
-	where := ""      // the last try's provider.Where, for the usage
-	again := 0       // times the last one left has been tried again
-	resealed := 0    // what of the conversation another account sealed was taken out: its reasoning, then its compaction
-	floored := false // the reply's length raised to what the provider takes
-	var other *Try   // the first failure that wasn't an allowance run out
+	sent := ""         // the reasoning the last try's model was asked for
+	where := ""        // the last try's provider.Where, for the usage
+	again := 0         // times the last one left has been tried again
+	resealed := 0      // what of the conversation another account sealed was taken out: its reasoning, then its compaction
+	floored := false   // the reply's length raised to what the provider takes
+	var other *Try     // the first failure that wasn't an allowance run out
+	autoReset := false // a Codex or Claude reset looked at, once a request
 	for i := 0; i < len(cands); i++ {
 		c := cands[i]
 		last := i == len(cands)-1
@@ -1091,6 +1109,21 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				call.Status, call.Error = 499, "the agent canceled the request"
 			}
 			break
+		}
+		// (not for one account pinned: the others weren't asked)
+		if !autoReset && pin == "" && last && other == nil && hw.failed() && !hw.passing && failure(hw.code(), hw.errBody()) == failQuota {
+			// everyone is out of their allowance: a Codex or Claude account
+			// the user lets spend its resets by itself, its week used up,
+			// spends one and is asked again
+			autoReset = true
+			if pick, out, ok := s.autoReset(r.Context(), cands, c); ok {
+				try.Fail = failQuota
+				try.Reset = &AutoReset{Who: pick.p.Account.User, Text: out.Text(), Agent: pick.p.Account.Agent}
+				s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+				skipped = append(skipped, c.label()+": "+call.Error, pick.label()+": used one of its resets by itself ("+out.Text()+")")
+				cands = append(cands[:len(cands):len(cands)], pick)
+				continue
+			}
 		}
 		if hw.refused && !hw.passing {
 			// nobody is left: the agent is told it was refused, as a
@@ -2151,6 +2184,13 @@ var sessionHeaders = []string{
 // agent names itself in sessionHeaders is taken.
 const SessionHeader = "X-Magpie-Session"
 
+// AccountHeader pins a request to one of a subscription's accounts, by its
+// user (an email, a login) or its id in the routing trace: only it is
+// tried, and when it can't take the request the caller is told why rather
+// than another account answering — a probe of one account needs that one.
+// It goes no further than magpie.
+const AccountHeader = "X-Magpie-Account"
+
 // sessionOf is the session a request names, "" when it names none.
 func sessionOf(in http.Header) string {
 	for _, h := range append([]string{SessionHeader}, sessionHeaders...) {
@@ -2460,13 +2500,22 @@ var tooLongRe = regexp.MustCompile(`(?i)context_length_exceeded|prompt is too lo
 // tooLong is whether a vendor's error says the conversation no longer
 // fits. One about max_tokens is left alone: the reply's allowance, not
 // the conversation, is what is too big there, and compacting won't help.
+// Nor is a rate limit, however it counts ("Too many tokens, please wait",
+// Bedrock's; "tokens per minute"): told the prompt is too long, Claude Code
+// compacts, and again after the next one, until it gives up as thrashing.
 func tooLong(status int, msg string) bool {
-	if status < 400 || status >= 500 {
+	if status < 400 || status >= 500 || status == http.StatusTooManyRequests {
 		return false
 	}
 	m := strings.ToLower(msg)
 	if strings.Contains(m, "max_tokens") || strings.Contains(m, "max_output_tokens") || strings.Contains(m, "max_completion_tokens") {
 		return false
 	}
+	if paceWords.MatchString(msg) {
+		return false
+	}
 	return tooLongRe.MatchString(msg)
 }
+
+// paceWords say a limit on how fast or how much, not on one prompt's size.
+var paceWords = regexp.MustCompile(`(?i)rate.?limit|per (minute|hour|day)|\bTP[MD]\b|please wait|try again later|throttl`)

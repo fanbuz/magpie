@@ -155,6 +155,34 @@ func link(p, name string) error {
 	return os.WriteFile(filepath.Join(p, marker), []byte("copied from "+skillDir(name)+"\n"), 0o644)
 }
 
+// copyIn puts a copy of the library's skill at p, marked as magpie's, in
+// place of a link: made beside it and put in the place of what is there,
+// so the agent never finds half of one.
+func copyIn(p, name string) error {
+	lib := skillDir(name)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	next := filepath.Join(filepath.Dir(p), "."+name+".magpie-next")
+	os.RemoveAll(next)
+	if err := copyDir(realDir(lib), next); err != nil {
+		os.RemoveAll(next)
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(next, marker), []byte("copied from "+lib+" by magpie, and copied again when it changes\n"), 0o644); err != nil {
+		os.RemoveAll(next)
+		return err
+	}
+	if err := unlink(p); err != nil {
+		os.RemoveAll(next)
+		return err
+	}
+	return os.Rename(next, p)
+}
+
+// fresh is whether the copy at p holds what the library's skill does.
+func fresh(p, name string) bool { return hashDir(p) == hashDir(realDir(skillDir(name))) }
+
 func unlink(p string) error {
 	fi, err := os.Lstat(p)
 	if err != nil {
@@ -304,6 +332,14 @@ func (l *Library) syncSkills(t *Target, res *Result, all []*Target) {
 		// the folder the library's skill links to is there already: one
 		// brought in from ~/.agents/skills, which stays where it is
 		if ours(p, s.Name) || realDir(p) == realDir(skillDir(s.Name)) {
+			// a copy is made again once the library's skill has changed
+			if t.Copy && ours(p, s.Name) && (linked(p) || !fresh(p, s.Name)) {
+				if err := copyIn(p, s.Name); err != nil {
+					res.fail(id, "skill:"+s.Name, err)
+				} else {
+					res.changed(id)
+				}
+			}
 			mine = append(mine, s.Name)
 			continue
 		}
@@ -323,7 +359,11 @@ func (l *Library) syncSkills(t *Target, res *Result, all []*Target) {
 				continue
 			}
 		}
-		if err := link(p, s.Name); err != nil {
+		put := link
+		if t.Copy {
+			put = copyIn
+		}
+		if err := put(p, s.Name); err != nil {
 			res.fail(id, "skill:"+s.Name, err)
 			continue
 		}
@@ -1223,7 +1263,7 @@ func (e *leftBehind) Unwrap() error { return e.err }
 // setAside moves an agent's own skill (a folder, or a link) out of its
 // way, into a backup of its own: nothing of the user's is just deleted.
 func setAside(agent, p string) (string, error) {
-	dst := filepath.Join(BackupDir(), time.Now().Format("2006-01-02_15-04-05.000"), agent, "skills", filepath.Base(p))
+	dst := filepath.Join(BackupDir(), time.Now().Format("2006-01-02_15-04-05.000"), fileName(agent), "skills", filepath.Base(p))
 	for i := 2; ; i++ {
 		if _, err := os.Lstat(dst); errors.Is(err, fs.ErrNotExist) {
 			break

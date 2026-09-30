@@ -337,4 +337,20 @@ func usageRoutes(mux *http.ServeMux, w Windows) {
 		}
 		writeJSON(rw, out)
 	})
+	// and one of a Claude account's usage-limit resets, the same way
+	mux.HandleFunc("POST /api/usage/claude-reset", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ User string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		out, err := provider.UseClaudeReset(ctx, in.User)
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, out)
+	})
 }

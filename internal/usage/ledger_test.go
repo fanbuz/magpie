@@ -96,10 +96,9 @@ func TestLedger(t *testing.T) {
 	}
 }
 
-// Calls use a uniform model API list price through subscriptions, official
-// endpoints, unknown routes and relays with different catalogue prices. A
-// model named with its maker's path is the same model; unknown prices stay
-// unpriced, even when a reseller lists a price for an unknown model.
+// Calls use the provider catalog when available, falling back to the maker
+// for subscriptions and unknown routes. A reseller-only model is still priced
+// for that reseller, while a model absent from both catalogs stays unpriced.
 func TestSubscriptionListPrice(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -132,10 +131,11 @@ func TestSubscriptionListPrice(t *testing.T) {
 		{"copilot", "gemini-3.8-flash", (1e6*0.75 + 1e5*3.75 + 1e6*0.075) / 1e6},
 		{"copilot", "gpt-6-luna", (1e6*0.1 + 1e5*0.5 + 1e6*0.01) / 1e6},
 		{"claude", "claude-opus-5-5", (1e6*4 + 1e5*20 + 1e6*0.2) / 1e6},
-		{"relay", "openai/gpt-6-astra", (1e6*10 + 1e5*50 + 1e6*1) / 1e6},
-		{"relay", "gpt-6-astra", (1e6*10 + 1e5*50 + 1e6*1) / 1e6},
+		{"relay", "openai/gpt-6-astra", (1e6*1 + 1e5*2 + 1e6*0.01) / 1e6},
+		{"relay", "gpt-6-astra", (1e6*1 + 1e5*2 + 1e6*0.01) / 1e6},
 		{UnknownProvider, "gpt-6-astra", (1e6*10 + 1e5*50 + 1e6*1) / 1e6},
-		{"relay", "mystery-1", 0},
+		{"relay", "mystery-1", (1e6*99 + 1e5*99) / 1e6},
+		{UnknownProvider, "mystery-1", 0},
 	}
 	for i, c := range calls {
 		Append(Record{Time: now.Add(-time.Duration(len(calls)-i) * time.Minute), Agent: "codex", Provider: c.prov, Model: c.model,
@@ -479,9 +479,12 @@ func TestLedgerConfiguredPricesAndRefresh(t *testing.T) {
 	catalog.Reset()
 	t.Cleanup(catalog.Reset)
 	os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755)
-	os.WriteFile(catalog.CachePath(), []byte(`{"openai":{"models":{"sol":{"id":"sol","cost":{"input":2,"output":8}}}}}`), 0o644)
+	os.WriteFile(catalog.CachePath(), []byte(`{"openai":{"models":{"sol":{"id":"sol","cost":{"input":2,"output":8}}}},"discount":{"models":{"sol":{"id":"sol","cost":{"input":1,"output":2}}}}}`), 0o644)
 	price := func(v float64) settings.ModelPrice {
 		return settings.ModelPrice{Input: new(v), Output: new(v), CacheRead: new(v), CacheWrite: new(v)}
+	}
+	if err := provider.Save(provider.Provider{ID: "b", Name: "Relay", Key: "k", Chat: "https://relay.example/v1", Catalog: "discount"}); err != nil {
+		t.Fatal(err)
 	}
 	cfg := settings.Settings{ModelPrices: map[string]settings.ModelPrice{"a/sol": price(0), "a/*": price(9), "b/*": price(3)}}
 	if err := settings.Save(cfg); err != nil {
@@ -526,4 +529,10 @@ func TestLedgerConfiguredPricesAndRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(map[string]float64{"a": 2, "b": 3, "unknown": 2})
+	delete(cfg.ModelPrices, "b/*")
+	if err := settings.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	// Removing an override falls back to the relay's catalog, not the maker.
+	check(map[string]float64{"a": 2, "b": 1, "unknown": 2})
 }

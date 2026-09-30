@@ -305,3 +305,18 @@ func TestCommandCodeSignInAgainToRemovedOwn(t *testing.T) {
 		t.Fatalf("not listed after signing in again: %v %+v", ok, p)
 	}
 }
+
+// Command Code answers a 200 with success false when it couldn't read the
+// subscription ("write CONNECTION_CLOSED …"): the plan is unread, not none.
+func TestCommandCodeSubscriptionUnread(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "error": "write CONNECTION_CLOSED db.local:5432"})
+	}))
+	defer srv.Close()
+	oldAPI := cmdAPI
+	cmdAPI = srv.URL
+	defer func() { cmdAPI = oldAPI }()
+	if _, plan, _, _, ok := cmdSubscription(context.Background(), cmdAuth{APIKey: "k"}); ok || plan != "" {
+		t.Fatalf("plan %q, ok %v: want it unread", plan, ok)
+	}
+}

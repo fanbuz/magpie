@@ -158,6 +158,9 @@ type wbAccount struct {
 	site  *wbSite
 	creds wbCreds
 	own   bool
+	// via, for an account on the plugin, sends a request as the plugin
+	// does, signed with its sign-in, which magpie never renews itself
+	via func(*http.Request) (*http.Response, error)
 }
 
 // ---- WorkBuddy's own account --------------------------------------------------
@@ -689,6 +692,10 @@ const (
 // {code, msg, data}: code 0 is a success. On a non-zero code it returns a
 // *wbError carrying it.
 func wbCall(ctx context.Context, method, u string, headers map[string]string, body, dst any) error {
+	return wbCallVia(ctx, http.DefaultClient.Do, method, u, headers, body, dst)
+}
+
+func wbCallVia(ctx context.Context, do func(*http.Request) (*http.Response, error), method, u string, headers map[string]string, body, dst any) error {
 	var rd io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
@@ -704,7 +711,7 @@ func wbCall(ctx context.Context, method, u string, headers map[string]string, bo
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := do(req)
 	if err != nil {
 		return err
 	}

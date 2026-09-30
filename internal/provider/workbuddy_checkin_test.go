@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -299,5 +300,30 @@ func TestWorkBuddyCheckinSignedIn(t *testing.T) {
 	}
 	if got := WorkBuddyCheckins(); len(got) != 1 || got[0].User != "旅行者" || got[0].Credit != 100 {
 		t.Fatalf("kept: %+v", got)
+	}
+}
+
+// An account on the plugin is checked in through the plugin's own fetch,
+// which signs it: magpie holds no token of it to renew or send.
+func TestWorkBuddyCheckinThroughPlugin(t *testing.T) {
+	var paths []string
+	via := func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		if req.Header.Get("Authorization") != "" {
+			t.Errorf("magpie signed %s itself", req.URL.Path)
+		}
+		body := `{"code":0,"data":{"active":true,"today_checked_in":false,"streak_days":2}}`
+		if strings.HasSuffix(req.URL.Path, "/daily-checkin") {
+			body = `{"code":0,"data":{"credit":50,"streak_days":3}}`
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
+	}
+	a := wbAccount{Login: Login{User: "me", On: true}, site: wbCN, creds: wbCreds{UID: "u1"}, via: via}
+	r := wbCheckin(context.Background(), a)
+	if r.Outcome != CheckinClaimed || r.Credit != 50 || r.Streak != 3 {
+		t.Fatalf("check-in through the plugin: %+v", r)
+	}
+	if len(paths) != 2 || !strings.HasSuffix(paths[0], "/checkin-activity-status") || !strings.HasSuffix(paths[1], "/daily-checkin") {
+		t.Fatalf("asked %v", paths)
 	}
 }

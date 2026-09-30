@@ -72,8 +72,9 @@ func firstOf(xs []string) string {
 func magpieModels(agent string) []catalog.Model {
 	var out []catalog.Model
 	shown, _ := provider.CatalogFor(agent)
-	for _, e := range shown {
-		m := catalog.Model{ID: e.ID, Name: e.Label(), Provider: firstOf(e.Provider.Catalogs()), Efforts: e.Efforts, Images: e.Images, Context: e.Context, Output: e.Output}
+	labels := provider.Labels(shown)
+	for i, e := range shown {
+		m := catalog.Model{ID: e.ID, Name: labels[i], Provider: firstOf(e.Provider.Catalogs()), Efforts: e.Efforts, Images: e.Images, ImageInput: e.ImageInput, Context: e.Context, Output: e.Output}
 		// APIs is the one to ask it on for the gateway to relay the request
 		// as it is; none for a group, whose members may each want another
 		if e.Group == "" {
@@ -84,6 +85,17 @@ func magpieModels(agent string) []catalog.Model {
 		out = append(out, m)
 	}
 	return out
+}
+
+// maxTokens is the output limit an agent is handed for m, kept within the
+// context window it is handed with it: models.dev lists some models' output
+// above their window (deepseek-chat's 384000 against 128000). An unknown
+// window leaves the output as it is.
+func maxTokens(m catalog.Model) int {
+	if m.Context > 0 && m.Output > m.Context {
+		return m.Context
+	}
+	return m.Output
 }
 
 // group tags every option with a group name.

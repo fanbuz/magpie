@@ -45,11 +45,11 @@ func (b *backups) keep(agent, path string) error {
 	if b.dir == "" {
 		b.dir = filepath.Join(BackupDir(), time.Now().Format("2006-01-02_15-04-05.000"))
 	}
-	dst := filepath.Join(b.dir, agent, filepath.Base(path))
+	dst := filepath.Join(b.dir, fileName(agent), filepath.Base(path))
 	if _, err := os.Stat(dst); err == nil {
 		// another file by that name (each dsh profile's cordis.patch.yml):
 		// kept under its folder's name
-		dst = filepath.Join(b.dir, agent, filepath.Base(filepath.Dir(path)), filepath.Base(path))
+		dst = filepath.Join(b.dir, fileName(agent), filepath.Base(filepath.Dir(path)), filepath.Base(path))
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err

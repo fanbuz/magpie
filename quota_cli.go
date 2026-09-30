@@ -10,22 +10,30 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 const quotaUsage = `usage: magpie quota [<provider>…] [--json]
        magpie quota reset [<codex account>] [--yes]
+       magpie quota auto-reset [<codex account>] [on|off]
   what is left of every subscription, plan and key magpie has: each window's use and
   when it starts again, and each key's balance, asked of the vendors now (or less than
   a minute ago). --json is for scripts and agents; the gateway answers the same at
   GET http://127.0.0.1:3425/v1/magpie/quotas
   A Codex account that holds rate-limit resets says how many; quota reset spends one,
   starting the account's current windows again (the one Codex is signed in to unless
-  named). It can't be undone, so it asks first; --yes doesn't.`
+  named). It can't be undone, so it asks first; --yes doesn't. quota auto-reset on lets
+  the account spend one by itself when its weekly window is used up and no other
+  account can take a request, one a week at most (the five hours running out never
+  does); off stops it, and alone it says which accounts do. It is off until turned on.`
 
 // quotaCmd: magpie quota [<provider>…] [--json]
 func quotaCmd(args []string) error {
 	if len(args) > 1 && args[1] == "reset" {
 		return quotaResetCmd(args[2:])
+	}
+	if len(args) > 1 && args[1] == "auto-reset" {
+		return quotaAutoResetCmd(args[2:])
 	}
 	asJSON := false
 	var only []string
@@ -77,7 +85,7 @@ func quotaCmd(args []string) error {
 			line += "  " + bold.Render(q.Balance) + muted.Render(" left")
 		}
 		if q.Resets != nil {
-			line += "  " + resetsCell(q.Resets)
+			line += "  " + resetsCell(q.Resets, provider.AutoResets(q.Provider, q.User))
 		}
 		if q.Error != "" {
 			line += "  " + muted.Render(q.Error)
@@ -89,11 +97,15 @@ func quotaCmd(args []string) error {
 }
 
 // resetsCell is a Codex account's rate-limit resets in a line: "↺ 2
-// resets until Oct 3 14:30", no date when they don't run out.
-func resetsCell(r *provider.ResetCredits) string {
+// resets until Oct 3 14:30", no date when they don't run out, and "· auto"
+// when one is spent by itself once the week is used up.
+func resetsCell(r *provider.ResetCredits, auto bool) string {
 	cell := "↺ " + r.Words()
 	if r.Until != nil {
 		cell += muted.Render(" until " + provider.ResetClock(*r.Until, time.Now()))
+	}
+	if auto {
+		cell += muted.Render(" · auto")
 	}
 	return cell
 }
@@ -158,6 +170,65 @@ func quotaResetCmd(args []string) error {
 		return fmt.Errorf("%s: %s", who, out.Text())
 	}
 	fmt.Println(green.Render("✓"), who+":", out.Text())
+	return nil
+}
+
+// quotaAutoResetCmd: magpie quota auto-reset [<codex account>] [on|off] —
+// whether the account spends a reset by itself once its week is used up.
+func quotaAutoResetCmd(args []string) error {
+	user, set, on := "", false, false
+	for _, a := range args {
+		switch strings.ToLower(a) {
+		case "on", "off":
+			set, on = true, strings.EqualFold(a, "on")
+		case "help", "-h", "--help":
+			fmt.Println(quotaUsage)
+			return nil
+		default:
+			if user != "" {
+				return fmt.Errorf("one account at a time: %s or %s", user, a)
+			}
+			user = a
+		}
+	}
+	if !set && user == "" {
+		on := settings.Load().CodexAutoReset
+		if len(on) == 0 {
+			fmt.Println(muted.Render("no Codex account uses a reset by itself ·"), "magpie quota auto-reset <account> on")
+			return nil
+		}
+		for _, u := range on {
+			fmt.Println(green.Render("●"), u, muted.Render("uses a reset by itself once its week is used up"))
+		}
+		return nil
+	}
+	if user == "" {
+		live, ok := provider.CodexSignedIn()
+		if !ok {
+			return fmt.Errorf("Codex isn't signed in: name the account")
+		}
+		user = live
+	} else if !slices.ContainsFunc(provider.Logins("codex"), func(l provider.Login) bool { return strings.EqualFold(l.User, user) }) {
+		if live, ok := provider.CodexSignedIn(); !ok || !strings.EqualFold(live, user) {
+			return fmt.Errorf("no Codex account %s", user)
+		}
+	}
+	if !set {
+		if provider.CodexAutoReset(user) {
+			fmt.Println(user, "uses a reset by itself once its week is used up")
+		} else {
+			fmt.Println(user, "uses its resets only when told to")
+		}
+		return nil
+	}
+	if err := provider.SetCodexAutoReset(user, on); err != nil {
+		return err
+	}
+	if on {
+		fmt.Println(green.Render("✓"), user+":", "uses a reset by itself once its week is used up and no other account can answer, one a week at most")
+	} else {
+		fmt.Println(green.Render("✓"), user+":", "no longer uses a reset by itself")
+	}
 	return nil
 }
 

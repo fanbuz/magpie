@@ -165,6 +165,18 @@ func geminiOwnLogin() (googleAccount, bool) {
 	return googleAccount{app: app, user: user, auth: a, own: true}, true
 }
 
+// AnotherAppsGoogleSignIn reports whether the Google sign-in in the
+// oauth_creds.json at path was minted by an OAuth client other than Gemini
+// CLI's (Antigravity's, #143): the file is then no sign of Gemini CLI.
+func AnotherAppsGoogleSignIn(path string) bool {
+	var id struct {
+		IDToken string `json:"id_token"`
+	}
+	readJSON(path, &id)
+	c := googleClientOf(id.IDToken)
+	return c != "" && c != geminiApp.clientID
+}
+
 // googleClientOf is the OAuth client a Google ID token was minted for, ""
 // when there is none to tell.
 func googleClientOf(idToken string) string {

@@ -382,6 +382,30 @@ func geminiCompat(host, model string) bool {
 	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
 }
 
+// thinkingEffort moves the level the new Kimi Code (2.x) asks a Chat
+// request for, inside its thinking switch ({"type":"enabled","effort":
+// "high"}, #333), to reasoning_effort: where kimi-cli put it, beside
+// thinking's type, and where the gateway and every other Chat API read it.
+// A request that says reasoning_effort itself is left as it is.
+func thinkingEffort(body []byte) []byte {
+	if !bytes.Contains(body, []byte(`"effort"`)) {
+		return body
+	}
+	var v struct {
+		ReasoningEffort *string        `json:"reasoning_effort"`
+		Thinking        map[string]any `json:"thinking"`
+	}
+	if json.Unmarshal(body, &v) != nil || v.ReasoningEffort != nil {
+		return body
+	}
+	effort, _ := v.Thinking["effort"].(string)
+	if effort == "" {
+		return body
+	}
+	delete(v.Thinking, "effort")
+	return withFields(body, map[string]any{"reasoning_effort": effort, "thinking": v.Thinking})
+}
+
 // thinkingConfigField is Gemini's thinking_config as unfit remembers a
 // provider that refused it.
 const thinkingConfigField = "thinking_config"

@@ -81,6 +81,15 @@ type Settings struct {
 	// with CodexWarmup or without it. ClaudeWarmAt is the Claude accounts'.
 	CodexWarmAt  string `json:"codexWarmAt,omitempty"`
 	ClaudeWarmAt string `json:"claudeWarmAt,omitempty"`
+	// CodexAutoReset are the ChatGPT accounts (lower-case) that spend one
+	// of their rate-limit resets by themselves once their weekly window is
+	// used up and no other account can take the request: at most one a
+	// week each (see provider.AutoUseCodexReset).
+	CodexAutoReset []string `json:"codexAutoReset,omitempty"`
+	// ClaudeAutoReset are the Claude accounts (lower-case) that spend one
+	// of their usage-limit resets by themselves the same way (see
+	// provider.AutoUseClaudeReset).
+	ClaudeAutoReset []string `json:"claudeAutoReset,omitempty"`
 	// WorkBuddyCheckin presses WorkBuddy's daily check-in (签到) for each
 	// signed-in WorkBuddy (China) account once a Beijing day, claiming the
 	// credits it gives while its event runs.
@@ -110,6 +119,11 @@ type Settings struct {
 	// QuotaLeft shows a subscription's windows by how much of each is left,
 	// not used: the Usage page, the tray panel and the menu bar alike.
 	QuotaLeft bool `json:"quotaLeft,omitempty"`
+	// PlainNames has the model lists magpie gives agents name each model
+	// by its name alone, without its provider's or "routing group" after it
+	// (#335) — but for two in one list that would read the same, which keep
+	// it (see provider.Labels).
+	PlainNames bool `json:"plainNames,omitempty"`
 	// TextSize is how large the window's and the tray panel's pages are
 	// drawn, in percent (one of TextSizes): the webviews' own zoom, as a
 	// browser's, so the text and everything around it grow together.
@@ -475,6 +489,14 @@ func Save(s Settings) error {
 	s.RedactRules = rules
 	s.AgentOrder, s.AgentsHidden, s.AgentsShown = ids(s.AgentOrder), ids(s.AgentsHidden), ids(s.AgentsShown)
 	s.TrayUsages = ids(s.TrayUsages)
+	for i, u := range s.CodexAutoReset {
+		s.CodexAutoReset[i] = strings.ToLower(u)
+	}
+	s.CodexAutoReset = ids(s.CodexAutoReset)
+	for i, u := range s.ClaudeAutoReset {
+		s.ClaudeAutoReset[i] = strings.ToLower(u)
+	}
+	s.ClaudeAutoReset = ids(s.ClaudeAutoReset)
 	s.TrayUsage = ""
 	if len(s.TrayUsages) > 0 {
 		s.TrayUsage = s.TrayUsages[0]

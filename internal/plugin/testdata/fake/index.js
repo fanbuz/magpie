@@ -51,6 +51,38 @@ export const FakePlugin = async ({ client }) => ({
         return fetch(url, { ...init, headers: h })
       },
     }),
+    // magpie's: the account's allowance; "full@fake" has used its five
+    // hours, which count only fake-claude
+    usage: async (getAuth) => {
+      const a = await getAuth()
+      if (a.type !== "oauth") return { error: "an API key has no plan" }
+      const full = a.accountId === "full@fake"
+      return {
+        plan: "Fake Pro",
+        user: full ? "Full@Fake.example" : undefined,
+        until: "2030-01-02T03:04:05Z",
+        renew: "auto",
+        resets: full ? { count: 3, byWindow: true, fiveHour: 2, weekly: 1 } : undefined,
+        windows: [
+          { name: "5 hours", used: full ? 100 : 25, resetsAt: Date.now() + 3600e3, span: 5 * 3600, models: ["fake-claude"] },
+          { name: "Week", used: 10, resetsAt: Math.floor(Date.now() / 1000) + 86400, span: 7 * 86400 },
+          { name: "Extra", used: 250, display: "$2.50", aside: true },
+        ],
+      }
+    },
+  },
+  // the models an account has: refused for a dead one; a "rot-" sign-in
+  // spends its refresh token asking, as a rotating one does
+  provider: {
+    id: "fakeco",
+    models: async (p, { auth }) => {
+      if (auth?.refresh === "r-dead" || auth?.key === "dead") throw new Error("the vendor refused the sign-in")
+      if (auth?.type === "oauth" && auth.refresh?.startsWith("rot-")) {
+        await client.auth.set({ path: { id: "fakeco" }, body: { ...auth, refresh: auth.refresh + "+" } })
+      }
+      if (auth?.key === "few") return { "fake-1": p.models["fake-1"] }
+      return p.models
+    },
   },
   "chat.headers": async (input, output) => {
     if (input.model.providerID === "fakeco") output.headers["x-plugin-model"] = input.model.id

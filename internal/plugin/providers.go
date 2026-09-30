@@ -42,16 +42,18 @@ type Model struct {
 
 // Provider is a provider a plugin signs in to.
 type Provider struct {
-	ID        string   `json:"id"`   // OpenCode's: google, github-copilot
-	Spec      string   `json:"spec"` // the plugin
-	Name      string   `json:"name"`
-	NPM       string   `json:"npm"`
-	API       string   `json:"api"`
-	Methods   []Method `json:"methods"`
-	SignedIn  bool     `json:"signedIn"`
-	AuthType  string   `json:"authType"`
-	AccountID string   `json:"accountId"`
-	Models    []Model  `json:"models"`
+	ID      string   `json:"id"`   // OpenCode's: google, github-copilot
+	Spec    string   `json:"spec"` // the plugin
+	Name    string   `json:"name"`
+	NPM     string   `json:"npm"`
+	API     string   `json:"api"`
+	Methods []Method `json:"methods"`
+	// Usage says the plugin tells each account's allowance (auth.usage)
+	Usage     bool    `json:"usage"`
+	SignedIn  bool    `json:"signedIn"`
+	AuthType  string  `json:"authType"`
+	AccountID string  `json:"accountId"`
+	Models    []Model `json:"models"`
 	// Accounts are the accounts signed in to it, the one kept under its
 	// own id first; SignedIn, AuthType and AccountID are that one's.
 	Accounts []Account `json:"accounts"`
@@ -400,4 +402,106 @@ func init() {
 		optCache = map[string]Options{}
 		optMu.Unlock()
 	})
+}
+
+// Import keeps auth (a plugin-auth.json entry) as one more of provider's
+// accounts — or, the same account as one kept already, in its place — and
+// gives the account's key. The plugin's host is started for it: it alone
+// writes the file while it runs.
+func Import(ctx context.Context, provider string, auth map[string]any) (string, error) {
+	var r struct {
+		Account string `json:"account"`
+	}
+	if err := Call(ctx, "import", map[string]any{"provider": provider, "auth": auth}, &r); err != nil {
+		return "", err
+	}
+	return r.Account, nil
+}
+
+// Check tries one of provider's accounts as a request would — its auth
+// loader, then its models as the plugin lists them for it — and gives the
+// model ids.
+func Check(ctx context.Context, provider, account string) ([]string, error) {
+	var r struct {
+		Models []string `json:"models"`
+	}
+	if err := Call(ctx, "check", map[string]any{"provider": provider, "account": account}, &r); err != nil {
+		return nil, err
+	}
+	return r.Models, nil
+}
+
+// Auths are provider's sign-ins as plugin-auth.json keeps them, by key.
+func Auths(provider string) map[string]map[string]any {
+	var m map[string]map[string]any
+	if b, err := os.ReadFile(AuthPath()); err == nil {
+		_ = json.Unmarshal(b, &m)
+	}
+	out := map[string]map[string]any{}
+	for k, v := range m {
+		if ProviderOf(k) == provider {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// Take gives provider's accounts named by keys (every one when there are
+// none) and signs them out in one step, so the plugin renews none of their
+// tokens after it gave them.
+func Take(ctx context.Context, provider string, keys []string) (map[string]map[string]any, error) {
+	var r struct {
+		Auths map[string]map[string]any `json:"auths"`
+	}
+	if err := Call(ctx, "take", map[string]any{"provider": provider, "accounts": keys}, &r); err != nil {
+		return nil, err
+	}
+	return r.Auths, nil
+}
+
+// Restore puts auth back as provider's account key.
+func Restore(ctx context.Context, provider, key string, auth map[string]any) error {
+	return Call(ctx, "import", map[string]any{"provider": provider, "key": key, "auth": auth}, nil)
+}
+
+// Usage is how much of its allowance one account has used, as the
+// plugin's auth.usage tells it (host.js has the shape).
+type Usage struct {
+	Plan    string        `json:"plan"`
+	Until   string        `json:"until"` // RFC 3339, "" when not told
+	Renew   string        `json:"renew"`
+	Balance string        `json:"balance"`
+	Error   string        `json:"error"`
+	User    string        `json:"user"`
+	Windows []UsageWindow `json:"windows"`
+	Resets  *UsageResets  `json:"resets"`
+}
+
+// UsageResets are the rate-limit resets an account may spend.
+type UsageResets struct {
+	Count    int    `json:"count"`
+	Until    string `json:"until"`
+	ByWindow bool   `json:"byWindow"`
+	FiveHour int    `json:"fiveHour"`
+	Weekly   int    `json:"weekly"`
+}
+
+type UsageWindow struct {
+	Name      string   `json:"name"`
+	Used      float64  `json:"used"`     // percent
+	ResetsAt  string   `json:"resetsAt"` // RFC 3339
+	ResetSecs int64    `json:"resetSecs"`
+	Display   string   `json:"display"`
+	Span      float64  `json:"span"` // seconds
+	Model     string   `json:"model"`
+	Models    []string `json:"models"`
+	NotModels []string `json:"notModels"`
+	Aside     bool     `json:"aside"`
+}
+
+// AccountUsage asks the plugin for account's usage of provider.
+func AccountUsage(ctx context.Context, provider, account string) (Usage, error) {
+	var u Usage
+	err := Call(ctx, "usage", map[string]any{"provider": provider, "account": account}, &u)
+	return u, err
 }

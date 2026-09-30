@@ -58,8 +58,9 @@ type SubscriptionQuota struct {
 	// AsOf is when an allowance shown in place of one that couldn't be
 	// read was read (see keepLast); nil for a reading just made.
 	AsOf *time.Time `json:"asOf,omitempty"`
-	// Resets are the rate-limit resets a Codex account holds, nil when
-	// it holds none (codex_resets.go).
+	// Resets are the rate-limit resets a Codex account holds, or the
+	// usage-limit resets a Claude account does, nil when it holds none
+	// (codex_resets.go, claude_resets.go).
 	Resets *ResetCredits `json:"resets,omitempty"`
 }
 
@@ -202,6 +203,20 @@ func fetchSubscriptionUsage() []SubscriptionQuota {
 		hidden[p.ID] = p.Hidden || p.Off // switched off: not asked either
 	}
 	var fetches []func() SubscriptionQuota
+	// a built-in moved onto its plugin shows the plugin's cards in its
+	// place, and none of its own: an agent's own sign-in it still finds
+	// would be a second card of the same account
+	placed := map[string]bool{}
+	moved := func(id string) bool {
+		if !Moved(id) {
+			return false
+		}
+		placed[id] = true
+		if !hidden[id] {
+			fetches = append(fetches, pluginUsageFetchesOf(via, id)...)
+		}
+		return true
+	}
 	if p, ok := claudeAccount(); ok && !hidden["claude"] {
 		if ls := accountsOf("claude"); len(ls) > 1 {
 			fetches = append(fetches, perLogin(via("claude"), ls, "Claude Code", "claude-color")...)
@@ -209,10 +224,10 @@ func fetchSubscriptionUsage() []SubscriptionQuota {
 			fetches = append(fetches, withUser(p.Account.User, func() SubscriptionQuota { return claudeSubscriptionUsage(viaLogin("claude", p.Account.User)) }))
 		}
 	}
-	if user, plan, ok := cursorIdentity(); ok && !hidden["cursor"] {
+	if user, plan, ok := cursorIdentity(); !moved("cursor") && ok && !hidden["cursor"] {
 		fetches = append(fetches, withUser(user, func() SubscriptionQuota { return cursorSubscriptionUsage(viaLogin("cursor", user), plan) }))
 	}
-	if _, ok := grokAccount(); ok && !hidden["grok"] {
+	if _, ok := grokAccount(); !moved("grok") && ok && !hidden["grok"] {
 		fetches = append(fetches, func() SubscriptionQuota { return grokSubscriptionUsage(via("grok")) })
 	}
 	if home, err := os.UserHomeDir(); err == nil {
@@ -236,32 +251,33 @@ func fetchSubscriptionUsage() []SubscriptionQuota {
 			}
 		}
 	}
-	if key := kiroKey(); key != "" && !hidden["kiro"] {
+	if moved("kiro") {
+	} else if key := kiroKey(); key != "" && !hidden["kiro"] {
 		fetches = append(fetches, func() SubscriptionQuota { return kiroQuotaAt(via("kiro"), key, "") })
 	} else if !hidden["kiro"] {
 		fetches = append(fetches, perLogin(via("kiro"), kiroLoginList(), "Kiro", "kiro-color")...)
 	}
-	if !hidden["zcode"] {
+	if !moved("zcode") && !hidden["zcode"] {
 		fetches = append(fetches, perLogin(via("zcode"), zcodeLoginList(), "ZCode", "zcode")...)
 	}
 	for _, w := range []*wbSite{wbCN, wbAI} {
-		if !hidden[w.id] {
+		if !moved(w.id) && !hidden[w.id] {
 			fetches = append(fetches, perLogin(via(w.id), wbLoginList(w), w.name, "workbuddy-color")...)
 		}
 	}
-	if !hidden[CommandCodePlanID] {
+	if !moved(CommandCodePlanID) && !hidden[CommandCodePlanID] {
 		fetches = append(fetches, perLogin(via(CommandCodePlanID), cmdLoginList(), "Command Code", "commandcode")...)
 	}
-	if !hidden["qoder"] {
+	if !moved("qoder") && !hidden["qoder"] {
 		fetches = append(fetches, perLogin(via("qoder"), loginsOf(qoderLogins()), "Qoder", "qoder")...)
 	}
-	if !hidden["zed"] {
+	if !moved("zed") && !hidden["zed"] {
 		fetches = append(fetches, perLogin(via("zed"), zedLoginList(), "Zed", "zed")...)
 	}
-	if !hidden["factory"] {
+	if !moved("factory") && !hidden["factory"] {
 		fetches = append(fetches, perLogin(via("factory"), factoryLoginList(), "Factory", "factory")...)
 	}
-	if !hidden[MiMoID] {
+	if !moved(MiMoID) && !hidden[MiMoID] {
 		fetches = append(fetches, perLogin(via(MiMoID), mimoLoginList(), "Xiaomi MiMo", "mimocode")...)
 	}
 	for _, agent := range []string{"gemini", "antigravity"} {
@@ -272,6 +288,7 @@ func fetchSubscriptionUsage() []SubscriptionQuota {
 			fetches = append(fetches, func() SubscriptionQuota { return l.acct.quota(viaLogin(agent, l.User), l.Plan) })
 		}
 	}
+	fetches = append(fetches, pluginUsageFetches(via, hidden, placed)...)
 	out := make([]SubscriptionQuota, len(fetches))
 	var wg sync.WaitGroup
 	for i, f := range fetches {
@@ -355,6 +372,7 @@ func claudeSubscriptionUsage(ctx context.Context) SubscriptionQuota {
 	user, plan, _ := claudeIdentity()
 	q.Plan = plan
 	q.Windows, err = claudeWindows(ctx, user, token)
+	q.Resets = claudeResetsOf(user)
 	if err != nil {
 		q.Error = err.Error()
 	}
@@ -376,6 +394,9 @@ type claudeUsageEntry struct {
 	at, retry time.Time
 	ws        []QuotaWindow
 	heard     time.Time // when Claude Code last told it, answering
+	// grants: the usage-limit resets the reading told of, nil when it
+	// told of none (claude_resets.go)
+	grants *claudeGrants
 }
 
 const claudeUsageTTL = 3 * time.Minute
@@ -395,7 +416,7 @@ func claudeWindows(ctx context.Context, user, token string) ([]QuotaWindow, erro
 	if ok && now.Before(e.retry) {
 		return []QuotaWindow{}, claudeLimited(e.retry.Sub(now))
 	}
-	ws, err := readClaudeWindows(ctx, token)
+	ws, grants, err := readClaudeUsage(ctx, token)
 	var st *accountStatusError
 	if errors.As(err, &st) && st.status == http.StatusTooManyRequests {
 		wait := st.retryAfter
@@ -424,7 +445,7 @@ func claudeWindows(ctx context.Context, user, token string) ([]QuotaWindow, erro
 	if c.m == nil {
 		c.m = map[string]claudeUsageEntry{}
 	}
-	c.m[key] = claudeUsageEntry{at: now, ws: ws, heard: e.heard}
+	c.m[key] = claudeUsageEntry{at: now, ws: ws, heard: e.heard, grants: grants}
 	c.Unlock()
 	return ws, nil
 }
@@ -450,6 +471,14 @@ func elapsed(ws []QuotaWindow, now time.Time) []QuotaWindow {
 // readClaudeWindows asks Anthropic for the allowance of the account token
 // signs in to.
 func readClaudeWindows(ctx context.Context, token string) ([]QuotaWindow, error) {
+	ws, _, err := readClaudeUsage(ctx, token)
+	return ws, err
+}
+
+// readClaudeUsage is readClaudeWindows with the usage-limit resets the
+// account holds, which Anthropic tells only when asked for them
+// (cedar_ember=1, as Claude Code asks), nil when it holds none.
+func readClaudeUsage(ctx context.Context, token string) ([]QuotaWindow, *claudeGrants, error) {
 	var data struct {
 		FiveHour       *quotaWire `json:"five_hour"`
 		SevenDay       *quotaWire `json:"seven_day"`
@@ -467,12 +496,13 @@ func readClaudeWindows(ctx context.Context, token string) ([]QuotaWindow, error)
 				} `json:"model"`
 			} `json:"scope"`
 		} `json:"limits"`
+		Grants *claudeGrants `json:"cedar_ember"`
 	}
-	err := accountJSON(ctx, claudeBase+"/api/oauth/usage", token, map[string]string{
+	err := accountJSON(ctx, claudeBase+claudeUsagePath, token, map[string]string{
 		"anthropic-beta": "oauth-2025-04-20", "user-agent": "magpie",
 	}, &data)
 	if err != nil {
-		return []QuotaWindow{}, err
+		return []QuotaWindow{}, nil, err
 	}
 	out := []QuotaWindow{}
 	const week = 7 * 24 * time.Hour
@@ -501,7 +531,7 @@ func readClaudeWindows(ctx context.Context, token string) ([]QuotaWindow, error)
 		w.Span, w.Model = week, model
 		out = append(out, w)
 	}
-	return out, nil
+	return out, data.Grants, nil
 }
 
 // claudeScopeModel is the word a model-scoped window counts models by, from

@@ -510,19 +510,23 @@ func Logins(agent string) []Login {
 	case "gemini", "antigravity":
 		return googleLoginList(agent)
 	case "":
-		side = append(grokLoginList(), copilotLoginList()...)
-		side = append(side, zcodeLoginList()...)
-		side = append(side, kiroLoginList()...)
-		side = append(side, devinLoginList()...)
-		side = append(side, wbLoginList(wbCN)...)
-		side = append(side, wbLoginList(wbAI)...)
-		side = append(side, cmdLoginList()...)
-		side = append(side, loginsOf(qoderLogins())...)
-		side = append(side, zedLoginList()...)
-		side = append(side, factoryLoginList()...)
-		side = append(side, mimoLoginList()...)
-		side = append(side, googleLoginList("gemini")...)
-		side = append(side, googleLoginList("antigravity")...)
+		// a built-in moved onto its plugin lists its accounts there (an
+		// agent's own sign-in, which the built-in still finds, too)
+		for _, b := range []struct {
+			id   string
+			list func() []Login
+		}{
+			{"grok", grokLoginList}, {"copilot", copilotLoginList}, {"zcode", zcodeLoginList}, {"kiro", kiroLoginList},
+			{"devin", devinLoginList}, {"workbuddy", func() []Login { return wbLoginList(wbCN) }},
+			{WorkBuddyAIID, func() []Login { return wbLoginList(wbAI) }}, {CommandCodePlanID, cmdLoginList},
+			{"qoder", func() []Login { return loginsOf(qoderLogins()) }}, {"zed", zedLoginList}, {"factory", factoryLoginList},
+			{MiMoID, mimoLoginList}, {"gemini", func() []Login { return googleLoginList("gemini") }},
+			{"antigravity", func() []Login { return googleLoginList("antigravity") }},
+		} {
+			if !Moved(b.id) {
+				side = append(side, b.list()...)
+			}
+		}
 	}
 	rememberLogins(false)
 	loginsMu.Lock()

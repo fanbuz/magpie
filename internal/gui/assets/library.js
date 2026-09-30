@@ -241,13 +241,44 @@
       c.onclick = (e) => {
         e.stopPropagation();
         const me = e.currentTarget;
-        const lit = [...me.parentElement.children].filter((x) => x.getAttribute("aria-pressed") === "true").map((x) => x.dataset.agent);
+        const lit = [...me.parentElement.children].filter((x) => x.dataset.agent && x.getAttribute("aria-pressed") === "true").map((x) => x.dataset.agent);
         const kept = on.filter((id) => !all.some((x) => x.id === id));
         onChange([...kept, ...(lit.includes(a.id) ? lit.filter((x) => x !== a.id) : [...lit, a.id])], me);
       };
       box.append(c);
     }
+    if (opts.all) allChip(box, all, on, onChange);
     return box;
+  }
+
+  // All, ahead of a row's chips: one click gives the item to every agent
+  // shown that can take it (not those a chip is greyed out for: no SSE, no
+  // remote server), and when they all have it, takes it from every one.
+  // An agent not shown keeps what it has, as with a chip.
+  function allChip(box, all, on, onChange) {
+    const can = [...box.children].filter((c) => !c.disabled).map((c) => c.dataset.agent);
+    if (can.length < 2) return;
+    const c = el("button", "lib-ag all", t("All"));
+    c.dataset.all = "1";
+    c.onclick = (e) => {
+      e.stopPropagation();
+      const me = e.currentTarget;
+      const lit = [...me.parentElement.children].filter((x) => x.dataset.agent && x.getAttribute("aria-pressed") === "true").map((x) => x.dataset.agent);
+      const kept = on.filter((id) => !all.some((x) => x.id === id));
+      onChange(can.every((id) => lit.includes(id)) ? kept : [...kept, ...new Set([...lit, ...can])], me);
+    };
+    box.prepend(c);
+    paintAll(box);
+  }
+  // the All chip shows whether every agent that can take the item has it
+  function paintAll(box) {
+    const c = box.querySelector(":scope > .lib-ag.all");
+    if (!c) return;
+    const can = [...box.children].filter((x) => x.dataset.agent && !x.disabled);
+    const n = can.length, full = can.every((x) => x.getAttribute("aria-pressed") === "true");
+    c.classList.toggle("on", full);
+    c.setAttribute("aria-pressed", full ? "true" : "false");
+    c.title = full ? t("Every agent that can take it has it — click to take it from all {n}", { n }) : t("Give it to all {n} agents that can take it", { n });
   }
 
   // A row's chips switched in place: the page isn't drawn again, which
@@ -263,14 +294,19 @@
   let refused = 0;           // when a row's write last failed, whose error another row's "Written" doesn't cover
   function chipsChange(path, name, list, rowOf) {
     return async (next, c) => {
-      const on = next.includes(c.dataset.agent);
-      c.classList.toggle("on", on);
-      c.classList.remove("via");
-      c.setAttribute("aria-pressed", on ? "true" : "false");
+      // All lights or darkens every chip of the row, a chip only itself
+      const every = !!c.dataset.all;
+      for (const x of every ? [...c.parentElement.children].filter((y) => y.dataset.agent) : [c]) {
+        const on = next.includes(x.dataset.agent);
+        x.classList.toggle("on", on);
+        if (on || x === c) x.classList.remove("via");
+        x.setAttribute("aria-pressed", on ? "true" : "false");
+      }
+      paintAll(c.parentElement);
       const key = path + "\n" + name;
       const w = writing.get(key);
-      if (w) { w.want = next; w.box = c.parentElement; take(lib); return; }
-      const me = { list, name, want: next, box: c.parentElement };
+      if (w) { w.want = next; w.box = c.parentElement; w.every = every; take(lib); return; }
+      const me = { list, name, want: next, box: c.parentElement, every };
       writing.set(key, me);
       take(lib);
       let sent = null, failed = false;
@@ -281,7 +317,8 @@
           sent = me.want;
           const v = await api("library/" + path, { name, agents: sent });
           take(v);
-          if (same() && Date.now() - refused > 6000) report(v.result);
+          if (same() && me.every && Date.now() - refused > 6000) { reportAll(v, me); continue; }
+          if (same() && Date.now() - refused > 6000) report(v.result, null, sent);
         }
       } catch (e) {
         failed = true;
@@ -298,6 +335,22 @@
       else if (fresh && !morphChips(me.box, fresh)) me.box.replaceWith(fresh);
     };
   }
+  // What All did, said of the item: on for how many of the agents it went
+  // to, and which of them couldn't be given it, and why.
+  function reportAll(v, me) {
+    const what = (me.list === "servers" ? "mcp:" : "skill:") + me.name;
+    const shown = [...me.box.children].filter((x) => x.dataset.agent && !x.disabled).map((x) => x.dataset.agent);
+    const n = shown.filter((id) => me.want.includes(id)).length;
+    const bad = (v.result?.problems || []).filter((p) => p.what === what && shown.includes(p.agent));
+    if (!bad.length) {
+      status(n ? t("{name} is on for all {n} agents", { name: me.name, n }) : t("{name} is off for every agent", { name: me.name }), "ok");
+      return;
+    }
+    const p = bad[0];
+    status((n ? t("{name} is on for {ok} of {n} agents", { name: me.name, ok: n - bad.length, n }) : t("{name} couldn't be taken from every agent", { name: me.name })) + " — "
+      + t("{agent}: {error}", { agent: nameOf(p.agent), error: p.error }) + (bad.length > 1 ? " " + t("(and {n} more)", { n: bad.length - 1 }) : ""), "warn", 8000);
+  }
+
   // take is the page as magpie answered it, with the rows still being
   // written kept as they were last clicked. A server or skill added,
   // removed or renamed changes what the market calls added (#300): one gone
@@ -368,7 +421,9 @@
       return false;
     }
   }
-  function report(res, done) {
+  // given, for a row's agent chips, is the agents that have it now: an
+  // agent written that isn't one of them had it taken out (#332).
+  function report(res, done, given) {
     if (!res) return;
     if (res.problems?.length) {
       const p = res.problems[0];
@@ -376,7 +431,10 @@
       return;
     }
     const n = res.changed?.length || 0;
+    const out = given ? (res.changed || []).filter((id) => !given.includes(id)).length : 0;
     if (done) status(done, "ok");
+    else if (out && out === n) status(n === 1 ? t("Removed from {agent}", { agent: nameOf(res.changed[0]) }) : t("Removed from {n} agents", { n }), "ok");
+    else if (out) status(t("{n} agents updated", { n }), "ok");
     else if (n) status(n === 1 ? t("Written to {agent}", { agent: nameOf(res.changed[0]) }) : t("Written to {n} agents", { n }), "ok");
     else status(t("Saved — the agents already had it"), "ok");
   }
@@ -1027,7 +1085,7 @@
     sub.title = serverLine(s);
     who.append(sub);
     row.append(mark(s.icon, s.transport === "stdio" ? GLYPH.cmd : GLYPH.web), who,
-      agentChips(all, s.agents, chipsChange("servers/agents", s.name, "servers", (x) => serverRow(x, all)), { problems: s.problems, blocked: sseBlocked(s) }));
+      agentChips(all, s.agents, chipsChange("servers/agents", s.name, "servers", (x) => serverRow(x, all)), { problems: s.problems, blocked: sseBlocked(s), all: true }));
     row.onclick = () => editServer(s);
     row.title = t("Edit {name}", { name: s.name });
     return row;
@@ -2134,7 +2192,7 @@
     rm.append(svg(GLYPH.trash, 13, 1.4));
     rm.title = t("Remove");
     acts.append(rm);
-    row.append(mark(s.icon, GLYPH.skill), who, acts, agentChips(all, s.agents, chipsChange("skills/agents", s.name, "skills", (x) => skillRow(x, all)), { problems: s.problems, via: viaFor(s) }));
+    row.append(mark(s.icon, GLYPH.skill), who, acts, agentChips(all, s.agents, chipsChange("skills/agents", s.name, "skills", (x) => skillRow(x, all)), { problems: s.problems, via: viaFor(s), all: true }));
     row.onclick = () => viewSkill(s);
     row.title = t("Read {name}'s SKILL.md", { name: s.name });
     return row;

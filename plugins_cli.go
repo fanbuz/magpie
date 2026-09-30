@@ -21,7 +21,9 @@ const pluginUsage = `usage: magpie plugin [list] [--json]
        magpie plugin update                        install the newest version of each
        magpie plugin on|off <name>                 turn one on or off
        magpie plugin login <provider> [<method>]   sign in to a provider a plugin adds
-       magpie plugin logout <provider>             forget the sign-in`
+       magpie plugin logout <provider>             forget the sign-in
+       magpie plugin move <subscription>           run a built-in subscription's accounts on its community plugin
+       magpie plugin move-back <subscription>      go back to the built-in`
 
 // pluginCmd: `magpie plugin …` — OpenCode's provider plugins, which sign in
 // to a subscription and carry its requests (internal/plugin).
@@ -94,6 +96,33 @@ func pluginCmd(args []string) error {
 			return err
 		}
 		fmt.Println(green.Render("✓"), "signed out of", pp.Name)
+		return nil
+	case "move", "migrate":
+		if len(rest) != 1 {
+			return errors.New(pluginUsage)
+		}
+		if !provider.Movable(rest[0]) {
+			return fmt.Errorf("%s has no plugin to move to", rest[0])
+		}
+		if !plugin.HasBun() {
+			fmt.Println(muted.Render("Downloading Bun " + plugin.BunVersion + ", which plugins run on…"))
+		}
+		if err := provider.Move(ctx, rest[0]); err != nil {
+			return fmt.Errorf("%s stays built-in: %w", rest[0], err)
+		}
+		fmt.Println(green.Render("✓"), rest[0], "runs on", provider.MovePackage(rest[0]), muted.Render("(magpie plugin move-back "+rest[0]+" to undo)"))
+		return nil
+	case "move-back", "moveback", "unmigrate":
+		if len(rest) != 1 {
+			return errors.New(pluginUsage)
+		}
+		if !provider.Moved(rest[0]) {
+			return fmt.Errorf("%s isn't on its plugin", rest[0])
+		}
+		if err := provider.MoveBack(ctx, rest[0]); err != nil {
+			return err
+		}
+		fmt.Println(green.Render("✓"), rest[0], "is built-in again")
 		return nil
 	case "help", "-h", "--help":
 		fmt.Println(pluginUsage)

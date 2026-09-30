@@ -16,6 +16,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"regexp"
 	"slices"
@@ -1206,4 +1207,52 @@ func streamStatus(msg string) int {
 		return 400
 	}
 	return 502
+}
+
+// pinTo is cands narrowed to the account a request names in AccountHeader
+// (its user, or its id in the routing trace), and pl with them. Nothing
+// else is tried in its place: a caller that names one account asks about
+// that one. The error says why none is left: no such account, one that
+// doesn't list the model, or one resting.
+func pinTo(want string, cands []candidate, pl planned) ([]candidate, planned, int, string) {
+	match := func(w Weighed) bool { return strings.EqualFold(want, w.Who) || want == w.ID }
+	var out []candidate
+	var order []Weighed
+	var rests []string
+	for i, c := range cands {
+		if i >= len(pl.order) || !match(pl.order[i]) {
+			continue
+		}
+		r, ok := restOf(c.restKey())
+		if !ok && c.restID() != c.restKey() {
+			r, ok = restOf(c.restID())
+		}
+		if ok {
+			rests = append(rests, fmt.Sprintf("%s rests until %s (%s)", c.label(), r.Until.Format(time.RFC3339), r.Why))
+			continue
+		}
+		out, order = append(out, c), append(order, pl.order[i])
+	}
+	if len(out) > 0 {
+		return out, planned{order: order}, 0, ""
+	}
+	if len(rests) > 0 {
+		return nil, pl, http.StatusTooManyRequests, AccountHeader + ": " + strings.Join(rests, "; ") + "; no other account is tried in its place"
+	}
+	for _, w := range pl.left {
+		if match(w) {
+			return nil, pl, http.StatusBadRequest, fmt.Sprintf("%s: %s's plan doesn't list %s", AccountHeader, w.Who, w.Model)
+		}
+	}
+	var have []string
+	for _, w := range append(slices.Clone(pl.order), pl.left...) {
+		if w.Kind == "account" && !slices.Contains(have, w.Who) {
+			have = append(have, w.Who)
+		}
+	}
+	msg := fmt.Sprintf("%s: no account %q serves this model", AccountHeader, want)
+	if len(have) > 0 {
+		msg += "; its accounts are " + strings.Join(have, ", ")
+	}
+	return nil, pl, http.StatusNotFound, msg
 }

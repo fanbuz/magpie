@@ -149,6 +149,13 @@ func claudeIn(at place) *Agent {
 	// writeTiers routes Claude Code through the gateway with main as its
 	// model and each tier on the model given.
 	writeTiers = func(main string, tiers map[string]string) error {
+		// a 1M model goes in marked [1m] however it was named, or Claude
+		// Code takes it for 200K
+		mark := claude1M()
+		main = mark(main)
+		for t, v := range tiers {
+			tiers[t] = mark(v)
+		}
 		kvs := []edit.KV{
 			{Path: "env.ANTHROPIC_BASE_URL", Value: at.gw()},
 			{Path: "env.ANTHROPIC_AUTH_TOKEN", Value: gateway.Token},
@@ -318,6 +325,29 @@ func claudeViaMagpie() []Option {
 		}
 	}
 	return opts
+}
+
+// claude1M marks [1m] a magpie model whose window is 1M or more, as
+// magpie's list or models.dev gives it. Claude Code (2.1.284 and before)
+// takes any Claude model not so marked for 200K, CLAUDE_CODE_MAX_CONTEXT_TOKENS
+// or not, and compacts it, over and over, long before it runs out; a ref
+// written in bare (typed, or picked while the window wasn't known) was left
+// that way.
+func claude1M() func(ref string) string {
+	const mark = "[1m]"
+	window := map[string]int{}
+	for _, m := range magpieModels("claude") {
+		window[m.ID] = m.Context
+	}
+	return func(ref string) string {
+		if ref == "" || strings.HasSuffix(ref, mark) {
+			return ref
+		}
+		if cmp.Or(window[ref], catalog.ContextOf(ref)) >= 1_000_000 {
+			return ref + mark
+		}
+		return ref
+	}
 }
 
 // claudeWindow is the context window to tell Claude Code for the models it

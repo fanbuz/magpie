@@ -170,22 +170,7 @@ func (p *Project) place(e, name string) error {
 		}
 		return link(abs, name)
 	}
-	// the new copy is made beside and put in the old one's place
-	next := filepath.Join(filepath.Dir(abs), "."+name+".magpie-next")
-	os.RemoveAll(next)
-	if err := copyDir(realDir(lib), next); err != nil {
-		os.RemoveAll(next)
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(next, marker), []byte("copied from "+lib+" by magpie, and copied again when it changes\n"), 0o644); err != nil {
-		os.RemoveAll(next)
-		return err
-	}
-	if err := unlink(abs); err != nil {
-		os.RemoveAll(next)
-		return err
-	}
-	return os.Rename(next, abs)
+	return copyIn(abs, name)
 }
 
 // mkdirs makes dir and the folders above it the project hasn't, noting

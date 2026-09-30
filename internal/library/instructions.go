@@ -68,7 +68,7 @@ func (l *Library) active() string {
 func (l *Library) sharedPath() string { return setPath(l.active()) }
 
 func extraPath(agent string) string {
-	return filepath.Join(Dir(), "instructions", agent+".md")
+	return filepath.Join(Dir(), "instructions", fileName(agent)+".md")
 }
 
 func readText(path string) string {
@@ -298,7 +298,7 @@ func SaveInstructions(c InstructionsChange) (*Result, error) {
 			if x == nil {
 				continue
 			}
-			if err := checkName("agent", id); err != nil {
+			if err := checkAgent(id); err != nil {
 				return err
 			}
 			if err := writeText(extraPath(id), *x); err != nil {

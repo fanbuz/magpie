@@ -108,6 +108,18 @@ under the model's dated name and ones naming none: only the first is marked
 gpt-6-sol · served gpt-6-luna" in its story, in English and Chinese, and the
 click that picks it leaves the page where it is.
 
+`routing-reroute-title.test.cjs` lists a request the plan's account rate
+limited and a relay took, and one answered on its first try: the rerouted
+one's title names the relay and its model, as its row does, then the account
+it was rerouted from, in the window's Requests list and the tray panel's
+Routing tab alike; the other keeps "agent · model → provider". English and
+Chinese, Chromium and WebKit (#337).
+
+`plain-names.test.cjs` checks the Settings page's "Provider in model names"
+row (#335): on by default, Off posts `settings/plain-names` with `on: true`
+on its own and lights Off, On posts it back, and neither click scrolls the
+page. English and Chinese, Chromium and WebKit.
+
 `routing-steady.test.cjs` scrolls the Routing page down to its routing groups,
 opens one in its editor and types into its name, then streams six requests in
 from the trace (new agents and accounts on the stage, failures and retries in
@@ -352,6 +364,13 @@ agents' icons and no "differs in"; a link in the shared folder also saying
 where it points; a copy of an agent's own still "differs in ZCode"; Bring in
 saying it stays where it is and posting the name; in English and Chinese.
 
+`library-toggle-status.test.cjs` opens the Library's Skills and MCP tabs
+and clicks an agent's icon on a row (#332): turned on, the status says
+"Written to DeepSeek Harness"; turned off again, "Removed from DeepSeek
+Harness", and an agent that had it from the start turned off, "Removed from
+Codex"; Chromium and WebKit, in English and Chinese, with `/api/plugins`
+faked.
+
 `import-all-skills.test.cjs` opens the Library's Skills tab with three skills
 found in the agents: Bring in all beside "In your agents" posts every
 name at once, the rows go and the toast says "3 skills are in the library
@@ -454,10 +473,47 @@ names the subscription, and reopening the menu shows it ticked. No click
 moves the page. The checks run in English and Chinese, in Chromium and
 WebKit.
 
+`codex-auto-reset.test.cjs` checks the Auto-use toggle beside a Codex
+account's resets, on the Usage page's card and on the menu bar panel's. It is
+off until turned on; a click posts `settings/codex-auto-reset` for that
+account, shows it pressed and says so, and a second click turns it off. A GLM
+team's resets get no toggle. No click moves the page, and nothing has a
+left-border accent. The checks run in English and Chinese, in Chromium and
+WebKit.
+
+`library-all.test.cjs` opens the Library with an All chip ahead of each
+server's and skill's agent chips (Discord: MCP 服务器 SKILL 都得一个个选):
+one click posts the agents that can take it in one write — not Pi for a
+server (no MCP file), not Codex or Droid for an SSE server (no SSE), a
+hidden agent keeping what it has — the chips light, the toast says it is on
+for all of them or, when one couldn't take it, "on for 1 of 2 agents" and
+which and why; a second click takes it from all; the click scrolls nothing
+and doesn't open the row. Chromium and WebKit, in English and Chinese.
+
+`routing-auto-reset.test.cjs` checks the Routing page's story for a Codex
+reset used by itself: a try out of its week says whose reset was used and
+that the request was asked again, and Codex's own sign-in answering after
+one says so before it answered; English and Chinese, Chromium and WebKit.
+
+`claude-resets.test.cjs` checks a Claude account's usage-limit resets (a Max
+subscriber's Opus 5.5 launch reset): the Usage page's card and the menu bar
+panel's say how many and until when; Auto-use posts
+`settings/claude-auto-reset` for that account; "Use a reset" asks first, as a
+Claude reset (the one Anthropic names next), then posts `usage/claude-reset`
+and says what came of it, Anthropic's `not_limited` in words. The Routing
+page's story names a Claude reset used by itself as Claude's. No click moves
+the page, nothing has a left-border accent; English and Chinese, Chromium and
+WebKit.
+`panel-effort.test.cjs` opens a row in the tray panel whose effort is not one
+of the levels offered (omp at auto, an agent with none set): the slider shows
+it as it is ("auto", "default"; 自动 in Chinese) at a stop of its own, a touch
+there posts nothing — it had shown the lowest level and a touch wrote it —
+and the next stop is the lowest level. Chromium and WebKit.
+
 With Node.js and Playwright available:
 
 ```sh
-node --test internal/gui/tests/menu-scroll.test.cjs internal/gui/tests/click-scroll.test.cjs internal/gui/tests/panel-fold.test.cjs internal/gui/tests/panel-routing.test.cjs internal/gui/tests/gateway-fold.test.cjs internal/gui/tests/routing-kind.test.cjs internal/gui/tests/balance-fix.test.cjs internal/gui/tests/cli-update.test.cjs internal/gui/tests/login-import.test.cjs internal/gui/tests/agy-launch.test.cjs internal/gui/tests/currency.test.cjs internal/gui/tests/usage-ledger.test.cjs internal/gui/tests/update-check.test.cjs internal/gui/tests/omarchy.test.cjs internal/gui/tests/brand.test.cjs internal/gui/tests/signin-callback.test.cjs internal/gui/tests/routing-steady.test.cjs internal/gui/tests/old-webkit.test.cjs internal/gui/tests/session-terminal.test.cjs internal/gui/tests/text-size.test.cjs internal/gui/tests/zcode-site.test.cjs internal/gui/tests/rail-tip.test.cjs internal/gui/tests/sync-update.test.cjs internal/gui/tests/plugin-signin.test.cjs internal/gui/tests/plugin-market.test.cjs internal/gui/tests/s3-sync.test.cjs internal/gui/tests/routing-wb-refused.test.cjs internal/gui/tests/market-have.test.cjs internal/gui/tests/sessions-today.test.cjs internal/gui/tests/routing-side-calls.test.cjs internal/gui/tests/import-all-skills.test.cjs internal/gui/tests/routing-flood.test.cjs internal/gui/tests/routing-busy.test.cjs internal/gui/tests/own-skill.test.cjs internal/gui/tests/routing-manual.test.cjs internal/gui/tests/tray-usages.test.cjs internal/gui/tests/provider-remove.test.cjs internal/gui/tests/signin-link.test.cjs internal/gui/tests/tray-inuse.test.cjs internal/gui/tests/usage-ledger-detail.test.cjs internal/gui/tests/usage-ledger-chart.test.cjs internal/gui/tests/panel-usage.test.cjs internal/gui/tests/usage-refresh.test.cjs internal/gui/tests/usage-ledger-content.test.cjs
+node --test internal/gui/tests/menu-scroll.test.cjs internal/gui/tests/click-scroll.test.cjs internal/gui/tests/panel-fold.test.cjs internal/gui/tests/panel-routing.test.cjs internal/gui/tests/gateway-fold.test.cjs internal/gui/tests/routing-kind.test.cjs internal/gui/tests/balance-fix.test.cjs internal/gui/tests/cli-update.test.cjs internal/gui/tests/login-import.test.cjs internal/gui/tests/agy-launch.test.cjs internal/gui/tests/currency.test.cjs internal/gui/tests/usage-ledger.test.cjs internal/gui/tests/update-check.test.cjs internal/gui/tests/omarchy.test.cjs internal/gui/tests/brand.test.cjs internal/gui/tests/signin-callback.test.cjs internal/gui/tests/routing-steady.test.cjs internal/gui/tests/old-webkit.test.cjs internal/gui/tests/session-terminal.test.cjs internal/gui/tests/text-size.test.cjs internal/gui/tests/zcode-site.test.cjs internal/gui/tests/rail-tip.test.cjs internal/gui/tests/sync-update.test.cjs internal/gui/tests/plugin-signin.test.cjs internal/gui/tests/plugin-market.test.cjs internal/gui/tests/s3-sync.test.cjs internal/gui/tests/routing-wb-refused.test.cjs internal/gui/tests/market-have.test.cjs internal/gui/tests/sessions-today.test.cjs internal/gui/tests/routing-side-calls.test.cjs internal/gui/tests/import-all-skills.test.cjs internal/gui/tests/routing-flood.test.cjs internal/gui/tests/routing-busy.test.cjs internal/gui/tests/own-skill.test.cjs internal/gui/tests/routing-manual.test.cjs internal/gui/tests/tray-usages.test.cjs internal/gui/tests/provider-remove.test.cjs internal/gui/tests/signin-link.test.cjs internal/gui/tests/tray-inuse.test.cjs internal/gui/tests/codex-auto-reset.test.cjs internal/gui/tests/routing-auto-reset.test.cjs internal/gui/tests/claude-resets.test.cjs internal/gui/tests/library-toggle-status.test.cjs internal/gui/tests/library-all.test.cjs internal/gui/tests/routing-reroute-title.test.cjs internal/gui/tests/plain-names.test.cjs internal/gui/tests/panel-effort.test.cjs internal/gui/tests/usage-ledger-detail.test.cjs internal/gui/tests/usage-ledger-chart.test.cjs internal/gui/tests/panel-usage.test.cjs internal/gui/tests/usage-refresh.test.cjs internal/gui/tests/usage-ledger-content.test.cjs
 ```
 
 If Playwright is installed outside the repository, set `NODE_PATH` to the

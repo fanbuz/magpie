@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -842,6 +843,8 @@ func Accounts() []Provider {
 			out = append(out, p)
 		}
 	}
+	// a built-in moved onto its plugin is the plugin's now (migrate.go)
+	out = slices.DeleteFunc(out, func(p Provider) bool { return Moved(p.ID) })
 	return append(out, pluginAccounts()...)
 }
 

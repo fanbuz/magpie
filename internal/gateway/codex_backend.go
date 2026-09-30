@@ -107,6 +107,11 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 			s.serve(w, r, provider.Responses, withModel(body, id))
 			return
 		}
+		if r.Header.Get(AccountHeader) != "" {
+			// relayed as it came, it would go to Codex's own sign-in only
+			writeError(w, provider.Responses, 400, AccountHeader+" names one of magpie's Codex accounts, and Codex isn't signed in to ChatGPT here with any on in magpie")
+			return
+		}
 	}
 	s.codexUpstream(w, r, rest, body)
 }
@@ -180,7 +185,9 @@ func codexAccounts(h http.Header, model string) (string, bool) {
 	}
 	id := "codex/" + model
 	p, _, ok := provider.Resolve(id)
-	if !ok || p.Account == nil || p.Account.Agent != "codex" || len(p.AlsoOn()) == 0 {
+	// one account named is found among them however many are on
+	pinned := h.Get(AccountHeader) != ""
+	if !ok || p.Account == nil || p.Account.Agent != "codex" || len(p.AlsoOn()) == 0 && !pinned {
 		return "", false
 	}
 	return id, true
@@ -247,6 +254,8 @@ func (s *Server) codexUpstream(w http.ResponseWriter, r *http.Request, rest stri
 		}
 	}
 	var res *http.Response
+	autoReset := false // a Codex reset looked at, once
+	resetNote := ""    // what spending it did, for the request log
 	for tries := 0; ; tries++ {
 		req, err := http.NewRequestWithContext(provider.ViaSignedIn(r.Context(), "codex"), r.Method, u, bytes.NewReader(body))
 		if err != nil {
@@ -265,6 +274,22 @@ func (s *Server) codexUpstream(w http.ResponseWriter, r *http.Request, rest stri
 			writeError(w, provider.Responses, 502, msg)
 			end(502, msg, 0, 0)
 			return
+		}
+		if !autoReset && rest == "/responses" && base != codexAPIBase && res.StatusCode == http.StatusTooManyRequests {
+			// the account is out of its allowance: one it lets spend its
+			// resets by itself, its week used up, spends one and is asked
+			// again — nobody else is there to ask
+			autoReset = true
+			msg, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+			res.Body.Close()
+			res.Body = io.NopCloser(bytes.NewReader(msg))
+			if failure(res.StatusCode, msg) == failQuota {
+				if who, out, ok := s.autoResetSignedIn(r.Context()); ok {
+					s.trace.update(tr, func(t *Route) { t.Tries[0].Reset = &AutoReset{Who: who, Text: out.Text()} })
+					resetNote = "openai (" + who + "): used one of its resets by itself (" + out.Text() + ")"
+					continue
+				}
+			}
 		}
 		if rest != "/responses" || tries >= 3 || (res.StatusCode != 400 && res.StatusCode != 404) {
 			break
@@ -339,7 +364,7 @@ func (s *Server) codexUpstream(w http.ResponseWriter, r *http.Request, rest stri
 	}
 	call := Call{Time: start, From: provider.Responses, To: provider.Responses, Model: modelOf(body),
 		Provider: "openai", Agent: agentOf(r), Kind: callKind(r.Header), Status: res.StatusCode,
-		Millis: time.Since(start).Milliseconds()}
+		Millis: time.Since(start).Milliseconds(), Fallback: resetNote}
 	call.TTFT, call.FirstText = first.ms()
 	var uu Usage
 	uu.add(sniff.usage())
@@ -530,7 +555,7 @@ func threadSource(meta string) string {
 
 func copyHeaders(dst, src http.Header) {
 	for k, vs := range src {
-		if !hopHeader(k) && http.CanonicalHeaderKey(k) != "Host" {
+		if !hopHeader(k) && http.CanonicalHeaderKey(k) != "Host" && http.CanonicalHeaderKey(k) != AccountHeader {
 			dst[k] = vs
 		}
 	}

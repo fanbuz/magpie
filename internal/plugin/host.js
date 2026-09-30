@@ -391,7 +391,10 @@ function fromModelsDev(p, m) {
 // info is the provider as OpenCode builds it: models.dev's entry, what
 // the config (with the plugins' config hooks) says of it, the plugin's
 // provider.models hook.
-async function info(id, key) {
+// info is what OpenCode knows of provider id, its models as the plugin
+// lists them for account key (the first when none); strict fails where the
+// plugin's list does, rather than keeping the list it was given.
+async function info(id, key, strict) {
   const md = mdev()[id]
   const cfg = config.provider?.[id]
   const out = {
@@ -433,9 +436,11 @@ async function info(id, key) {
     if (ph?.id !== id || typeof ph.models !== "function") continue
     try {
       const all = readAuth()
-      const next = await ph.models(JSON.parse(JSON.stringify(out)), { auth: all[key ?? accountsOf(all, id)[0] ?? id] })
+      const k = key ?? accountsOf(all, id)[0] ?? id
+      const next = await inScope(id, k, () => ph.models(JSON.parse(JSON.stringify(out)), { auth: all[k] }))
       out.models = Object.fromEntries(Object.entries(next ?? {}).map(([k, m]) => [k, { ...m, id: k, providerID: id }]))
     } catch (e) {
+      if (strict) throw e
       send({ event: "log", level: "error", message: `${h.spec}: provider.models: ${e?.message ?? e}` })
     }
   }
@@ -461,6 +466,7 @@ async function providers() {
       npm: p.npm ?? "",
       api: p.api ?? "",
       methods: methods(a.auth),
+      usage: typeof a.auth.usage === "function",
       signedIn: keys.length > 0,
       authType: first?.type ?? "",
       accountId: whoOf(first),
@@ -617,6 +623,63 @@ async function load({ provider, account }) {
   }
 }
 
+// ---- usage -------------------------------------------------------------------
+
+// usage is how much of its allowance the account at key has used, as the
+// plugin's auth.usage says (magpie's own hook, which OpenCode ignores):
+//   auth.usage(getAuth, provider) → {
+//     plan?, user? (the account as the service names it), until?,
+//     renew?: "auto" | "off", balance?, error?,
+//     resets?: { count, until?, byWindow?, fiveHour?, weekly? } (the
+//       rate-limit resets the account may spend),
+//     windows?: [{ name, used (percent, 0–100), resetsAt? (ISO or ms),
+//       resetSecs?, display?, span? (seconds the window runs), model? (a
+//       word in the ids of the only models it counts), models? / notModels?
+//       (the ids it counts, or all but these), aside? (using it up doesn't
+//       stop the account) }]
+//   }
+// Run in the account's scope, a token it renews is saved to that account.
+async function usage({ provider, account }) {
+  const a = auths().get(provider)?.auth
+  if (typeof a?.usage !== "function") throw new Error(`${provider}'s plugin doesn't tell its usage`)
+  const key = accountKey(provider, account)
+  if (!readAuth()[key]) throw new Error("not signed in")
+  const p = await info(provider, key)
+  const u = (await inScope(provider, key, () => a.usage(async () => readAuth()[key], JSON.parse(JSON.stringify(p))))) ?? {}
+  const when = (v) => {
+    if (v === undefined || v === null || v === "") return ""
+    const d = new Date(typeof v === "number" && v < 1e11 ? v * 1000 : v)
+    return isNaN(d) ? "" : d.toISOString()
+  }
+  const text = (v) => (typeof v === "string" ? v : "")
+  const num = (v) => (typeof v === "number" && isFinite(v) ? v : 0)
+  const ids = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : [])
+  return {
+    plan: text(u.plan),
+    until: when(u.until),
+    renew: u.renew === "auto" || u.renew === "off" ? u.renew : "",
+    balance: text(u.balance),
+    error: text(u.error),
+    user: text(u.user),
+    resets:
+      u.resets && typeof u.resets === "object"
+        ? { count: num(u.resets.count), until: when(u.resets.until), byWindow: !!u.resets.byWindow, fiveHour: num(u.resets.fiveHour), weekly: num(u.resets.weekly) }
+        : null,
+    windows: (Array.isArray(u.windows) ? u.windows : []).map((w) => ({
+      name: text(w?.name),
+      used: Math.max(0, num(w?.used)), // past 100 when overspent
+      resetsAt: when(w?.resetsAt),
+      resetSecs: Math.max(0, Math.round(num(w?.resetSecs))),
+      display: text(w?.display),
+      span: Math.max(0, num(w?.span)),
+      model: text(w?.model),
+      models: ids(w?.models),
+      notModels: ids(w?.notModels),
+      aside: !!w?.aside,
+    })),
+  }
+}
+
 // sdkHeaders are what the AI SDK package the model is on sends of the key.
 function sdkHeaders(npm, key) {
   if (!key) return {}
@@ -703,6 +766,40 @@ const handlers = {
   callback,
   apiKey,
   load,
+  usage,
+  // check tries one account as a request would: its loader, then its
+  // models as the plugin lists them for it
+  async check(p) {
+    const key = accountKey(p.provider, p.account)
+    await load({ provider: p.provider, account: key })
+    const pi = await info(p.provider, key, true)
+    return { models: Object.keys(pi.models) }
+  },
+  // import keeps a sign-in made elsewhere (a built-in subscription's, moved
+  // onto its plugin) as one more account, or as the account it already is
+  // import keeps a sign-in made elsewhere as one of provider's accounts;
+  // with a key, as that account again (one taken back)
+  import(p) {
+    if (p.key && providerOf(p.key) === p.provider) {
+      setAuth(p.key, p.auth)
+      return { account: p.key }
+    }
+    const key = freshKey(p.provider)
+    setAuth(key, p.auth)
+    return { account: settle(p.provider, key) }
+  },
+  // take gives the accounts named (else every account of the provider) and
+  // forgets them in one step: nothing renews a token between the two
+  take(p) {
+    const all = readAuth()
+    const out = {}
+    for (const k of p.accounts?.length ? p.accounts : accountsOf(all, p.provider)) {
+      if (!(k in all)) continue
+      out[k] = all[k]
+      removeAuth(k)
+    }
+    return { auths: out }
+  },
   // signOut forgets the account named, else every account of the provider
   signOut(p) {
     const keys = p.account ? [p.account] : accountsOf(readAuth(), p.provider)

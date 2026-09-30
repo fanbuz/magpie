@@ -28,6 +28,10 @@ type Target struct {
 	MCPVia string
 	// Note is what the page says of the agent's instructions file.
 	Note string
+	// Copy is an agent that gets a copy of each skill, made again when
+	// the library's changes, rather than a link: one in a WSL distro,
+	// which can't follow a link to a Windows folder.
+	Copy bool
 }
 
 func home() string { h, _ := os.UserHomeDir(); return h }
@@ -58,6 +62,9 @@ func codexDir() string {
 // targetOf is where a known agent keeps them, or nil for one magpie can't
 // give any of them to.
 func targetOf(a *agent.Agent) *Target {
+	if a.WSL != "" {
+		return wslTargetOf(a)
+	}
 	h := home()
 	t := &Target{Agent: a}
 	switch a.ID {
@@ -261,6 +268,48 @@ func targetOf(a *agent.Agent) *Target {
 	return t
 }
 
+// wslTargetOf is where an agent in a WSL distro keeps them: its files at
+// their defaults under the distro's $HOME (the distro's variables that
+// move them aren't read), opened through \\wsl.localhost; nil while the
+// distro is stopped, which opening them would start. What is written is
+// the same as for this machine's agent: nothing in it names a place on
+// Windows, and each skill is a copy.
+func wslTargetOf(a *agent.Agent) *Target {
+	h := a.Home
+	if h == "" {
+		return nil
+	}
+	t := &Target{Agent: a, Copy: true}
+	id, _, _ := strings.Cut(a.ID, "@")
+	switch id {
+	case "claude":
+		d := filepath.Join(h, ".claude")
+		t.Instructions = filepath.Join(d, "CLAUDE.md")
+		t.MCP = &mcpFile{Path: filepath.Join(h, ".claude.json"), Format: fmtClaude, WSL: true}
+		t.Skills = filepath.Join(d, "skills")
+	case "codex":
+		d := filepath.Join(h, ".codex")
+		t.Instructions = filepath.Join(d, "AGENTS.md")
+		t.Override = filepath.Join(d, "AGENTS.override.md")
+		t.MCP = &mcpFile{Path: filepath.Join(d, "config.toml"), Format: fmtCodex, WSL: true}
+		t.Skills = filepath.Join(d, "skills")
+	case "pi":
+		// its MCP servers go where the Pi installed there reads them,
+		// which its version decides (piMCP), and that isn't known here
+		d := filepath.Join(h, ".pi", "agent")
+		t.Instructions = filepath.Join(d, "AGENTS.md")
+		t.Skills = filepath.Join(d, "skills")
+	case "omo":
+		d := filepath.Join(h, ".omo", "agent")
+		t.Instructions = filepath.Join(d, "AGENTS.md")
+		t.MCP = &mcpFile{Path: filepath.Join(d, "mcp.json"), Format: fmtPiNative, WSL: true}
+		t.Skills = filepath.Join(d, "skills")
+	default:
+		return nil
+	}
+	return t
+}
+
 // apps are what the library can give MCP servers to that aren't agents
 // magpie sets up: known by the folder they keep their settings in.
 func apps() []*agent.Agent {
@@ -384,6 +433,9 @@ func Takes(q, kind string) (string, error) {
 	t := targetOf(a)
 	var has bool
 	what := map[string]string{"instructions": "instructions", "mcp": "MCP servers", "skills": "skills"}[kind]
+	if t == nil && a.WSL != "" && a.Home == "" {
+		return "", fmt.Errorf("WSL %s isn't running: start it, and %s can be given %s", a.WSL, a.Name, what)
+	}
 	if t != nil {
 		switch kind {
 		case "instructions":

@@ -101,7 +101,8 @@ func extras() map[string]string {
 	es, _ := os.ReadDir(filepath.Dir(extraPath("x")))
 	for _, e := range es {
 		id, ok := strings.CutSuffix(e.Name(), ".md")
-		if !ok || e.IsDir() || checkName("agent", id) != nil {
+		id = agentOfFile(id)
+		if !ok || e.IsDir() || checkAgent(id) != nil {
 			continue
 		}
 		if text := readText(extraPath(id)); text != "" {
@@ -162,7 +163,7 @@ func Restore(s *Setup) (*Result, error) {
 			texts[extraPath(id)] = ""
 		}
 		for id, text := range s.Instructions.Extra {
-			if err := checkName("agent", id); err != nil {
+			if err := checkAgent(id); err != nil {
 				return err
 			}
 			texts[extraPath(id)] = text

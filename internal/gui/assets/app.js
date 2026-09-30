@@ -1536,7 +1536,10 @@ function effortBars(f) {
 // shows at once, bars and all; the write follows, in order, so a slow agent
 // config never holds the thumb (巨卡).
 function effortSeg(a, f) {
-  const options = f.options;
+  // a value that isn't one of the levels (unset, or one magpie doesn't list)
+  // is a stop of its own, as the picker's current value is: shown as the
+  // lowest level, a touch wrote that level over it
+  const options = f.options.some((o) => o.value === f.value) ? f.options : [{ value: f.value }, ...f.options];
   const last = Math.max(1, options.length - 1);
   const box = el("div", "effort-control");
   const head = el("div", "effort-head");
@@ -1562,7 +1565,7 @@ function effortSeg(a, f) {
   ends.setAttribute("aria-hidden", "true");
   ends.append(el("span", "", effortName(options[0])), el("span", "", effortName(options[options.length - 1])));
   box.append(head, track, ends);
-  let at = Math.max(0, options.findIndex((o) => o.value === f.value));
+  let at = options.findIndex((o) => o.value === f.value);
   const show = (i) => {
     at = i;
     track.style.setProperty("--p", i / last);
@@ -2843,7 +2846,7 @@ function renderAdd() {
       return grid;
     };
     let any = false;
-    const subs = SUBS.filter((x) => !f || x.name.toLowerCase().includes(f) || x.agent.includes(f) || "subscription".includes(f));
+    const subs = SUBS.filter((x) => !(providers.onPlugins || []).includes(x.agent)).filter((x) => !f || x.name.toLowerCase().includes(f) || x.agent.includes(f) || "subscription".includes(f));
     if (subs.length) {
       any = true;
       const grid = section("Subscriptions", "sign in, no key");
@@ -2852,7 +2855,7 @@ function renderAdd() {
       const w = subs.find((x) => signing?.agent === x.agent);
       if (w) tiles.append(renderSigning(w));
     }
-    const plugged = pluginSubs().filter((x) => !f || x.name.toLowerCase().includes(f) || x.agent.includes(f) || "plugin".includes(f));
+    const plugged = pluginSubs().map((x) => subOf(x.agent)).filter((x) => !f || x.name.toLowerCase().includes(f) || x.agent.includes(f) || "plugin".includes(f));
     if (plugged.length) {
       any = true;
       const grid = section("From plugins", "signed in by an OpenCode plugin");
@@ -3656,6 +3659,7 @@ function drawEditor(p, presetID) {
     if (subOf(a.agent)) {
       ed.append(...field(t("Accounts"), renderAccounts(a), p.routing ? t("Tick every account to use; Routing says how requests spread over them.") : subOf(a.agent).single ? t("{agent} keeps one account; the gateway runs it for every request. Signing in to another replaces it.", { agent: a.agentName }) : subOf(a.agent).plugin ? t("The gateway uses the first. Tick more and it moves on to the next when the one before it is out of quota.") : subOf(a.agent).own ? t("The gateway uses the first. Tick more and it moves on to the next when the one before it is out of quota. {agent} itself stays signed in as it is.", { agent: a.agentName }) : t("{agent} signs in to the first. Tick more and the gateway moves on to the next when the one before it is out of quota. Sessions already running keep theirs until restarted.", { agent: a.agentName })));
       if ((a.logins || []).filter((l) => l.active || l.on).length > 1) ed.append(...renderRouting(p));
+      if (p.move) ed.append(...renderMove(p));
     } else {
       const acct = el("div", "acct");
       acct.append(icon(a.agentIcon), el("span", "n", a.user), el("span", "plan", accountPlan(a)));
@@ -4790,7 +4794,16 @@ const SUBS = [
   // accounts can also come from another tool's export (Antigravity Cockpit, Antigravity Manager, CLIProxyAPI)
   { agent: "antigravity", name: "Antigravity", icon: "antigravity-color", plans: "Google AI Pro · Ultra · free", risk: true, importable: true },
 ];
-const subOf = (agent) => SUBS.find((x) => x.agent === agent) || pluginSubs().find((x) => x.agent === agent);
+// subOf: the subscription an agent id is. One moved onto its plugin signs
+// in through the plugin, still named, drawn and warned about as it was.
+const subOf = (agent) => {
+  const own = SUBS.find((x) => x.agent === agent);
+  const pl = pluginSubs().find((x) => x.agent === agent);
+  if (own && pl && (providers?.onPlugins || []).includes(agent)) {
+    return { ...pl, name: own.name, icon: own.icon, plans: own.plans, risk: own.risk, riskNote: own.riskNote, single: own.single };
+  }
+  return own || pl;
+};
 
 // pluginSubs: the providers OpenCode plugins sign in to (Settings →
 // Plugins), as subscriptions like the built-in ones. The plugin, not
@@ -4830,13 +4843,13 @@ let justAdded = ""; // the account that just came in, to greet it
 
 async function startSignIn(agent, risky, site) {
   if (signingOpen()) api("signin/" + signing.id + "/cancel", {}).catch(() => {});
-  if (subOf(agent)?.plugin) return startPluginSignIn(subOf(agent));
   // an account Google may suspend is added only once that is said
   if (subOf(agent)?.risk && !risky) {
     signing = { agent, state: "risk" };
     renderProviders();
     return;
   }
+  if (subOf(agent)?.plugin) return startPluginSignIn(subOf(agent));
   // one on more than one site says which first
   if (subOf(agent)?.sites && !site) {
     signing = { agent, state: "site" };
@@ -5882,6 +5895,27 @@ function respellURL(u, api) {
   return /\/v\d+[a-z]*$/.test(u) || !/^https?:\/\/[^/]+$/.test(u) ? u : u + "/v1";
 }
 
+// renderMove: a built-in subscription a community plugin can run — which
+// of the two runs it, and the way to the other. Accounts, models and the
+// agents on them stay as they are either way.
+function renderMove(p) {
+  const m = p.move;
+  const box = el("div", "stack move");
+  const onPlugin = m.state === "plugin";
+  box.append(el("div", "", onPlugin
+    ? t("The community plugin {pkg}, with the accounts you had here.", { pkg: m.package })
+    : t("magpie's built-in sign-in. The community plugin {pkg} can run it instead, with the same accounts and models.", { pkg: m.package })));
+  if (m.state === "failed" && m.error) box.append(el("div", "hint", t("The last move didn't go through, so it stays built-in: {error}", { error: m.error })));
+  const b = el("button", "text", onPlugin ? t("Use the built-in again") : t("Move to the plugin"));
+  b.onclick = () => {
+    b.classList.add("busy");
+    b.disabled = true;
+    providerAction(onPlugin ? "moveback" : "move", { id: p.id }, onPlugin ? t("{name} is built-in again", { name: p.name }) : t("{name} runs on its plugin now", { name: p.name }));
+  };
+  box.append(b);
+  return field(t("Runs on"), box, onPlugin ? t("Going back puts every account, with the plugin's newer sign-ins, back into the built-in.") : t("If an account doesn't work through the plugin, nothing changes."));
+}
+
 async function providerAction(action, body, okMsg, base = "provider/") {
   try {
     providers = await api(base + action, body);
@@ -6230,9 +6264,13 @@ function renderQuotas() {
         const r = el("div", "quota-resets");
         r.append(resetsWords(sub.resets));
         const use = el("button", "text", t("Use a reset"));
-        use.title = resetUseTitle(sub.resets);
-        use.onclick = () => askCodexReset(sub);
-        if (!sub.resets.byWindow) r.append(use); // a GLM team's are spent on bigmodel.cn
+        use.title = resetUseTitle(sub);
+        use.onclick = () => askReset(sub);
+        if (!sub.resets.byWindow) { // a GLM team's are spent on bigmodel.cn
+          const auto = autoResetButton(sub, "text auto-reset");
+          if (auto) r.append(auto);
+          r.append(use);
+        }
         card.append(r);
       }
     }
@@ -6610,16 +6648,21 @@ function panelQuotaCard(q) {
     const r = el("div", "pq-resets");
     r.append(resetsWords(q.resets));
     const use = el("button", "pq-use", t("Use one…"));
-    use.title = resetUseTitle(q.resets);
-    use.onclick = () => askCodexReset(q);
-    if (!q.resets.byWindow) r.append(use);
+    use.title = resetUseTitle(q);
+    use.onclick = () => askReset(q);
+    if (!q.resets.byWindow) {
+      const auto = autoResetButton(q, "pq-use pq-auto");
+      if (auto) r.append(auto);
+      r.append(use);
+    }
     card.append(r);
   }
   return card;
 }
 
-// resetsWords: a Codex account's rate-limit resets, "↺ 2 resets · until
-// Sat 22:30", the date only when one of them runs out. A GLM Coding team
+// resetsWords: a Codex account's rate-limit resets, or a Claude account's
+// usage-limit resets, "↺ 2 resets · until Sat 22:30", the date only when
+// one of them runs out. A GLM Coding team
 // plan's are counted by window, "↺ 2 five-hour resets · 1 weekly reset",
 // and spent on the vendor's page, not here.
 function resetsWords(r) {
@@ -6647,27 +6690,62 @@ function resetsWords(r) {
 }
 
 // resetUseTitle says which reset a use spends: the one that runs out
-// first, so no one hesitates for fear of losing one that lasts longer.
-function resetUseTitle(r) {
-  return (r.until
+// first, so no one hesitates for fear of losing one that lasts longer; a
+// Claude account's, the one Anthropic names next.
+function resetUseTitle(q) {
+  const r = q.resets;
+  return (r.until && q.provider === "claude"
+    ? t("Uses the reset Anthropic names next, good until {when}.", { when: new Date(r.until).toLocaleString() })
+    : r.until
     ? t("Uses the reset that runs out first ({when}), never one that lasts longer.", { when: new Date(r.until).toLocaleString() })
     : t("Uses one of its resets; none of them runs out."))
     + "\n" + t("This account's windows start again at once, as if none had been used. You're asked before anything is spent.");
 }
 
-// askCodexReset: spending a reset can't be taken back, so it asks first;
-// then it says what came of it and reads the usage again.
+// autoResetButton turns on or off a Codex or Claude account spending a
+// reset by itself: once its week is used up and no other account can
+// answer, one a week at most. Off unless the user turns it on; nothing for
+// an account with no name to keep it by.
+function autoResetButton(q, cls) {
+  const kept = { codex: "codexAutoReset", claude: "claudeAutoReset" }[q.provider];
+  if (!q.user || !kept) return null;
+  const who = q.user.toLowerCase();
+  const on = !!(state.settings?.[kept] || []).includes(who);
+  const b = el("button", cls + (on ? " on" : ""), t("Auto-use"));
+  b.setAttribute("aria-pressed", String(on));
+  b.title = t(on ? "On: a reset is used by itself when this account's week is used up and no other account can answer, one a week at most. Click to turn it off."
+    : "Use a reset by itself when this account's week is used up and no other account can answer, one a week at most. The five hours running out never uses one.");
+  b.onclick = async (e) => {
+    e.stopPropagation();
+    b.disabled = true;
+    try {
+      prefs = await writingPrefs(api("settings/" + q.provider + "-auto-reset", { user: q.user, on: !on }));
+      state.settings = prefs;
+      status(t(on ? "{who} no longer uses a reset by itself" : "{who} uses a reset by itself once its week is used up", { who: q.user }), "ok");
+      renderQuotas();
+    } catch (err) {
+      b.disabled = false;
+      status(err.message, "err");
+    }
+  };
+  return b;
+}
+
+// askReset: spending a Codex or Claude account's reset can't be taken
+// back, so it asks first; then it says what came of it and reads the
+// usage again.
 let resetAsk = null;
-function askCodexReset(q) {
+function askReset(q) {
+  const claude = q.provider === "claude";
   const ed = el("div", "editor reset-ask");
   const head = el("div", "ehead");
-  head.append(icon(q.icon || "codex"), el("b", "", t("Use a Codex reset?")));
+  head.append(icon(q.icon || (claude ? "claude-color" : "codex")), el("b", "", t(claude ? "Use a Claude reset?" : "Use a Codex reset?")));
   ed.append(head);
   const who = q.user || q.name;
   ed.append(el("p", "lib-confirm", t(q.resets.count === 1
     ? "{who} has 1 reset. Using it starts its windows again at once, as if none of them had been used. It can't be undone."
     : "{who} has {n} resets. Using one starts its windows again at once, as if none of them had been used. It can't be undone.", { who, n: q.resets.count })));
-  if (q.resets.until) ed.append(el("p", "lib-confirm", t("The one used is the one that runs out first, {when}.", { when: new Date(q.resets.until).toLocaleString() })));
+  if (q.resets.until) ed.append(el("p", "lib-confirm", t(claude ? "The one used is the one Anthropic names next, good until {when}." : "The one used is the one that runs out first, {when}.", { when: new Date(q.resets.until).toLocaleString() })));
   // nothing used yet: a reset would start nothing again
   if (!q.windows?.some((w) => w.used > 0)) ed.append(el("p", "lib-confirm reset-idle", t("None of its windows has been used yet, so there is nothing to start again.")));
   const bar = el("div", "bar");
@@ -6677,7 +6755,7 @@ function askCodexReset(q) {
     go.disabled = true;
     go.classList.add("busy");
     try {
-      const out = await api("usage/codex-reset", { user: q.user || "" });
+      const out = await api(claude ? "usage/claude-reset" : "usage/codex-reset", { user: q.user || "" });
       closeResetAsk();
       status(who + ": " + resetOutcome(out), out.code === "reset" ? "ok" : "err");
       loadQuotas();
@@ -6714,7 +6792,13 @@ function resetOutcome(out) {
     case "reset": return t(out.windows === 1 ? "1 window started again" : "{n} windows started again", { n: out.windows });
     case "nothing_to_reset": return t("nothing to start again — no window has been used, and the reset is kept");
     case "no_credit": return t("no reset left on the account");
-    case "already_redeemed": return t("that reset was already used");
+    case "already_redeemed":
+    case "already_used": return t("that reset was already used");
+    // Anthropic's
+    case "not_limited": return t("nothing to reset — no window is used up yet, and the reset is kept");
+    case "cooldown": return t("a reset was used a short while ago — try again later");
+    case "ineligible": return t("the account can't use a reset");
+    case "unavailable": return t("resets can't be used right now — try again later");
   }
   return out.code;
 }
@@ -9469,6 +9553,10 @@ function renderTrayUsage(s, keep) {
   $("#quotaLeftSegs").replaceChildren(segs([[false, t("Used")], [true, t("Left")]], !!s.quotaLeft,
     (on) => { if (on !== quotaLeft) setQuotaLeft(on); }));
   $("#currencySegs").replaceChildren(segs(CURRENCIES.map(([id, name]) => [id, t(name)]), s.currency || "usd", (v) => savePrefs({ ...keep, currency: v })));
+  // the agents' lists name a model with its provider's after it, or alone
+  // (#335): set on its own, so the agents are told
+  $("#plainNamesSegs").replaceChildren(segs([["off", t("Off")], ["on", t("On")]], s.plainNames ? "off" : "on", (v) =>
+    writingPrefs(api("settings/plain-names", { on: v === "off" })).then((ns) => { prefs = ns; renderSettings(); }).catch((e) => { status(t(e.message), "err"); renderSettings(); })));
   const rate = s.fx?.rate;
   const currencySub = $("#currencySub");
   currencySub.textContent = t("What a cost — the Usage page's, the tray panel's, the TUI's and the CLI's — is shown as; a vendor's own balance, already in its own currency, is never converted");

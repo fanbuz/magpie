@@ -393,6 +393,44 @@ func (e Entry) Label() string {
 	return e.Name + " · " + by
 }
 
+// Labels are how an agent's list names each of es, in order: as Label, or,
+// when the user wants names plain (settings' PlainNames, #335), by the
+// name alone — but for two or more the list would call the same, as a
+// routing group found for a model is called with that model left in the
+// list, which keep their provider's after it to tell them apart.
+func Labels(es []Entry) []string {
+	out := make([]string, len(es))
+	plain := settings.Load().PlainNames
+	same := map[string]int{}
+	if plain {
+		for _, e := range es {
+			same[strings.ToLower(e.Name)]++
+		}
+	}
+	for i, e := range es {
+		out[i] = e.Label()
+		if plain && e.Name != "" && same[strings.ToLower(e.Name)] == 1 {
+			out[i] = e.Name
+		}
+	}
+	return out
+}
+
+// SetPlainNames has the agents' model lists name models by their names
+// alone (see Labels), or with their providers' again, and the agents told.
+func SetPlainNames(on bool) error {
+	s := settings.Load()
+	if s.PlainNames == on {
+		return nil
+	}
+	s.PlainNames = on
+	if err := settings.Save(s); err != nil {
+		return err
+	}
+	catalog.Touched()
+	return nil
+}
+
 // ModelNames are the names the user gave the provider's models, by model id.
 func (p Provider) ModelNames() map[string]string {
 	out := map[string]string{}

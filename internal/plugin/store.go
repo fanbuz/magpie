@@ -268,3 +268,38 @@ func command(ctx context.Context, name string, args ...string) *exec.Cmd {
 
 // env is the plugins' environment: magpie's, with its proxy.
 func env() []string { return netproxy.Env(os.Environ()) }
+
+// Version is the version of the package spec installed (or checked out
+// at its path), "" when there is none.
+func Version(spec string) string {
+	dir := Target(spec)
+	if fi, err := os.Stat(dir); err == nil && !fi.IsDir() {
+		dir = filepath.Dir(dir)
+	}
+	var pj struct {
+		Version string `json:"version"`
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil && json.Unmarshal(b, &pj) == nil {
+		return pj.Version
+	}
+	return ""
+}
+
+// PackageName is the npm package spec is: its name, or, for a plugin added
+// from a folder or file (a checkout of it), the name its package.json gives.
+func PackageName(spec string) string {
+	if !IsPath(spec) {
+		return Name(spec)
+	}
+	dir := Target(spec)
+	if fi, err := os.Stat(dir); err == nil && !fi.IsDir() {
+		dir = filepath.Dir(dir)
+	}
+	var pj struct {
+		Name string `json:"name"`
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil && json.Unmarshal(b, &pj) == nil && pj.Name != "" {
+		return pj.Name
+	}
+	return spec
+}

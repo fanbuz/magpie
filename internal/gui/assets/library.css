@@ -196,6 +196,10 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .lib-row.click:hover > .lib-agents .lib-ag { box-shadow: none; }
 .lib-row.click:hover > .lib-agents .lib-ag:not(:focus-visible) { outline-color: var(--card-2); }
 .lib-row.click:hover > .lib-agents:hover .lib-ag:not(:focus-visible) { outline-color: transparent; }
+/* All, ahead of the hand: a word, apart from the chips it lights */
+.lib-row > .lib-agents .lib-ag.all { width: auto; padding: 0 7px; margin-right: 6px; justify-content: center; font-size: 11px; font-weight: 500; color: var(--muted); }
+.lib-row > .lib-agents .lib-ag.all.on { color: var(--fg); }
+.lib-row > .lib-agents .lib-ag.all + .lib-ag { margin-left: 0; }
 
 /* agents that have one of their own, not in the library */
 .lib-have { display: flex; gap: 4px; flex: none; }

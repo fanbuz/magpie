@@ -310,6 +310,12 @@ it:
 | Anthropic   | `http://127.0.0.1:3425`    | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY=magpie` |
 | Gemini      | `http://127.0.0.1:3425`    | `GOOGLE_GEMINI_BASE_URL`, `GEMINI_API_KEY=magpie` |
 
+An optional `X-Magpie-Account: <account>` header (the account's email
+or login, or its id on the Routing page) pins a request to one account of a
+subscription with several: only it is tried, and an unknown account, one
+whose plan lacks the model, or one resting is an error rather than another
+account's reply. The header is not sent on to the vendor.
+
 The *Gateway* tab in the app has this as copy buttons and ready-made
 snippets (shell, curl, Python, Node) for each API, the list of model ids,
 and the recent calls; `MAGPIE_DEBUG=1` logs every call to the terminal.

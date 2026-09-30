@@ -154,7 +154,7 @@ func (b *Bundle) check() error {
 		}
 	}
 	for id := range b.Extra {
-		if err := checkName("agent", id); err != nil {
+		if err := checkAgent(id); err != nil {
 			return err
 		}
 	}

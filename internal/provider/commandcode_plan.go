@@ -478,14 +478,15 @@ const cmdNoPlan = "No plan"
 // none. ok is false when that can't be read.
 func cmdSubscription(ctx context.Context, a cmdAuth) (id, plan string, until *time.Time, renew string, ok bool) {
 	var r struct {
-		Data *struct {
+		Success *bool `json:"success"` // false when Command Code couldn't tell ("write CONNECTION_CLOSED …"), though a 200
+		Data    *struct {
 			PlanID           string `json:"planId"`
 			Status           string `json:"status"`
 			CurrentPeriodEnd any    `json:"currentPeriodEnd"`
 			CancelAtEnd      *bool  `json:"cancelAtPeriodEnd"`
 		} `json:"data"`
 	}
-	if accountJSON(ctx, cmdAPI+"/alpha/billing/subscriptions", a.APIKey, nil, &r) != nil {
+	if accountJSON(ctx, cmdAPI+"/alpha/billing/subscriptions", a.APIKey, nil, &r) != nil || (r.Success != nil && !*r.Success) {
 		return "", "", nil, "", false
 	}
 	if d := r.Data; d != nil && d.PlanID != "" && d.Status != "canceled" && d.Status != "incomplete_expired" {

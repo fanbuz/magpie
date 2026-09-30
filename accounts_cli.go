@@ -161,7 +161,7 @@ func accountsCmd(args []string) error {
 			line += "  " + quotaCell(w)
 		}
 		if r.Resets != nil {
-			line += "  " + resetsCell(r.Resets)
+			line += "  " + resetsCell(r.Resets, provider.AutoResets(r.Agent, r.User))
 		}
 		if r.Lapsed != "" {
 			line += "  " + muted.Render(r.Lapsed)
@@ -275,6 +275,9 @@ func addAccount(agentID string) error {
 		if !strings.EqualFold(strings.TrimSpace(yes), "y") && !strings.EqualFold(strings.TrimSpace(yes), "yes") {
 			return fmt.Errorf("sign-in canceled")
 		}
+	}
+	if provider.Moved(agentID) {
+		return pluginLogin(context.Background(), agentID, "")
 	}
 	st, err := provider.StartSignIn(agentID)
 	if err != nil {

@@ -344,7 +344,7 @@ func (c candidate) full(now time.Time) time.Time {
 	if c.p.Account == nil {
 		return time.Time{}
 	}
-	return allowances(c.p.Account.Agent)[c.p.Account.User].Full(c.model, usedShare, now)
+	return allowances(c.p.Account.UsageAgent())[c.p.Account.User].Full(c.model, usedShare, now)
 }
 
 // keepRetry passes on, with a vendor's error, what it said about when to
@@ -484,7 +484,7 @@ func weigh(p provider.Provider, cs []candidate, model string, from provider.Prot
 		if c.p.Account == nil {
 			continue
 		}
-		ag := c.p.Account.Agent
+		ag := c.p.Account.UsageAgent()
 		if _, ok := known[ag]; !ok {
 			known[ag] = allowances(ag)
 		}

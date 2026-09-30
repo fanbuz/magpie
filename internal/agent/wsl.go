@@ -247,6 +247,9 @@ func wslAgent(k wslKind, d distro) *Agent {
 	id := k.id + "@wsl:" + d.Name
 	a := k.in(d.place(id))
 	a.ID, a.Name, a.Aliases, a.Bin, a.UA, a.WSL = id, k.name+" · WSL "+d.Name, nil, "", nil, d.Name
+	if d.Running {
+		a.Home = d.local(d.Home)
+	}
 	a.detect = func() bool { return k.found(d) }
 	// its requests carry the agent's User-Agent and are counted as its
 	// Windows twin's, so a prompt with none of "its" own seen isn't a bypass
@@ -341,7 +344,7 @@ func asleep(live *Agent, k wslKind, d distro) *Agent {
 
 // wslAgents are the agents in this machine's WSL distros; none off Windows.
 func wslAgents() []*Agent {
-	if runtime.GOOS != "windows" {
+	if !wslOn {
 		return nil
 	}
 	return wslAgentsOf(wslDistros())
@@ -381,6 +384,9 @@ const (
 	wslListAge  = time.Minute
 	wslRetryAge = 10 * time.Minute
 )
+
+// wslOn is whether there is WSL to look in: on Windows, or in tests.
+var wslOn = runtime.GOOS == "windows"
 
 // wslRun runs wsl.exe; a var for tests.
 var wslRun = func(timeout time.Duration, args ...string) ([]byte, error) {

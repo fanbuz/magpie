@@ -2,6 +2,8 @@ package agent
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -162,6 +164,28 @@ func gemini(home string) *Agent {
 		ID: "gemini", Name: "Gemini CLI", Icon: "geminicli-color", Aliases: []string{"gemini-cli"},
 		UA:  []string{"geminicli", "gemini-cli"},
 		Bin: "gemini", Dir: dir, Path: path,
+		// Antigravity keeps its folders under ~/.gemini too (antigravity,
+		// antigravity-cli, config) and reads GEMINI.md there, so the folder
+		// alone is no sign of Gemini CLI (#330): only what Gemini CLI itself
+		// writes there, or its binary, is
+		detect: func() bool {
+			if Taken(dir) {
+				return false
+			}
+			for _, f := range []string{"settings.json", ".env", "google_accounts.json", "installation_id", "trustedFolders.json", "mcp-oauth-tokens.json"} {
+				if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+					return true
+				}
+			}
+			// a sign-in another app's OAuth client minted there isn't
+			// Gemini CLI's (#143)
+			creds := filepath.Join(dir, "oauth_creds.json")
+			if _, err := os.Stat(creds); err == nil && !provider.AnotherAppsGoogleSignIn(creds) {
+				return true
+			}
+			_, err := exec.LookPath("gemini")
+			return err == nil
+		},
 		Check: func() string {
 			if !isMagpie(model()) {
 				return ""

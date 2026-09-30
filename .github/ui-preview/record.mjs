@@ -20,7 +20,7 @@ const env = (k, d) => process.env[k] ?? d;
 const OUT = path.resolve(env("OUT_DIR", "ui-preview-out"));
 const BASE = env("MAGPIE_URL");
 const LOCALE = env("UI_LOCALE", "zh-CN");
-const MODEL = env("PLAN_MODEL", "deepseek-v4-pro");
+const MODEL = env("PLAN_MODEL", "deepseek-flash");
 const VIEW = { width: 1280, height: 800 };
 const VIEWS = ["agents", "providers", "gateway", "routing", "usage", "library", "settings"];
 // never pressed: they end the run, reach out of the sandbox or throw away

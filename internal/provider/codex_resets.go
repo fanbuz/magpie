@@ -116,8 +116,9 @@ func codexResets(ctx context.Context, base, token, accountID string, count int) 
 }
 
 // ResetOutcome is what spending a reset did: Code is the vendor's word for
-// it (reset, nothing_to_reset, no_credit, already_redeemed) and Windows
-// how many windows started again.
+// it (reset, nothing_to_reset, no_credit, already_redeemed; for Claude
+// already_used, not_limited, cooldown, ineligible, unavailable too) and
+// Windows how many windows started again.
 type ResetOutcome struct {
 	Code    string `json:"code"`
 	Windows int    `json:"windows"`
@@ -135,8 +136,17 @@ func (o ResetOutcome) Text() string {
 		return "nothing to reset — no window has been used, and the reset is kept"
 	case "no_credit":
 		return "no reset left on the account"
-	case "already_redeemed":
+	case "already_redeemed", "already_used":
 		return "that reset was already used"
+	// Anthropic's words for a Claude reset (claude_resets.go)
+	case "not_limited":
+		return "nothing to reset — no window is used up yet, and the reset is kept"
+	case "cooldown":
+		return "a reset was used a short while ago — try again later"
+	case "ineligible":
+		return "the account can't use a reset"
+	case "unavailable":
+		return "resets can't be used right now — try again later"
 	}
 	return o.Code
 }

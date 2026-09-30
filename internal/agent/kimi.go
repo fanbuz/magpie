@@ -17,6 +17,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -81,9 +82,35 @@ func kimiModelTables(legacy bool) []edit.Table {
 		if len(caps) > 0 {
 			kvs = append(kvs, edit.KV{Path: "capabilities", Value: edit.Raw("[" + strings.Join(caps, ", ") + "]")})
 		}
+		if !legacy {
+			kvs = append(kvs, kimiEfforts(m.Efforts)...)
+		}
 		out = append(out, edit.Table{Name: "models." + strconv.Quote(magpieID+"/"+m.ID), KVs: kvs})
 	}
 	return out
+}
+
+// kimiEfforts are a thinking model's levels for the new Kimi Code's
+// thinking picker (#333): support_efforts, and default_effort high where
+// the model has it, as Kimi Code takes for its own models (else it starts
+// on the middle one). Without them it offers thinking on or off only and
+// asks for no level at all. none is left out: Kimi Code's own off turns
+// thinking off. kimi-cli has neither key.
+func kimiEfforts(efforts []string) []edit.KV {
+	var levels []string
+	for _, e := range efforts {
+		if e != "none" {
+			levels = append(levels, strconv.Quote(e))
+		}
+	}
+	if len(levels) == 0 {
+		return nil
+	}
+	kvs := []edit.KV{{Path: "support_efforts", Value: edit.Raw("[" + strings.Join(levels, ", ") + "]")}}
+	if slices.Contains(efforts, "high") {
+		kvs = append(kvs, edit.KV{Path: "default_effort", Value: "high"})
+	}
+	return kvs
 }
 
 func kimi(home string) *Agent {

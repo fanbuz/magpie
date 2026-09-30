@@ -2,7 +2,7 @@ package usage
 
 // The ledger: every call of a period, one row each, newest first — what
 // the agent asked for, where it went, what model answered, the tokens and
-// what they cost at list price — to set beside a vendor's own bill.
+// what they cost at the effective price — to set beside a vendor's own bill.
 
 import (
 	"encoding/csv"
@@ -22,7 +22,7 @@ import (
 // Row is one call as the ledger lists it.
 type Row struct {
 	Record
-	// Cost is the call's list price in USD, when its model's is known
+	// Cost is the call's effective price in USD, when its model's is known
 	// (Priced); Swapped: the reply named another model than Model
 	Cost    float64 `json:"cost"`
 	Priced  bool    `json:"priced"`
@@ -279,8 +279,8 @@ func ledgerWith(since time.Time, f Filter, recs []Record, logs []sessions.Call) 
 		if (!since.IsZero() && c.Time.Before(since)) || matched[i] {
 			continue
 		}
-		// Gateway and session calls use the same model API list price,
-		// independently of route and account attribution.
+		// Session identity does not establish a billing provider; price the
+		// record through the same lookup without inferring one from the account.
 		r := logRecord(c)
 		r.SessionAccount = identities.resolve(c)
 		r.SessionOfficialLogin = identities.officialLogin(c, r.SessionAccount)
@@ -294,9 +294,9 @@ func ledgerWith(since time.Time, f Filter, recs []Record, logs []sessions.Call) 
 	return rows, sum, agents, providers
 }
 
-// pricer honors explicit provider/model prices (including provider-wide and
-// zero prices), then falls back to one maker API list price per model. Without
-// an override, subscriptions and relays use the same reference price.
+// pricer uses the same effective price as the model CLI and session totals:
+// explicit provider/model or provider-wide prices (including zero), then the
+// provider catalog, then the maker catalog. Settings are read once per query.
 func pricer() func(Record) *catalog.Price {
 	prices := map[[2]string]*catalog.Price{}
 	s := settings.Load()
@@ -306,10 +306,7 @@ func pricer() func(Record) *catalog.Price {
 			return pr
 		}
 		var pr *catalog.Price
-		v, ok := provider.ConfiguredPriceIn(s, r.Provider, r.Model)
-		if !ok {
-			v, ok = provider.MakerPrice(r.Model)
-		}
+		v, ok := provider.EffectivePriceIn(s, r.Provider, r.Model)
 		if ok {
 			pr = &v
 		} else {
@@ -327,7 +324,7 @@ var CSVHeader = []string{"time", "agent", "requested_model", "provider", "host",
 	"request_id", "endpoint", "error_message", "error_type", "source", "rejected", "session_provider", "session_account", "session_official_login"}
 
 // WriteCSV writes rows as CSV, a header first: times in RFC 3339 with
-// their offset, the cost in USD at the configured or maker list price (empty when unknown), error
+// their offset, the cost in USD at the effective price (empty when unknown), error
 // "true" for a call that failed: answered with a status of 400 or more, or
 // ended by an error a session file tells.
 func WriteCSV(w io.Writer, rows []Row) error {

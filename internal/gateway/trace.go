@@ -38,6 +38,7 @@ type Route struct {
 	// one that went first, each as it decided
 	Nested   []NestedRule `json:"nested,omitempty"`
 	Affinity *Affinity    `json:"affinity,omitempty"` // its conversation, and whether it stayed put
+	Pinned   string       `json:"pinned,omitempty"`   // the account AccountHeader named: only it was tried
 	Order    []Weighed    `json:"order"`              // who was to try it, first first
 	Left     []Weighed    `json:"left,omitempty"`
 	Tries    []Try        `json:"tries"`
@@ -170,6 +171,17 @@ type Try struct {
 	Error   string `json:"error,omitempty"`
 	Rest    *Rest  `json:"rest,omitempty"`  // how long it now sits out; none when it was the last to try
 	Again   int64  `json:"again,omitempty"` // ms waited before it was tried again, the last one left
+	// Reset: its week used up and nobody else left, one of the account's
+	// Codex resets was spent by itself (the user's setting) — on Who, and
+	// what spending it did — and the request asked again
+	Reset *AutoReset `json:"reset,omitempty"`
+}
+
+// AutoReset is a Codex or Claude reset spent by itself, on Who's account.
+type AutoReset struct {
+	Who   string `json:"who"`
+	Text  string `json:"text"`
+	Agent string `json:"agent,omitempty"` // "claude" for a Claude account's; Codex's otherwise
 }
 
 type planned struct {

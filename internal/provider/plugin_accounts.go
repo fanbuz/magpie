@@ -148,8 +148,28 @@ func pluginAlsoOn(pp plugin.Provider) []Provider {
 	var out []Provider
 	for _, l := range pluginLogins(pp) {
 		if !l.Active && l.On {
-			out = append(out, pluginProvider(pp, l.acct, l.User))
+			out = append(out, pluginProvider(pp, l))
 		}
 	}
 	return out
+}
+
+// keepPluginPlan keeps the plan an account's allowance told on its row,
+// for the accounts list to show it as a built-in's.
+func keepPluginPlan(pp plugin.Provider, key, plan string) {
+	if plan == "" {
+		return
+	}
+	loginsMu.Lock()
+	defer loginsMu.Unlock()
+	ls := readLogins()
+	for i, l := range ls {
+		if l.Agent == pluginAgent(pp) && l.Home == key {
+			if l.Plan != plan {
+				ls[i].Plan = plan
+				_ = writeLogins(ls)
+			}
+			return
+		}
+	}
 }

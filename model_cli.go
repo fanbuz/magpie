@@ -30,6 +30,9 @@ const modelUsage = `usage:
   magpie model price <provider/model> --reset    take your price off this model
   magpie model prices                            the models you priced
   magpie model names                             the models you named or narrowed
+  magpie model suffix [on|off]                   whether the agents' lists name each model with its provider
+                                                 (or "routing group") after it: on, as by default, "Sol · OpenAI";
+                                                 off, "Sol" alone — but two a list would name the same keep it
 
   Each is looked for in this order: this model, then <provider id>/*, then the provider's own
   list, then models.dev. --reset removes only the first, and says so when a <provider id>/* value
@@ -60,6 +63,8 @@ func modelCmd(args []string) error {
 		return modelPrice(args[1:])
 	case "prices":
 		return modelPrices()
+	case "suffix", "suffixes":
+		return modelSuffix(args[1:])
 	case "help", "-h", "--help":
 		fmt.Println(modelUsage)
 		return nil
@@ -368,6 +373,36 @@ func modelPrices() error {
 		}
 		fmt.Println(bold.Render(id), muted.Render("· "+perMillion(p)+
 			" · cache "+money(p.CacheRead)+"/"+money(p.CacheWrite)))
+	}
+	return nil
+}
+
+// modelSuffix says whether the agents' lists name models with their
+// providers' after them, or sets it (#335).
+func modelSuffix(args []string) error {
+	if len(args) == 0 {
+		if settings.Load().PlainNames {
+			fmt.Println("off", muted.Render("· agents' lists name a model alone, \"Sol\" · magpie model suffix on"))
+		} else {
+			fmt.Println("on", muted.Render("· agents' lists name a model with its provider, \"Sol · OpenAI\" · magpie model suffix off"))
+		}
+		return nil
+	}
+	var plain bool
+	switch strings.ToLower(args[0]) {
+	case "on", "yes", "true":
+	case "off", "no", "false":
+		plain = true
+	default:
+		return fmt.Errorf("magpie model suffix on|off, not %q", args[0])
+	}
+	if err := provider.SetPlainNames(plain); err != nil {
+		return err
+	}
+	if plain {
+		fmt.Println(green.Render("✓"), "agents' lists name each model alone", muted.Render("· two that would read the same keep their provider's"))
+	} else {
+		fmt.Println(green.Render("✓"), "agents' lists name each model with its provider again")
 	}
 	return nil
 }
