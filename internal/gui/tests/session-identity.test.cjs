@@ -20,22 +20,25 @@ const rows = [
   { t:now, agent:"codex", agentName:"Codex", provider:"session-unknown", providerName:"Local session", session_provider:"my-custom-route", model:"gpt-6-astra", source:"log", in:10, out:2, status:0, cost:0, priced:false },
 ];
 
+[10000,10001,30000,30001,1250,0,undefined,900,-1].forEach((ms,i) => rows[i].ms=ms);
+rows.push({t:now,agent:"codex",agentName:"Codex",provider:"codex",providerName:"ChatGPT",access:"subscription",model:"gpt-6-sol",in:10,out:2,status:200,ms:4000,cost:0,priced:false});
+
 for (const engine of ["chromium", "webkit"]) {
   test(engine + ": session account identities", async t => {
     const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({channel:"chromium"}));
     t.after(() => browser.close());
-    for (const lang of ["en", "zh"]) {
-      await t.test(lang, async () => {
+    for (const lang of ["en", "zh"]) for (const theme of ["light", "dark"]) {
+      await t.test(lang + " / " + theme, async () => {
         const page = await browser.newPage({viewport:{width:1200,height:900},reducedMotion:"reduce"});
         const errors = [];
         page.on("pageerror", e => errors.push(e.message));
         await page.route("**/*", async route => {
           const url = new URL(route.request().url());
           const json = data => route.fulfill({json:data});
-          if (url.pathname === "/boot.js") return route.fulfill({contentType:"text/javascript",body:`window.bootPrefs={lang:"${lang}",theme:"light",web:false};`});
+          if (url.pathname === "/boot.js") return route.fulfill({contentType:"text/javascript",body:`window.bootPrefs={lang:"${lang}",theme:"${theme}",web:false};`});
           if (url.pathname === "/wails/runtime.js") return route.fulfill({contentType:"text/javascript",body:"export const Window={};"});
-          if (url.pathname === "/api/state") return json({agents:[],profiles:[],settings:{lang,theme:"light"}});
-          if (url.pathname === "/api/usage/requests") return json({period:"30d",rows,calls:rows.length,total:rows.length,offset:0,errors:0,input:70,output:14,cost:0,unpriced:rows.length,series:[],by:{},agents:[],providers:[]});
+          if (url.pathname === "/api/state") return json({agents:[],profiles:[],settings:{lang,theme}});
+          if (url.pathname === "/api/usage/requests") return json({period:"30d",rows,calls:rows.length,total:rows.length,offset:0,errors:0,input:100,output:20,cache_read:0,cache_write:0,cost:0,unpriced:rows.length,series:[],by:{},agents:[],providers:[]});
           if (url.pathname === "/api/usage/quotas") return json([]);
           if (url.pathname === "/api/usage") return json({calls:0,cost:0,series:[],agents:[],models:[]});
           if (url.pathname === "/api/sessions") return json({sessions:[],dirs:[]});
@@ -67,6 +70,27 @@ for (const engine of ["chromium", "webkit"]) {
         assert.equal(await cells.nth(4).locator(".access").textContent(),"API");
         assert((await cells.nth(6).textContent()).startsWith(lang === "zh" ? "未知供应商" : "Unknown provider"));
         assert.equal(await cells.nth(6).locator(".src").count(),0,"an unknown gateway provider is not a local session");
+        for (const [i,band] of [[0,"fast"],[1,"slow"],[2,"slow"],[3,"long"],[4,"fast"],[7,"fast"]]) {
+          const cell=page.locator(".led-row .duration").nth(i);
+          assert((await cell.getAttribute("class")).includes("duration-"+band));
+          assert((await cell.getAttribute("title")).includes(lang === "zh" ? "耗时颜色" : "Duration colors"));
+          if (rows[i].source === "log") assert((await cell.textContent()).startsWith("≈"),"color must preserve estimated timing");
+        }
+        for (const i of [5,6,8]) assert.equal(await page.locator(".led-row .duration").nth(i).textContent(),"—");
+        const palette=await page.evaluate(() => {
+          const selectors=[".src.official",".src.local",".access-api",".access-subscription"];
+          const canvas=document.createElement("canvas"),ctx=canvas.getContext("2d");canvas.width=canvas.height=1;
+          const rgb=color=>{ctx.clearRect(0,0,1,1);ctx.fillStyle=color;ctx.fillRect(0,0,1,1);return [...ctx.getImageData(0,0,1,1).data].slice(0,3);};
+          const luminance=c=>c.map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}).reduce((a,v,i)=>a+v*[.2126,.7152,.0722][i],0);
+          return selectors.map(selector=>{const s=getComputedStyle(document.querySelector(selector)),a=luminance(rgb(s.color)),b=luminance(rgb(s.backgroundColor));return {color:s.color,contrast:(Math.max(a,b)+.05)/(Math.min(a,b)+.05)};});
+        });
+        assert.equal(new Set(palette.map(p=>p.color)).size,4,"source types have distinct colors");
+        assert(palette.every(p=>p.contrast>=4.5),"small badge text remains readable: "+JSON.stringify(palette));
+        if (process.env.MAGPIE_STYLE_SHOTS && lang === "zh" && engine === "chromium") {
+          await page.setViewportSize({width:1900,height:950});
+          await page.locator(".led-wrap").screenshot({path:process.env.MAGPIE_STYLE_SHOTS+"/badges-"+theme+".png"});
+          await page.setViewportSize({width:1200,height:900});
+        }
         await page.locator(".led-row").nth(2).click();
         const detail = page.locator(".led-detail");
         assert((await detail.textContent()).includes("relay"),"raw provider ID remains available in details");

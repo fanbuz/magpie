@@ -134,7 +134,7 @@ func TestCompactPageMatchesLedger(t *testing.T) {
 		rows, sum, agents, providers := ledgerWith(since, Filter{}, rs, cs)
 		all := Ledgered{rows, sum, agents, providers}
 		for _, f := range []Filter{{}, {Agent: "claude"}, {Provider: "a"}, {Failed: true}, {Query: "LOCAL"}, {Agent: "codex", Provider: UnknownProvider}, {Query: "no match"}} {
-			for _, offset := range []int{0, 7, 500} {
+			for _, offset := range []int{0, 7, 500, int(^uint(0) >> 1)} {
 				t.Run(fmt.Sprintf("%s/%+v/%d", period, f, offset), func(t *testing.T) {
 					equalPage(t, buildRequestPage(period, f, offset, 7, gateway, []*rowChunk{local}), pageFromLedger(period, f, offset, 7, all))
 				})

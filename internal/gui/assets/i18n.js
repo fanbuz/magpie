@@ -845,6 +845,7 @@ const I18N = {
     "Local session": "本地会话",
     "Login method": "登录方式",
     "Official login": "官方登录",
+    "Duration colors: ≤10 s green · 10–30 s amber · >30 s red": "耗时颜色：≤10 秒绿色 · 10–30 秒黄色 · >30 秒红色",
     "Official login confirmed for this account by local login metadata. This does not establish the route or authentication used for this request.": "本地登录资料确认此账号采用官方登录；不代表已确认这次请求的渠道或认证方式。",
     "Subscription": "订阅账号",
     "API price reference": "API 估价参考模型",

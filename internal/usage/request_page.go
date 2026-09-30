@@ -506,6 +506,16 @@ func buildRequestPage(p Period, f Filter, offset, limit int, gateway *rowChunk, 
 		groups[d] = map[string]*Share{}
 		seriesGroups[d] = map[string]*Share{}
 	}
+	// Bound the requested prefix before adding limit: external offsets can
+	// reach MaxInt, and a page beyond all sources needs no heap at all.
+	maxRows := 0
+	for _, c := range all {
+		maxRows += len(c.Rows)
+	}
+	take := 0
+	if offset < maxRows {
+		take = offset + min(limit, maxRows-offset)
+	}
 	selected := newestHeap{}
 	var first time.Time
 	visit(func(ref rowRef, r Row) {
@@ -516,9 +526,9 @@ func buildRequestPage(p Period, f Filter, offset, limit int, gateway *rowChunk, 
 		keep := f.keeps(r.Record)
 		if keep {
 			out.Total++
-			if len(selected) < offset+limit {
+			if take > 0 && len(selected) < take {
 				heap.Push(&selected, ref)
-			} else if refNewer(ref, selected[0]) {
+			} else if take > 0 && refNewer(ref, selected[0]) {
 				selected[0] = ref
 				heap.Fix(&selected, 0)
 			}

@@ -6803,12 +6803,12 @@ function renderLedger() {
     else if (!local && r.access === "api") access = "API";
     const badges = el("div", "source-badges");
     if (access) {
-      const badge = el("span", "src access", t(access));
+      const badge = el("span", "src access access-" + r.access, t(access));
       badge.title = t(access);
       badges.append(badge);
     }
     if (local && r.session_account) {
-      const k = el("span", "src", t("Local session"));
+      const k = el("span", "src local", t("Local session"));
       k.title = t("Read from the agent's session file. The account is shown only when local metadata identifies it; no service provider is inferred.");
       badges.append(k);
     }
@@ -6831,9 +6831,10 @@ function renderLedger() {
     // a session file has the times of its lines: a call took about from the line that
     // asked for it to its last; some have none, and are dashes, not 0 ms
     const timed = r.source === "log";
-    const untimed = timed && !r.ms;
-    td(untimed ? "—" : (timed ? "≈" : "") + ledTook(r.ms), "n" + (untimed || timed ? " faint" : ""),
-      [timed && r.ms ? t("About: told from the session file's times, a little more or less than it took") : "", r.ttft_ms ? t("TTFT {ms}", { ms: ledTook(r.ttft_ms) }) : ""].filter(Boolean).join(" · "));
+    const untimed = !Number.isFinite(r.ms) || r.ms <= 0;
+    const durationBand = untimed ? "" : r.ms <= 10000 ? "fast" : r.ms <= 30000 ? "slow" : "long";
+    td(untimed ? "—" : (timed ? "≈" : "") + ledTook(r.ms), "n duration " + (untimed ? "faint" : "duration-" + durationBand),
+      [!untimed ? t("{n} ms", { n: ledNum(r.ms) }) : "", !untimed ? t("Duration colors: ≤10 s green · 10–30 s amber · >30 s red") : "", timed && !untimed ? t("About: told from the session file's times, a little more or less than it took") : "", r.ttft_ms ? t("TTFT {ms}", { ms: ledTook(r.ttft_ms) }) : ""].filter(Boolean).join(" · "));
     const st = el("span", "st");
     // a status when the gateway logged the call; a session file has none,
     // and says only whether it went well

@@ -623,7 +623,7 @@ body.window .field.solo { grid-column: auto; }
 .led .when { color: var(--muted); }
 .led .model, .led .where { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
 .led .where { color: var(--fg-2); }
-.led .source-badges { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
+.led .source-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .led .price-reference { font-size: 10px; color: var(--muted); }
 .led .cost { color: var(--green); }
 .led .cost.faint { color: var(--faint); }
@@ -634,7 +634,18 @@ body.window .field.solo { grid-column: auto; }
 .led .st .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex: none; }
 .led tr.bad .st { color: var(--red); font-weight: 600; }
 .led tr.bad .st .dot { background: var(--red); }
-.led .src { display: inline-block; font-size: 10px; line-height: 15px; padding: 0 5px; border-radius: 5px; color: var(--muted); background: var(--pill); vertical-align: 1px; }
+/* Source chips use identity/channel colors; latency alone uses traffic lights.
+   Existing theme tokens keep these legible in both native color schemes. */
+.led .src { --badge-ink: var(--tk-v); --badge-bg: color-mix(in srgb, var(--badge-ink) 10%, var(--card)); display: inline-flex; align-items: center; gap: 4px; font-size: 9.5px; font-weight: 550; line-height: 16px; padding: 0 6px; border: 1px solid color-mix(in srgb, var(--badge-ink) 19%, transparent); border-radius: 5px; color: var(--badge-ink); background: var(--badge-bg); vertical-align: 1px; }
+.led .src.official { --badge-ink: var(--tk-s); --badge-bg: color-mix(in srgb, var(--badge-ink) 7%, var(--card)); font-size: 9px; font-weight: 650; letter-spacing: .035em; }
+.led .src.official::before { content: ""; width: 6px; height: 3.5px; border-left: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-1px) rotate(-45deg); }
+.led .src.access-api { --badge-ink: var(--tk-f); }
+.led .src.access-subscription { --badge-ink: var(--tk-k); }
+.led .duration { font-weight: 550; }
+.led .duration-fast { color: var(--tk-s); }
+.led .duration-slow { color: var(--amber); }
+.led .duration-long { color: var(--red); }
+.led .duration.faint { font-weight: 400; }
 .led tr.led-row { cursor: pointer; }
 .led tr.led-row:focus-visible { outline: 2px solid var(--accent, var(--fg-2)); outline-offset: -2px; }
 .led tr.open td { background: var(--card-2, var(--pill)); }
