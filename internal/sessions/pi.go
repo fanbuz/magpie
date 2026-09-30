@@ -18,7 +18,9 @@ import (
 // tool's result may carry the usage of model work it did, and "usage",
 // "compaction" and "branch_summary" entries theirs. A session forked from
 // another starts with a copy of that one's entries, times and all, which
-// are counted where they were first written.
+// are counted where they were first written. omp's sessions are the same
+// kind (omp.go), with a title of the header's or a title_change entry's, and
+// "model_usage" entries as Pi's "usage" ones.
 
 // PiDir is Pi's agent folder: $PI_CODING_AGENT_DIR, else ~/.pi/agent.
 func PiDir() string {
@@ -102,8 +104,9 @@ type piLine struct {
 	Cwd           string   `json:"cwd"`
 	ParentSession string   `json:"parentSession"`
 	Name          string   `json:"name"`    // session_info
+	Title         string   `json:"title"`   // omp's header, title_change
 	ModelID       string   `json:"modelId"` // model_change
-	Model         string   `json:"model"`   // usage
+	Model         string   `json:"model"`   // usage; omp's model_change, as provider/model
 	Usage         *piUsage `json:"usage"`   // usage, compaction, branch_summary
 	Message       *struct {
 		Role    string          `json:"role"`
@@ -117,6 +120,7 @@ var (
 	piHeader  = []byte(`"type":"session"`)
 	piInfo    = []byte(`"type":"session_info"`)
 	piModel   = []byte(`"type":"model_change"`)
+	piRetitle = []byte(`"type":"title_change"`)
 	piUsed    = []byte(`"usage":{`)
 	piUserMsg = []byte(`"role":"user"`)
 )
@@ -129,7 +133,7 @@ func piParse(s *state, b []byte, main bool) {
 	if !copied {
 		s.saw(at, main)
 	}
-	want := header || bytes.Contains(b, piInfo) || bytes.Contains(b, piModel) ||
+	want := header || bytes.Contains(b, piInfo) || bytes.Contains(b, piModel) || bytes.Contains(b, piRetitle) ||
 		!copied && bytes.Contains(b, piUsed) ||
 		s.Title == "" && bytes.Contains(b, piUserMsg)
 	if !want {
@@ -146,14 +150,24 @@ func piParse(s *state, b []byte, main bool) {
 			if l.ParentSession != "" {
 				s.Since = at
 			}
+			if l.Title != "" {
+				s.Named = title(l.Title)
+			}
 		}
 	case "session_info":
 		s.Named = title(l.Name)
+	case "title_change":
+		// omp's, one with each new title
+		if l.Title != "" {
+			s.Named = title(l.Title)
+		}
 	case "model_change":
 		if l.ModelID != "" {
 			s.Model = l.ModelID
+		} else if _, id, ok := strings.Cut(l.Model, "/"); ok && id != "" {
+			s.Model = id
 		}
-	case "usage":
+	case "usage", "model_usage":
 		if !copied && l.Model != "" {
 			s.use(dateOf(at), l.Model, l.Usage.tokens())
 		}

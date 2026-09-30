@@ -23,6 +23,25 @@ const (
 // was read: another computer synced in between.
 var errChanged = errors.New("the file on the server changed meanwhile")
 
+// remote is where the backup is kept: a WebDAV folder, or an S3 bucket.
+type remote interface {
+	// get reads the backup and its ETag; nil data and no error when there
+	// is none yet
+	get(ctx context.Context) (data []byte, etag string, err error)
+	// put writes it over the version read (etag) — with none, only where
+	// there is none yet — and errChanged when another computer wrote in
+	// between
+	put(ctx context.Context, data []byte, etag string) error
+}
+
+// newRemote is c's: an S3 bucket for an s3:// address, WebDAV for the rest.
+func newRemote(c Config) (remote, error) {
+	if c.S3() {
+		return newS3(c)
+	}
+	return newDAV(c)
+}
+
 type dav struct {
 	base       *url.URL
 	user, pass string

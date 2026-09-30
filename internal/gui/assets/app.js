@@ -98,6 +98,7 @@ const CHECK = "m3.5 8.5 3 3 6-7";
 const PLUS = "M8 3.5v9M3.5 8h9";
 const OUT = "M6.5 3.5h-3v9h9v-3M9 3.5h3.5V7M12.5 3.5 7.5 8.5";
 const COPY_ICON = "M5.5 5.5V3.5h7v7h-2M3.5 5.5h7v7h-7z";
+const PUZZLE = "M6.2 2.8h2.3a1.3 1.3 0 1 1 2.5 0h2.2V5a1.3 1.3 0 1 0 0 2.6v5.6H3V7.6a1.3 1.3 0 1 1 0-2.6V2.8z";
 
 // A brand icon: colour logos are images, mono logos take the text colour.
 // Nothing is ever invented: a model with no known vendor keeps the slot
@@ -829,7 +830,13 @@ function fillModelsEntry(b, a) {
 const ctxShort = (n) => !n ? "" : n >= 1e6 ? (n % 1e6 ? (n / 1e6).toFixed(1) : n / 1e6) + "M" : Math.round(n / 1e3) + "K";
 
 let agentModels = null;
+// the list being fetched, before its box is up: a second click on the line
+// takes it back, as it would close the box, and another open or a close
+// supersedes it — each fetch that came back drew a box of its own, and the
+// one agentModels no longer held stayed on the screen, nothing closing it
+let agentModelsLoading = null;
 function closeAgentModels() {
+  agentModelsLoading?.drop();
   const m = agentModels;
   if (!m) return;
   agentModels = null;
@@ -846,13 +853,28 @@ function closeAgentModels() {
 
 async function openAgentModels(a, anchor, ev) {
   ev.stopPropagation();
-  const again = agentModels?.a.id === a.id;
+  const again = agentModels?.a.id === a.id || agentModelsLoading?.id === a.id;
   closeAgentModels();
   closePicker();
   if (again) return;
+  // a click elsewhere while it loads is one away from it, as it is once open
+  const loading = agentModelsLoading = {
+    id: a.id,
+    away: (e) => { if (!anchor.contains(e.target)) loading.drop(); },
+    drop() {
+      if (agentModelsLoading === loading) agentModelsLoading = null;
+      document.removeEventListener("mousedown", loading.away, true);
+    },
+  };
+  document.addEventListener("mousedown", loading.away, true);
   let models;
   try { models = (await api("agent-models/" + encodeURIComponent(a.id))).models; }
-  catch (e) { status(e.message, "err"); return; }
+  catch (e) {
+    if (agentModelsLoading === loading) { loading.drop(); status(e.message, "err"); }
+    return;
+  }
+  if (agentModelsLoading !== loading) return;
+  loading.drop();
   if (!anchor.isConnected) return;
   const box = el("div", "pop am-pop");
   box.setAttribute("role", "dialog");
@@ -916,7 +938,7 @@ async function openAgentModels(a, anchor, ev) {
       if (!rows.length) continue;
       const on = g.models.filter((m) => !m.hidden).length;
       const folded = !words && shut.has(g.name);
-      const sec = el("section", "am-g" + (folded ? " shut" : ""));
+      const sec = el("section", "am-g" + (folded ? " shut" : "") + (g.name === ROUTING_GROUPS ? " routes" : ""));
       const gh = el("div", "am-gh");
       const fold = el("button", "am-fold");
       fold.type = "button";
@@ -950,10 +972,19 @@ async function openAgentModels(a, anchor, ev) {
           if (m.inUse) n.append(el("span", "am-tag", t("Current")));
           const ck = el("span", "ck");
           if (!m.hidden) ck.append(svg("m3.5 8.5 3 3 6-7", 12, 1.9));
-          // its maker's logo; a group whose maker isn't known shows it is
-          // a route, anything else keeps the slot empty, so the names line up
-          const lg = m.logo ? icon(m.logo) : el("span", "ic");
-          if (!m.logo && g.name === ROUTING_GROUPS) lg.append(svg(FAN, 14, 1.5));
+          // a routing group: its providers' icons stacked, as everywhere
+          // else, a lone one in a disc like them; a model: its maker's
+          // logo, or an empty slot, so the names line up
+          const route = g.name === ROUTING_GROUPS;
+          let lg;
+          if (route && m.icons?.length > 1) lg = stackIcon(m.icons);
+          else if (route && m.icons?.length) {
+            const d = el("span", "disc");
+            d.append(icon(m.icons[0] || "generic"));
+            lg = el("span", "ic-stack");
+            lg.append(d);
+          } else lg = m.logo && !route ? icon(m.logo) : el("span", "ic");
+          if (route && !m.icons?.length) lg.append(svg(FAN, 14, 1.5));
           lg.classList.add("lg");
           r.append(lg, n, el("span", "x", ctxShort(m.context)), ck);
           if (m.inUse) r.setAttribute("aria-disabled", "true");
@@ -1062,6 +1093,11 @@ function openAgentMenu(anchor, a, inFold) {
         ...(a.drift?.kind === "replaced" ? [{ name: "Keep current settings", icon: CHECK, run: () => keepAgent(a) }] : []),
         { name: "Hide", icon: EYE_OFF, sep: true, run: () => setAgentHidden(a, true) },
       ];
+  openRowMenu(anchor, acts);
+}
+// openRowMenu: a small menu of acts under anchor, the one an agent row's
+// right-click opens, and a model chip's
+function openRowMenu(anchor, acts) {
   const box = el("div", "pop row-menu");
   box.setAttribute("role", "menu");
   const items = [];
@@ -1088,7 +1124,7 @@ function openAgentMenu(anchor, a, inFold) {
   const outside = (e) => { if (!box.contains(e.target) && !anchor.contains(e.target)) closeAgentMenu(); };
   const keys = (e) => {
     const k = items.indexOf(document.activeElement);
-    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeAgentMenu(); anchor.focus(); }
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeAgentMenu(); anchor.focus({ preventScroll: true }); }
     else if (e.key === "Tab") closeAgentMenu();
     else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && items.length) {
       e.preventDefault(); e.stopPropagation();
@@ -1274,7 +1310,10 @@ async function load() {
     state = next;
     load.done = true;
     // the library may have drawn itself before the saved language was known
-    if (applyPrefs(state.settings, state.fx) && view === "library") window.loadLibrary?.();
+    if (applyPrefs(state.settings, state.fx)) {
+      if (view === "library") window.loadLibrary?.();
+      if (view === "plugins") window.loadPlugins?.();
+    }
     tintPanel();
     tintTitleBar();
     renderAgents();
@@ -2183,8 +2222,52 @@ function renderExcluded() {
       quiet.onclick = () => providerAction("quiet", { id: x.provider });
       r.lastChild.append(" ", back, " · ", quiet);
     }
+    // an agent signed out here (a banned account logged out, say) lists
+    // its saved accounts nowhere else, so this is where they are removed
+    if (x.signedOut && x.users?.length) {
+      const rm = el("button", "link", t("Remove"));
+      rm.title = t("magpie forgets the accounts it saved; {agent}'s own files are left as they are", { agent: x.agentName });
+      rm.onclick = () => askForgetSaved(x);
+      r.lastChild.append(" ", rm);
+    }
     box.append(r);
   }
+}
+
+// askForgetSaved asks before magpie drops the accounts it saved of an agent
+// signed out here, as a reset asks; it forgets only magpie's copies, never
+// the agent's own files or keychain. It is the reset's dialog, so the
+// backdrop and Escape close it the same way.
+function askForgetSaved(x) {
+  const ed = el("div", "editor forget-ask");
+  const head = el("div", "ehead");
+  head.append(icon(x.agentIcon), el("b", "", t(x.users.length === 1 ? "Remove {agent}'s saved account?" : "Remove {agent}'s {n} saved accounts?", { agent: x.agentName, n: x.users.length })));
+  ed.append(head);
+  ed.append(el("p", "lib-confirm", t("magpie forgets its copy of {users}. {agent}'s own files and sign-in, and the account itself, are left as they are.", { users: x.users.join(", "), agent: x.agentName })));
+  const bar = el("div", "bar");
+  const go = el("button", "text primary danger-fill", t("Remove"));
+  go.onclick = async (e) => {
+    e.stopPropagation();
+    go.disabled = true;
+    go.classList.add("busy");
+    for (const [i, user] of x.users.entries()) {
+      const last = i === x.users.length - 1;
+      if (!await accountAction("login/forget", { agent: x.agent, user }, last ? t("{user} removed", { user: x.users.join(", ") }) : "")) {
+        go.disabled = false;
+        go.classList.remove("busy");
+        return;
+      }
+    }
+    closeResetAsk();
+  };
+  const cancel = el("button", "text", t("Cancel"));
+  cancel.onclick = (e) => { e.stopPropagation(); closeResetAsk(); };
+  bar.append(el("span", "grow"), cancel, go);
+  ed.append(bar);
+  resetAsk = ed;
+  openModal(ed);
+  $("#modal").classList.add("lib");
+  cancel.focus();
 }
 
 // accountPlan names a signed-in account's subscription: "ChatGPT Pro", "GitHub".
@@ -2765,7 +2848,16 @@ function renderAdd() {
       any = true;
       const grid = section("Subscriptions", "sign in, no key");
       for (const x of subs) grid.append(subTile(x));
+      if (!f) grid.append(morePluginsTile());
       const w = subs.find((x) => signing?.agent === x.agent);
+      if (w) tiles.append(renderSigning(w));
+    }
+    const plugged = pluginSubs().filter((x) => !f || x.name.toLowerCase().includes(f) || x.agent.includes(f) || "plugin".includes(f));
+    if (plugged.length) {
+      any = true;
+      const grid = section("From plugins", "signed in by an OpenCode plugin");
+      for (const x of plugged) grid.append(subTile(x));
+      const w = plugged.find((x) => signing?.agent === x.agent);
       if (w) tiles.append(renderSigning(w));
     }
     const gone = (providers.excluded || []).filter((x) => x.quiet && x.provider && (!f || x.agentName.toLowerCase().includes(f) || x.agent.includes(f)));
@@ -2793,7 +2885,9 @@ function renderAdd() {
       none.append(t("Nothing called “{q}”. ", { q: presetQuery.trim() }));
       const b = el("button", "link", t("Add it as a custom provider"));
       b.onclick = () => { editing = { custom: true }; draft = null; renderProviders(); };
-      none.append(b);
+      const pl = el("button", "link", t("look for a plugin"));
+      pl.onclick = () => openPlugins(presetQuery.trim());
+      none.append(b, t(", or "), pl);
       tiles.append(none);
     } else if (!f) {
       // a vendor not listed: one line under them all
@@ -2819,6 +2913,47 @@ function pickRow(ic, name, cls = "") {
   nm.append(el("span", "n", name));
   b.append(icon(ic), nm);
   return b;
+}
+
+// morePluginsTile: the add sheet's way to the Plugins tab, where more
+// subscriptions are, each signed in to by a plugin
+function morePluginsTile() {
+  const b = el("button", "tile more-plugins");
+  b.dataset.pick = "plugins";
+  const nm = el("span", "nm");
+  nm.append(el("span", "n", t("More in Plugins")));
+  const ic = el("span", "puzzle");
+  ic.append(svg(PUZZLE, 15, 1.4));
+  b.append(ic, nm, svg(CHEV_R, 11, 1.6));
+  b.title = t("Subscriptions magpie doesn't sign in to itself: install a plugin for one in the Plugins tab");
+  b.onclick = () => openPlugins();
+  return b;
+}
+
+// openPlugins: the Plugins tab, looking for q when there is one
+function openPlugins(q) {
+  if (mode !== "window") { api("window/main?view=plugins", {}).catch(() => {}); return; }
+  show("plugins");
+  window.pluginQuery?.(q || "");
+}
+
+// pluginSignIn: a plugin's provider signed in to as every subscription is,
+// in the Providers add sheet
+function pluginSignIn(id) {
+  closeModal();
+  show("providers");
+  adding = true; editing = null; draft = null; presetQuery = "";
+  renderProviders();
+  startSignIn(id);
+}
+
+// openProvider: a provider opened in the Providers tab
+function openProvider(id) {
+  closeModal();
+  show("providers");
+  adding = false; editing = id; draft = null; presetQuery = "";
+  renderProviders();
+  syncURL();
 }
 
 // a row already added: a green dot after its name, and how many accounts
@@ -4279,11 +4414,25 @@ function renderModels(p) {
     c.append(el("span", "tdot " + (!x ? "wait" : x.ok ? "ok" : "bad")));
     c.title = !x ? t("Testing…") : x.ok ? t("Answered in {ms} ms", { ms: x.ms }) : (x.status ? x.status + " · " : "") + x.error;
   };
+  // a chip's right-click (or the menu key) tests that model alone: Test models
+  // asks every one, and a list of many takes a while (yonghe, Discord)
+  const testable = !p.decide && !p.account;
+  const menu = (c, id) => {
+    if (!testable) return;
+    c.title = (c.title ? c.title + "\n" : "") + t("Right-click to test just this model");
+    c.oncontextmenu = (e) => {
+      e.preventDefault();
+      const again = agentMenu?.anchor === c;
+      closeAgentMenu();
+      if (!again) openRowMenu(c, [{ name: "Test this model", icon: "M5.5 3.75v8.5L12.25 8z", run: () => testOne(id) }]);
+    };
+  };
   const box = el("div", "models");
   const chips = el("div", "mchips");
   const names = el("div", "mnames");
   const q = p.models.length > 24 ? input("", t("filter {n} models…", { n: p.models.length })) : null;
   const draw = () => {
+    if (agentMenu && chips.contains(agentMenu.anchor)) closeAgentMenu();
     chips.replaceChildren();
     const f = (q?.value || "").trim().toLowerCase();
     let shown = 0;
@@ -4303,6 +4452,7 @@ function renderModels(p) {
       else if (m.name && m.name !== m.id) c.title = m.id;
       if (free) c.title = (c.title || m.id) + " · " + t(m.free ? "free: it doesn't use the plan's credits" : "free: so its name says");
       tested(c, m.id);
+      menu(c, m.id);
       c.onclick = () => { draft.chosen = on ? draft.chosen.filter((x) => x !== m.id) : [...draft.chosen, m.id]; draw(); };
       chips.append(c);
       if (++shown >= 80 && !f) { chips.append(el("span", "hint", t("… {n} more, filter to find them", { n: p.models.length - shown }))); break; }
@@ -4313,6 +4463,7 @@ function renderModels(p) {
       c.append(el("span", "", id));
       c.title = t("Added by hand");
       tested(c, id);
+      menu(c, id);
       c.onclick = () => { draft.chosen = draft.chosen.filter((x) => x !== id); draw(); };
       chips.append(c);
     }
@@ -4433,7 +4584,7 @@ function renderModels(p) {
   // each model the agents see gets a tiny request of its own: a vendor
   // that answers can still have a model that doesn't
   const testAll = el("button", "text action", t("Test models"));
-  testAll.title = t("Send a tiny request to each model agents see, to find the ones that don't answer");
+  testAll.title = t("Send a tiny request to each model agents see, to find the ones that don't answer") + "\n" + t("Right-click a model to test just it");
   testAll.onclick = async () => {
     const ids = draft.chosen.length ? draft.chosen : p.models.filter((m) => m.on).map((m) => m.id);
     if (!ids.length) { status(t("Pick a model first."), "err"); return; }
@@ -4448,6 +4599,19 @@ function renderModels(p) {
       status(bad ? t("{n} of {all} models didn't answer", { n: bad, all: ids.length }) : t("All {n} models answered", { n: ids.length }), bad ? "err" : "ok");
     } catch (e) { delete modelTests[p.id]; status(e.message, "err"); }
     testAll.classList.remove("busy");
+    draw();
+  };
+  // one model, its dot and title as Test models leaves them, the others'
+  // results kept
+  const testOne = async (id) => {
+    const got = modelTests[p.id] = modelTests[p.id] || {};
+    got[id] = null;
+    draw();
+    try {
+      const r = await api("provider/test", { id: p.id, test: [id] });
+      const x = got[id] = r.results[0];
+      status(x.ok ? t("{model} answered in {ms} ms", { model: id, ms: x.ms }) : t("{model} didn't answer: {error}", { model: id, error: (x.status ? x.status + " · " : "") + x.error }), x.ok ? "ok" : "err");
+    } catch (e) { delete got[id]; status(e.message, "err"); }
     draw();
   };
   const rename = el("button", "text action" + (naming === p.id ? " on" : ""), t("Names & levels"));
@@ -4626,7 +4790,17 @@ const SUBS = [
   // accounts can also come from another tool's export (Antigravity Cockpit, Antigravity Manager, CLIProxyAPI)
   { agent: "antigravity", name: "Antigravity", icon: "antigravity-color", plans: "Google AI Pro · Ultra · free", risk: true, importable: true },
 ];
-const subOf = (agent) => SUBS.find((x) => x.agent === agent);
+const subOf = (agent) => SUBS.find((x) => x.agent === agent) || pluginSubs().find((x) => x.agent === agent);
+
+// pluginSubs: the providers OpenCode plugins sign in to (Settings →
+// Plugins), as subscriptions like the built-in ones. The plugin, not
+// magpie, signs in and carries the requests.
+function pluginSubs() {
+  return (providers.plugins || []).map((x) => ({
+    agent: x.id, pid: x.pid, name: x.name, icon: x.icon, plugin: x, own: true, single: true,
+    get plans() { return t("from the plugin {spec}", { spec: x.spec }); },
+  }));
+}
 
 // importSay: what the import of an app's accounts says — where its files
 // come from, and who they are checked with. A ChatGPT or Claude sign-in is
@@ -4656,6 +4830,7 @@ let justAdded = ""; // the account that just came in, to greet it
 
 async function startSignIn(agent, risky, site) {
   if (signingOpen()) api("signin/" + signing.id + "/cancel", {}).catch(() => {});
+  if (subOf(agent)?.plugin) return startPluginSignIn(subOf(agent));
   // an account Google may suspend is added only once that is said
   if (subOf(agent)?.risk && !risky) {
     signing = { agent, state: "risk" };
@@ -4694,25 +4869,162 @@ async function followSignIn(id) {
       if (signing.state !== st.state || signing.url !== st.url) { signing = { ...st, site: signing.site }; renderProviders(); }
       continue;
     }
-    if (st.state === "done") {
-      signing = null;
-      justAdded = st.user;
-      delete loginUsage[st.agent]; // what was fetched before has nothing on the new account
-      providers = await api("providers");
-      const p = providers.providers.find((x) => x.account?.agent === st.agent);
-      if (p) { editing = p.id; draft = null; adding = false; presetQuery = ""; }
-      renderProviders();
-      // signed in but listed nowhere (#155): say so rather than "added"
-      if (!p) status(t("{user} signed in, but magpie can't list it — please report this", { user: st.user }), "err");
-      else status(st.using ? t("Signed in as {user}", { user: st.user }) : t("{user} added — switch to it any time", { user: st.user }), "ok");
-      state = await api("state");
-      renderAgents();
-      setTimeout(() => { justAdded = ""; }, 2000);
-      return;
-    }
+    if (st.state === "done") return signedIn(st);
     signing = st.state === "canceled" ? null : { ...st, site: signing.site };
     renderProviders();
   }
+}
+
+// signedIn: a sign-in done — the account opened in the editor.
+async function signedIn(st) {
+  signing = null;
+  justAdded = st.user;
+  delete loginUsage[st.agent]; // what was fetched before has nothing on the new account
+  providers = await api("providers");
+  const p = providers.providers.find((x) => x.account?.agent === st.agent);
+  if (p) { editing = p.id; draft = null; adding = false; presetQuery = ""; }
+  renderProviders();
+  const who = st.user || subOf(st.agent)?.name || st.agent;
+  // signed in but listed nowhere (#155): say so rather than "added"
+  if (!p) status(t("{user} signed in, but magpie can't list it — please report this", { user: who }), "err");
+  else status(st.using ? t("Signed in as {user}", { user: who }) : t("{user} added — switch to it any time", { user: who }), "ok");
+  state = await api("state");
+  renderAgents();
+  setTimeout(() => { justAdded = ""; }, 2000);
+}
+
+// startPluginSignIn: a plugin's provider signed in to as OpenCode's
+// `auth login` does — the way to sign in, the questions that way asks,
+// then the browser (and the code its page shows, pasted back) or a key.
+async function startPluginSignIn(sub, method, inputs = {}) {
+  const ms = sub.plugin.methods || [];
+  if (!ms.length) {
+    signing = { agent: sub.agent, state: "failed", error: t("The plugin has no way to sign in to {name}", { name: sub.name }) };
+    return renderProviders();
+  }
+  if (method == null) {
+    if (ms.length > 1) {
+      signing = { agent: sub.agent, state: "method" };
+      return renderProviders();
+    }
+    method = 0;
+  }
+  signing = { agent: sub.agent, method, inputs, state: "starting" };
+  renderProviders();
+  try {
+    const r = await api("plugin-signin/prompt", { provider: sub.pid, method, inputs });
+    if (signing?.agent !== sub.agent) return;
+    if (r.prompt) {
+      signing = { agent: sub.agent, method, inputs, prompt: r.prompt, state: "prompt" };
+      return renderProviders();
+    }
+    if (ms[method].type === "api") {
+      signing = { agent: sub.agent, method, inputs, state: "key" };
+      return renderProviders();
+    }
+    signing = await api("plugin-signin", { provider: sub.pid, method, inputs });
+    signing.method = method;
+    if (web && signing.url) api("open", { url: signing.url });
+    renderProviders();
+    followSignIn(signing.id);
+  } catch (e) {
+    if (signing?.agent !== sub.agent) return;
+    signing = { agent: sub.agent, method, state: "failed", error: e.message };
+    renderProviders();
+  }
+}
+
+// pluginAnswer: one of a sign-in method's questions answered, checked by
+// the plugin before the next is asked.
+async function pluginAnswer(sub, value) {
+  const flow = signing;
+  try {
+    const r = await api("plugin-signin/prompt", { provider: sub.pid, method: flow.method, inputs: flow.inputs, key: flow.prompt.key, value });
+    if (signing !== flow) return;
+    if (r.error) {
+      signing = { ...flow, error: r.error, value };
+      return renderProviders();
+    }
+    startPluginSignIn(sub, flow.method, r.inputs);
+  } catch (e) {
+    if (signing === flow) { signing = { ...flow, error: e.message, value }; renderProviders(); }
+  }
+}
+
+// pluginKey: an "api" method's key, which the plugin keeps.
+async function pluginKey(sub, key) {
+  const flow = signing;
+  signing = { ...flow, busy: true };
+  renderProviders();
+  try {
+    const st = await api("plugin-signin", { provider: sub.pid, method: flow.method, inputs: flow.inputs, key });
+    if (signing?.agent === sub.agent) signedIn(st);
+  } catch (e) {
+    if (signing?.agent === sub.agent) { signing = { ...flow, error: e.message }; renderProviders(); }
+  }
+}
+
+// renderPluginAsk: a plugin sign-in's step before the browser — the way
+// to sign in, a question, or the key.
+function renderPluginAsk(sub) {
+  const box = el("div", "signing plugin-ask");
+  const tt = el("span", "tt");
+  box.append(tt);
+  const close = el("button", "text", t("Cancel"));
+  close.onclick = cancelSignIn;
+  if (signing.state === "method") {
+    tt.append(el("span", "n", t("How do you sign in to {name}?", { name: sub.name })),
+      el("span", "s", t("The plugin {spec} signs in and sends {name}'s requests; magpie only passes them on.", { spec: sub.plugin.spec, name: sub.name })));
+    const ch = el("div", "choices");
+    box.append(close, ch);
+    sub.plugin.methods.forEach((m, i) => {
+      const b = el("button", "text primary", m.label || t(m.type === "api" ? "API key" : "Browser"));
+      b.dataset.method = String(i);
+      b.onclick = () => startPluginSignIn(sub, i);
+      ch.append(b);
+    });
+    return box;
+  }
+  const q = signing.prompt;
+  const flow = signing;
+  const form = el("form", "callback-form");
+  const why = el("span", "s why", flow.error || "");
+  if (flow.state === "prompt" && q.type === "select") {
+    tt.append(el("span", "n", q.message), why);
+    const ch = el("div", "choices");
+    box.append(close, ch);
+    for (const o of q.options || []) {
+      const b = el("button", "text primary", o.label);
+      if (o.hint) b.title = o.hint;
+      b.onclick = () => pluginAnswer(sub, o.value);
+      ch.append(b);
+    }
+    return box;
+  }
+  const key = flow.state === "key";
+  const label = key ? t("{name} API key", { name: sub.name }) : q.message;
+  tt.append(el("span", "n", label));
+  const inp = input(flow.value || "", key ? "" : (q.placeholder || ""), key ? "password" : "text");
+  inp.setAttribute("aria-label", label);
+  inp.autocomplete = "off";
+  inp.disabled = !!flow.busy;
+  const go = el("button", "text primary", t(key ? "Sign in" : "Next"));
+  go.type = "submit";
+  go.disabled = !!flow.busy;
+  inp.onkeydown = (e) => e.stopPropagation();
+  const submit = (e) => {
+    e.preventDefault();
+    if (signing !== flow || flow.busy) return;
+    if (key) pluginKey(sub, inp.value);
+    else pluginAnswer(sub, inp.value);
+  };
+  form.onsubmit = submit;
+  go.onclick = submit;
+  form.append(inp, go);
+  tt.append(form, why);
+  box.append(close);
+  setTimeout(() => { if (inp.isConnected && !inp.disabled) inp.focus({ preventScroll: true }); });
+  return box;
 }
 
 // renderStepPlan: a StepFun provider's platform sign-in, which the user
@@ -4818,12 +5130,13 @@ function renderSigning(sub) {
     return box;
   }
   if (signing.state === "import" || signing.state === "importing" || signing.state === "imported") return renderLoginImport(sub);
+  if (signing.state === "method" || signing.state === "prompt" || signing.state === "key") return renderPluginAsk(sub);
   if (signing.state === "failed") {
     box.append(el("span", "mark", "!"));
     tt.append(el("span", "n", t("Sign-in didn't finish")), el("span", "s", signing.error || ""));
     box.append(tt);
     const again = el("button", "text primary", t("Try again"));
-    again.onclick = () => startSignIn(sub.agent, true, signing.site);
+    again.onclick = () => sub.plugin ? startPluginSignIn(sub, signing.method) : startSignIn(sub.agent, true, signing.site);
     const close = el("button", "text", t("Cancel"));
     close.onclick = cancelSignIn;
     box.append(close, again);
@@ -4840,7 +5153,9 @@ function renderSigning(sub) {
     return box;
   }
   tt.append(el("span", "n", t("Finish signing in to {name} in your browser", { name: sub.name })),
-    el("span", "s", signing.code && sub.agent === "factory" ? t("magpie opened Factory's sign-in page. Check it shows this code and confirm it; the account shows up here as soon as you're done.")
+    el("span", "s", signing.state === "starting" ? t("Starting the sign-in…")
+      : sub.plugin ? (signing.instructions || (signing.pasteCode ? t("magpie opened the sign-in page. Paste the code it shows below.") : t("magpie opened the sign-in page. The account shows up here as soon as you're done.")))
+      : signing.code && sub.agent === "factory" ? t("magpie opened Factory's sign-in page. Check it shows this code and confirm it; the account shows up here as soon as you're done.")
       : signing.code ? t("magpie opened GitHub's device page. Enter this code there; the account shows up here as soon as you're done.") : t("magpie opened the sign-in page. The account shows up here as soon as you're done.")));
   if (signing.code) {
     const code = el("span", "devcode");
@@ -4857,12 +5172,13 @@ function renderSigning(sub) {
     acts.append(open, cp);
     tt.append(acts);
   }
-  if (signing.pasteCallback) {
+  if (signing.pasteCallback || signing.pasteCode) {
     const flow = signing;
-    tt.append(el("span", "s", t("If the browser cannot return to magpie, paste its final callback URL here.")));
+    const what = flow.pasteCode ? t("Code") : t("Callback URL");
+    if (!flow.pasteCode) tt.append(el("span", "s", t("If the browser cannot return to magpie, paste its final callback URL here.")));
     const form = el("form", "callback-form");
-    const url = input(flow.callbackURL || "", t("Callback URL"));
-    url.setAttribute("aria-label", t("Callback URL"));
+    const url = input(flow.callbackURL || "", what);
+    url.setAttribute("aria-label", what);
     url.autocomplete = "off";
     url.disabled = !!flow.callbackSubmitted || !!flow.callbackSubmitting;
     const submit = el("button", "text primary", t("Finish sign-in"));
@@ -5270,7 +5586,9 @@ function quotaFill(w) {
   return quotaLeft ? 100 - used : used;
 }
 function quotaText(w) {
-  const pct = t(quotaLeft ? "{n} left" : "{n} used", { n: quotaFill(w) + "%" });
+  const used = Math.max(0, Math.min(100, w.used));
+  const n = quotaLeft ? 100 - used : used;
+  const pct = t(quotaLeft ? "{n} left" : "{n} used", { n: (Number.isInteger(n) ? n : n.toFixed(1)) + "%" });
   return w.display ? w.display + " · " + pct : pct;
 }
 async function setQuotaLeft(on) {
@@ -5592,6 +5910,15 @@ function hostOf(u) { try { return new URL(u.includes("://") ? u : "https://" + u
 // view goes down with it. The button stays at the view's foot however long
 // the list is; with the sheet already open it takes the view down to it,
 // and it steps aside while the sheet's head is in sight.
+// moreSubs: beside Add provider, the reminder that more subscriptions are
+// a plugin away — three of them in a stack, and where to find them
+{
+  const b = $("#moreSubs");
+  for (const ic of ["cursor", "githubcopilot", "gemini-color"]) b.firstElementChild.append(icon(ic));
+  b.append(svg(CHEV_R, 10, 1.7));
+  b.onclick = () => { openPlugins(); b.blur(); };
+}
+
 $("#addProvider").onclick = (e) => {
   const view = $("#view-providers"), sheet = $("#addSheet");
   if (!adding) {
@@ -6632,7 +6959,7 @@ function ledDetail(r, cols) {
   if (r.session_account) add("Session account", r.session_account);
   if (r.source === "log" && r.session_account && r.session_official_login) add("Login method", t("Official login"));
   if (r.pricing_model) add("API price reference", r.pricing_model);
-  if (r.source === "log") add("Source", t("Read from the agent's session file. The account is shown only when local metadata identifies it; no service provider is inferred."), "muted");
+  if (r.source === "log") add("Data source", t("Read from the agent's session file. The account is shown only when local metadata identifies it; no service provider is inferred."), "muted");
   const tr = el("tr", "led-detail");
   const td = el("td");
   td.colSpan = cols;
@@ -7952,7 +8279,7 @@ function renderSessChart(chart, st, used, ov, acts) {
   const first = sessDate(st.from), last = sessDate(st.to);
   const n = Math.round((last - first) / 864e5) + 1;
   chart.hidden = !(n >= 2);
-  if (chart.hidden) return;
+  if (chart.hidden) { chart.dataset.drawn = ""; return; }
   const days = [], at = new Map();
   for (let i = 0, d = new Date(first); i < n; i++, d.setDate(d.getDate() + 1)) {
     const x = { day: new Date(d), input: 0, output: 0, cost: 0, unpriced: 0, sessions: perDay?.length === n ? perDay[i] : 0,
@@ -7979,26 +8306,35 @@ function renderSessChart(chart, st, used, ov, acts) {
     return parts.length ? when + " · " + parts.join(" · ") : t("{when} · nothing", { when });
   };
   const shape = n <= 100 ? "day" : n <= 371 ? "calendar" : "week";
+  // the page reads the sessions again every few seconds, and while an agent
+  // is at work today's numbers change each time: the same days by the same
+  // metric keep their bars, filled in again where they are, so the one under
+  // the pointer — today's, as often as not — keeps its tooltip (#309)
+  const drawn = [shape, metric, st.from, n, locale, ...Object.values(off).map(Boolean)].join("|");
+  const same = chart.dataset.drawn === drawn;
+  chart.dataset.drawn = drawn;
+  chart.redraw = () => renderSessChart(chart, st, used, ov, acts); // the metrics kept draw what is in now
 
-  chart.replaceChildren();
-  chart.classList.toggle("cal", shape === "calendar");
-  const head = el("div", "sess-chart-head");
-  const seg = sessSegs(SESS_METRICS.map(([id, name]) => [id, name, off[id]]), metric, (id) => {
-    sessMetric = id;
-    try { localStorage.setItem("magpie.sessMetric", id); } catch {}
-    renderSessChart(chart, st, used, ov, acts);
-  });
-  head.append(el("span", "label", t(shape === "week" ? "By week" : shape === "day" ? "By day" : "Activity")), seg, el("span", "grow"));
-  chart.append(head);
-  slide(seg, "sessMetric");
-
+  if (same && shape === "calendar") {
+    const lv = sessLevels(days.map(value));
+    chart.querySelectorAll(".sess-cal > i").forEach((c, i) => {
+      c.className = "l" + lv(value(days[i]));
+      c.title = tip(days[i], sessDay(days[i].day));
+    });
+    chart.querySelector(".sess-cal-side").replaceWith(sessCalSide(days, value, show));
+    return;
+  }
   if (shape === "calendar") {
+    chart.replaceChildren();
+    chart.classList.add("cal");
+    drawHead();
     const wrap = el("div", "sess-cal-wrap");
     wrap.append(sessCalendar(days, value, tip), sessCalSide(days, value, show));
     chart.append(wrap);
-    head.append(sessLegend());
+    chart.querySelector(".sess-chart-head").append(sessLegend());
     return;
   }
+
   // bars: a day each, or a week
   const step = shape === "week" ? 7 : 1;
   const buckets = [];
@@ -8008,30 +8344,52 @@ function renderSessChart(chart, st, used, ov, acts) {
     buckets.push(b);
   }
   const peak = Math.max(metric === "cost" ? 0.001 : 1, ...buckets.map(value));
-  head.append(el("span", "peak", show(peak)));
+  const fill = (bar, b) => {
+    const [top, low] = bar.children;
+    if (metric === "tokens") {
+      top.style.height = (100 * b.output / peak).toFixed(1) + "%";
+      low.style.height = (100 * b.input / peak).toFixed(1) + "%";
+    } else top.style.height = (100 * value(b) / peak).toFixed(1) + "%";
+    const label = sessDay(b.day);
+    bar.title = tip(b, step === 7 ? t("week of {label}", { label }) : label);
+  };
+  if (same) {
+    chart.querySelector(".sess-chart-head .peak").textContent = show(peak);
+    const bars = chart.querySelectorAll(".bars > .bar");
+    buckets.forEach((b, i) => fill(bars[i], b));
+    return;
+  }
+  chart.replaceChildren();
+  chart.classList.remove("cal");
+  drawHead().append(el("span", "peak", show(peak)));
   const bars = el("div", "bars");
   const labels = el("div", "labels");
   const k = buckets.length;
   const every = k <= 8 ? 1 : k <= 31 ? Math.ceil(k / 6) : Math.ceil(k / 5);
   buckets.forEach((b, i) => {
     const bar = el("div", "bar");
-    if (metric === "tokens") {
-      const inp = el("i", "in"), out = el("i", "out");
-      inp.style.height = (100 * b.input / peak).toFixed(1) + "%";
-      out.style.height = (100 * b.output / peak).toFixed(1) + "%";
-      bar.append(out, inp);
-    } else {
-      const c = el("i", "out");
-      c.style.height = (100 * value(b) / peak).toFixed(1) + "%";
-      bar.append(c);
-    }
-    const label = sessDay(b.day);
-    bar.title = tip(b, step === 7 ? t("week of {label}", { label }) : label);
+    if (metric === "tokens") bar.append(el("i", "out"), el("i", "in"));
+    else bar.append(el("i", "out"));
+    fill(bar, b);
     bars.append(bar);
+    const label = sessDay(b.day);
     const end = i === k - 1 && (k - 1) % every >= every / 2;
     labels.append(el("span", "", i % every === 0 || end ? label : ""));
   });
   chart.append(bars, labels);
+
+  function drawHead() {
+    const head = el("div", "sess-chart-head");
+    const seg = sessSegs(SESS_METRICS.map(([id, name]) => [id, name, off[id]]), metric, (id) => {
+      sessMetric = id;
+      try { localStorage.setItem("magpie.sessMetric", id); } catch {}
+      chart.redraw();
+    });
+    head.append(el("span", "label", t(shape === "week" ? "By week" : shape === "day" ? "By day" : "Activity")), seg, el("span", "grow"));
+    chart.append(head);
+    slide(seg, "sessMetric");
+    return head;
+  }
 }
 
 // sessCalendar is the range as weeks of days, Monday on top, each day as
@@ -8831,14 +9189,17 @@ async function renderSync(v) {
   const toggle = (id) => () => { syncOpen = syncOpen === id ? "" : id; renderSync(); };
   const parts = (ps) => ps.map((p) => t({ providers: "providers", settings: "settings", profiles: "profiles", agents: "agents' models", library: "library" }[p])).join(t(", "));
 
-  // WebDAV
+  // WebDAV or S3
   let status = t("Keeps providers, settings, profiles, agents' models and the library the same on every computer");
+  const s3 = v.on && v.kind === "s3";
   if (v.on) {
-    const host = (() => { try { return new URL(v.url).host; } catch { return v.url; } })();
+    const hostOf = (u) => { try { return new URL(u).host; } catch { return u; } };
+    // a bucket is named by its address, and the server it is on unless AWS
+    const host = s3 ? [v.url, v.endpoint && hostOf(v.endpoint.includes("://") ? v.endpoint : "https://" + v.endpoint)].filter(Boolean).join(" · ") : hostOf(v.url);
     status = v.error ? t("Couldn't sync: {error}", { error: v.error })
       : v.last ? t("Synced {when} · {host}", { when: syncWhen(v.last), host }) : t("Not synced yet · {host}", { host });
   }
-  const sub = row(t("WebDAV sync"), status, ...(v.on
+  const sub = row(t(s3 ? "S3 sync" : v.on ? "WebDAV sync" : "WebDAV or S3 sync"), status, ...(v.on
     ? [btn(t("Sync now"), async (e) => { e.target.classList.add("busy"); renderSync(await api("davsync/now", {}).catch((x) => ({ ...v, error: x.message }))); }),
        btn(t(syncOpen === "dav" ? "Close" : "Edit"), toggle("dav"))]
     : [btn(t(syncOpen === "dav" ? "Close" : "Set up"), toggle("dav"))]));
@@ -8894,22 +9255,51 @@ function syncBar(ed, err, ...tools) {
   return (msg) => { ed.querySelector(".editor-error").textContent = msg || ""; };
 }
 
+// davForm: the sync's settings, a WebDAV folder's or an S3 bucket's (#296).
+// Both sets of fields are made and the kind picked shows one, so what was
+// typed in the other is still there on going back.
 function davForm(v) {
   const ed = el("div", "editor sync-form");
-  const url = input(v.url || "", "https://dav.jianguoyun.com/dav/");
-  const user = input(v.user || "", t("user name"));
-  const pass = input("", v.passwordSet ? t("saved · type a new one to replace it") : t("password, or an app password"), "password");
-  const phrase = input("", v.passphraseSet ? t("saved · type a new one to replace it") : t("the same on every computer"), "password");
+  let kind = v.kind === "s3" ? "s3" : "webdav";
+  const saved = t("saved · type a new one to replace it");
+  const dav = v.kind === "s3" ? {} : v, bk = v.kind === "s3" ? v : {};
+  const url = input(dav.url || "", "https://dav.jianguoyun.com/dav/");
+  const user = input(dav.user || "", t("user name"));
+  const pass = input("", dav.passwordSet ? saved : t("password, or an app password"), "password");
+  // s3://bucket/prefix, as the address is kept
+  const [bucketName, prefixName] = (() => { const m = /^s3:\/\/([^/]*)\/?(.*)$/i.exec(bk.url || ""); return m ? [m[1], m[2]] : ["", ""]; })();
+  const endpoint = input(bk.endpoint || "", "https://<account>.r2.cloudflarestorage.com");
+  const bucket = input(bucketName, t("bucket name"));
+  const prefix = input(prefixName, t("optional"));
+  const region = input(bk.region || "", t("us-east-1, or auto for R2"));
+  const keyID = input(bk.user || "", "AKIA…");
+  const secret = input("", bk.passwordSet ? saved : t("secret access key"), "password");
+  const [pathL, pathStyle] = tick(t("Path-style: the bucket in the path, not the host name"), !!bk.pathStyle);
+  const phrase = input("", v.passphraseSet ? saved : t("the same on every computer"), "password");
   const [keysL, keys] = tick(t("Providers' API keys"), v.keys !== false);
   const [agentsL, agents] = tick(t("Agents' models"), v.agents !== false);
   const [libL, lib] = tick(t("Library: instructions, MCP servers and skills"), v.library !== false);
   const what = el("div", "stack");
   what.append(keysL, agentsL, libL);
-  ed.append(...field(t("Address"), url, t("A folder named magpie is made in it.")),
+  const davFields = [...field(t("Address"), url, t("A folder named magpie is made in it.")),
     ...field(t("User"), user),
-    ...field(t("Password"), pass),
+    ...field(t("Password"), pass)];
+  const s3Fields = [...field(t("Endpoint"), endpoint, t("Empty for AWS S3; for R2, B2, MinIO and the like, their S3 API address.")),
+    ...field(t("Bucket"), bucket),
+    ...field(t("Prefix"), prefix, t("The backup goes in a folder named magpie under it.")),
+    ...field(t("Region"), region),
+    ...field(t("Access key"), keyID),
+    ...field(t("Secret"), secret),
+    ...field("", pathL, t("MinIO and most NAS servers need it."))];
+  const show = () => {
+    for (const x of davFields) x.hidden = kind !== "webdav";
+    for (const x of s3Fields) x.hidden = kind !== "s3";
+  };
+  ed.append(...field(t("Sync to"), segs([["webdav", "WebDAV"], ["s3", "S3"]], kind, (k) => { kind = k; show(); })),
+    ...davFields, ...s3Fields,
     ...field(t("Passphrase"), phrase, t("The file is sealed with it on this computer; the server only ever sees it sealed. Keep it: without it the file can't be opened.")),
     ...field(t("Also sync"), what));
+  show();
   const save = el("button", "text primary", t(v.on ? "Save" : "Turn on"));
   const off = v.on ? el("button", "text danger", t("Turn off")) : el("span");
   const cancel = el("button", "text", t("Cancel"));
@@ -8917,10 +9307,15 @@ function davForm(v) {
   cancel.onclick = () => { syncOpen = ""; renderSync(); };
   off.onclick = async () => { syncOpen = ""; renderSync(await api("davsync/off", {}).catch(() => null) || undefined); };
   save.onclick = async () => {
+    const b = bucket.value.trim(), p = prefix.value.trim().replace(/^\/+|\/+$/g, "");
+    if (kind === "s3" && !b) return say(t("Name the bucket"));
     if (!v.passphraseSet && !phrase.value) return say(t("Pick a passphrase: the file is sealed with it"));
     save.classList.add("busy");
+    const where = kind === "s3"
+      ? { url: "s3://" + b + (p ? "/" + p : ""), user: keyID.value.trim(), password: secret.value, endpoint: endpoint.value.trim(), region: region.value.trim(), pathStyle: pathStyle.checked }
+      : { url: url.value.trim(), user: user.value.trim(), password: pass.value };
     try {
-      const r = await api("davsync/save", { url: url.value.trim(), user: user.value.trim(), password: pass.value, passphrase: phrase.value, keys: keys.checked, agents: agents.checked, library: lib.checked });
+      const r = await api("davsync/save", { ...where, passphrase: phrase.value, keys: keys.checked, agents: agents.checked, library: lib.checked });
       if (!r.error) syncOpen = "";
       renderSync(r);
       if (r.error) return;
@@ -9685,7 +10080,7 @@ function show(v) {
   view = v;
   if (mode === "window") { for (const b of $("#nav").querySelectorAll("button")) b.classList.toggle("on", b.dataset.view === v); slide($("#nav"), "nav"); }
   $("#prefs").classList.toggle("on", v === "settings");
-  for (const id of ["agents", "providers", "gateway", "routing", "usage", "library", "settings"]) $("#view-" + id).hidden = v !== id;
+  for (const id of ["agents", "providers", "gateway", "routing", "usage", "library", "plugins", "settings"]) $("#view-" + id).hidden = v !== id;
   // back to where the reader was in it, and again once it has what it loads
   const back = () => backToReader($("#view-" + v));
   requestAnimationFrame(back);
@@ -9696,6 +10091,7 @@ function show(v) {
   if (v === "usage") loadUsage().then(back, (e) => status(e.message, "err"));
   if (v === "settings") loadSettings().then(back, (e) => status(e.message, "err"));
   if (v === "library") window.loadLibrary?.()?.then(back);
+  if (v === "plugins") window.loadPlugins?.()?.then(back);
   syncURL();
 }
 
@@ -9759,21 +10155,24 @@ setTimeout(wag, 250);
 
 // A narrow window has no room for the whole header: the name goes, leaving
 // the magpie, and Update becomes its arrow; narrower still, the tabs stop
-// centring and take the room between.
+// centring and take the room between, and at the narrowest they draw in.
 function fitTop() {
   const top = $(".top"), nav = $("#nav"), brand = $(".brand"), actions = $(".actions");
   const fits = () => {
     const a = actions.getBoundingClientRect();
+    if (a.right > top.getBoundingClientRect().right - parseFloat(getComputedStyle(top).paddingRight)) return false;
     const left = brand.offsetParent ? brand.getBoundingClientRect().right
       : top.getBoundingClientRect().left + parseFloat(getComputedStyle(top).paddingLeft);
     if (!nav?.offsetParent) return left + 8 <= a.left;
     const n = nav.getBoundingClientRect();
     return left + 8 <= n.left && n.right + 8 <= a.left;
   };
-  top.classList.remove("tight", "cramped");
+  top.classList.remove("tight", "cramped", "crowded");
   if (fits()) return;
   top.classList.add("tight");
-  if (!fits()) top.classList.add("cramped");
+  if (fits()) return;
+  top.classList.add("cramped");
+  if (!fits()) top.classList.add("crowded");
 }
 const topFit = new ResizeObserver(fitTop);
 for (const e of [".top", ".brand", ".actions"]) topFit.observe($(e));
@@ -9978,6 +10377,6 @@ if (mode === "window" && params.get("view") === "usage") {
   for (const k of ["tab", "provider", "agent"]) u.searchParams.delete(k);
   history.replaceState(null, "", u);
 }
-if (mode === "window" && ["providers", "gateway", "routing", "usage", "library", "settings"].includes(params.get("view"))) show(params.get("view"));
+if (mode === "window" && ["providers", "gateway", "routing", "usage", "library", "plugins", "settings"].includes(params.get("view"))) show(params.get("view"));
 else if (mode === "window") slide($("#nav"), "nav");
 load();

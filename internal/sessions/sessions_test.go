@@ -47,8 +47,8 @@ func setup(t *testing.T) (claude, codex string) {
 	t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(dir, "pi"))
 	t.Setenv("OPENCODE_DB", "")
 	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
-	// ZCode, dsh, Cline, Qoder, Grok Build and WorkBuddy keep theirs in the
-	// home folder: never the real one's
+	// ZCode, dsh, Cline, Qoder, Grok Build, WorkBuddy and omp keep theirs in
+	// the home folder: never the real one's
 	t.Setenv("HOME", filepath.Join(dir, "home"))
 	t.Setenv("USERPROFILE", filepath.Join(dir, "home"))
 	for _, env := range []string{"DSH_HOME", "CLINE_DIR", "CLINE_DATA_DIR", "CLINE_SESSION_DATA_DIR", "QODER_CONFIG_DIR", "QODERCN_CONFIG_DIR",

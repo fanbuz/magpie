@@ -140,6 +140,7 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .lib-problems li { min-width: 0; }
 .lib-problems-sep { color: var(--muted); }
 .lib-problems-err { display: block; color: var(--fg-2); font: 11px var(--code); margin-top: 1px; }
+.lib-problems-fix { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
 
 /* agents a server or skill is given to: an icon each, lit when it has it */
 .lib-agents { display: flex; flex-wrap: wrap; gap: 3px; flex: none; justify-content: flex-end; max-width: 50%; }

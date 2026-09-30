@@ -165,6 +165,8 @@ type providersJSON struct {
 	// signed in to after Codex was switched to another; "" when none is
 	// left behind (provider.CodexDaemonStale).
 	CodexDaemon string `json:"codexDaemon,omitempty"`
+	// Plugins are the providers the plugins sign in to, for the add sheet
+	Plugins []pluginSubJSON `json:"plugins"`
 	// Moved is the agents the change moved off models it stopped serving
 	// (agent.Reseat), for the page to say so.
 	Moved []agent.Move `json:"moved,omitempty"`
@@ -269,6 +271,12 @@ func providerInfo(p provider.Provider, agents []agentUse) providerJSON {
 			out.Account.Name, out.Account.Icon = "Command Code", "commandcode"
 		}
 		out.Account.Logins = provider.Logins(a.Agent)
+		if pp, ok := provider.PluginOf(p.ID); ok && p.IsPlugin() {
+			// a plugin's sign-in: named for the provider it signs in to,
+			// the page following it by the provider's id
+			out.Account.Agent, out.Account.Name, out.Account.Icon = p.ID, pp.Name, pluginIcon(pp.Spec, pp.ID)
+			out.Account.Logins = nil
+		}
 	}
 	exposed := map[string]bool{}
 	for _, m := range p.Exposed() {
@@ -388,6 +396,7 @@ func providersState() providersJSON {
 		s.Gateway.Running, s.Gateway.Window = gateway.Serving()
 	}
 	s.CodexDaemon = provider.CodexDaemonStale()
+	s.Plugins = pluginSubs()
 	return s
 }
 
@@ -407,6 +416,7 @@ func ago(t time.Time) string {
 
 func providerRoutes(mux *http.ServeMux, w Windows) {
 	importAppsRoutes(mux)
+	pluginRoutes(mux, w)
 	traceRoutes(mux)
 	groupRoutes(mux)
 	mux.HandleFunc("GET /api/providers", func(rw http.ResponseWriter, r *http.Request) {

@@ -242,6 +242,19 @@
 .rt-group .tags { display: flex; gap: 4px; flex: none; }
 .rt-group .tag { font-size: 11px; line-height: 18px; padding: 0 8px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); white-space: nowrap; }
 .rt-group .tag.bad { color: var(--red); }
+.rt-group .tag.idle { opacity: .55; }
+/* a manual group's members on its card: the one picked, marked by a dot */
+.rt-picks { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.rt-pick { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0; height: 22px; padding: 0 8px 0 6px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 11.5px; cursor: pointer; transition: background .12s, color .12s, border-color .12s; }
+.rt-pick:hover { color: var(--fg); border-color: var(--muted); background: var(--card); }
+.rt-pick .dot { width: 7px; height: 7px; flex: none; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--faint); }
+.rt-pick .ic, .rt-pick .ic-stack { width: 13px; height: 13px; flex: none; }
+.rt-pick .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rt-pick small { color: var(--faint); font-size: 10.5px; white-space: nowrap; }
+.rt-pick.on { color: var(--fg); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); cursor: default; }
+.rt-pick.on .dot { background: var(--accent); box-shadow: none; }
+.rt-pick.off { opacity: .55; }
+.rt-pick:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
 .rt-gnone { padding: 14px; font-size: 12px; line-height: 1.5; }
 .rt-ghidden { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 6px 12px 6px 14px; font-size: 11.5px; color: var(--faint); }
 .rt-ghidden > span { margin-right: 4px; }

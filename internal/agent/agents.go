@@ -494,9 +494,34 @@ func pi(home string) *Agent { return piIn(here(home)) }
 // distro's (see wsl.go), its models.json naming the gateway as it reaches
 // it from there.
 func piIn(at place) *Agent {
-	a := piLike(at, "pi", "Pi", filepath.Join(at.home, ".pi", "agent"))
+	a := piLike(at, "pi", "Pi", piDir(at))
 	a.UA = []string{"pi-"}
 	return a
+}
+
+// piDir is Pi's agent folder at a place: PI_CODING_AGENT_DIR's when set,
+// "~" in it standing for home, else ~/.pi/agent (config.js, getAgentDir).
+// A relative one is Pi's working directory's, which magpie can't know, so
+// it is not taken; nor this machine's variable for a WSL distro's Pi.
+func piDir(at place) string {
+	if at.spell == nil {
+		if d := homeDir(at.home, os.Getenv("PI_CODING_AGENT_DIR")); d != "" {
+			return d
+		}
+	}
+	return filepath.Join(at.home, ".pi", "agent")
+}
+
+// homeDir is the folder an agent's variable names, "~" and "~/…" expanded
+// to home as Pi does; "" when it is empty or relative.
+func homeDir(home, d string) string {
+	if d == "~" || strings.HasPrefix(d, "~/") || (runtime.GOOS == "windows" && strings.HasPrefix(d, `~\`)) {
+		d = filepath.Join(home, d[1:])
+	}
+	if !filepath.IsAbs(d) {
+		return ""
+	}
+	return filepath.Clean(d)
 }
 
 // piLike is Pi, or a fork of it that keeps Pi's settings.json and

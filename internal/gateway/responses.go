@@ -124,6 +124,7 @@ type rRequest struct {
 	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
 	ServiceTier       string          `json:"service_tier,omitempty"`
 	PromptCacheKey    string          `json:"prompt_cache_key,omitempty"`
+	Include           []string        `json:"include,omitempty"`
 	Reasoning         *struct {
 		Effort  string `json:"effort,omitempty"`
 		Summary string `json:"summary,omitempty"`
@@ -136,7 +137,7 @@ func parseResponses(body []byte) (*Request, error) {
 		return nil, fmt.Errorf("invalid request: %v", err)
 	}
 	r := &Request{Model: q.Model, System: q.Instructions, MaxTokens: q.MaxOutputTokens, Temp: q.Temperature,
-		TopP: q.TopP, Stream: q.Stream, Parallel: q.ParallelToolCalls, Fast: q.ServiceTier == "priority", CacheKey: q.PromptCacheKey}
+		TopP: q.TopP, Stream: q.Stream, Parallel: q.ParallelToolCalls, Fast: q.ServiceTier == "priority", CacheKey: q.PromptCacheKey, Include: q.Include}
 	if q.Reasoning != nil {
 		r.Effort = effortOf(q.Reasoning.Effort)
 		r.Thinking = true
@@ -427,6 +428,19 @@ func buildResponses(r *Request, model, host string, rejectTemp bool) []byte {
 	} else if r.Thinking {
 		out["reasoning"] = map[string]any{"summary": "auto"}
 	}
+	// the client's include goes on as the request would have without
+	// magpie. Sealed reasoning is asked for only with reasoning, as Codex
+	// asks for it: OpenAI refuses it of a model that doesn't reason. What
+	// comes back sealed goes no further than magpie, and the input's sealed
+	// reasoning isn't sent on this way, so no account or vendor is handed
+	// another's to refuse (withoutRefused, sealedKinds, on a relay).
+	var include []string
+	for _, v := range r.Include {
+		if v == "" || slices.Contains(include, v) || (v == "reasoning.encrypted_content" && out["reasoning"] == nil) {
+			continue
+		}
+		include = append(include, v)
+	}
 	if len(r.Tools) > 0 || r.WebSearch {
 		var tools []map[string]any
 		for _, t := range r.Tools {
@@ -440,8 +454,8 @@ func buildResponses(r *Request, model, host string, rejectTemp bool) []byte {
 			tools = append(tools, map[string]any{"type": "web_search"})
 			// the pages it found, which a client of another protocol is
 			// told of (OpenAI's option; xAI's API isn't known to take it)
-			if host != "api.x.ai" {
-				out["include"] = []string{"web_search_call.action.sources"}
+			if host != "api.x.ai" && !slices.Contains(include, "web_search_call.action.sources") {
+				include = append(include, "web_search_call.action.sources")
 			}
 		}
 		out["tools"] = tools
@@ -454,6 +468,9 @@ func buildResponses(r *Request, model, host string, rejectTemp bool) []byte {
 		if r.Parallel != nil {
 			out["parallel_tool_calls"] = *r.Parallel
 		}
+	}
+	if len(include) > 0 {
+		out["include"] = include
 	}
 	b, _ := json.Marshal(out)
 	return b

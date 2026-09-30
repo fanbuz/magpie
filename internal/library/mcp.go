@@ -113,6 +113,26 @@ const (
 	// fmtAntigravity is Antigravity's mcp_config.json: a remote server is
 	// its serverUrl, whatever it speaks
 	fmtAntigravity
+	// fmtHermes is Hermes Agent's mcp_servers in its config.yaml: a url is
+	// streamable HTTP unless transport says sse, a command stdio
+	fmtHermes
+	// fmtOmp is omp's mcp.json, and Qoder's settings.json: "type" says
+	// http or sse beside a url, a command needs none
+	fmtOmp
+	// fmtKimi is Kimi Code's mcp.json, the Python kimi-cli's and the new
+	// one's alike: "transport" http or sse beside a url
+	fmtKimi
+	// fmtDevin is Devin's mcp_config.json, a transport on every entry
+	// (stdio, http, sse) as `devin mcp add` writes it
+	fmtDevin
+	// fmtGrok is Grok Build's [mcp_servers.<name>] tables in config.toml
+	fmtGrok
+	// fmtCline is Cline's CLI's cline_mcp_settings.json, where an entry's
+	// transport is an object of its own (type stdio, streamableHttp, sse)
+	fmtCline
+	// fmtCommandCode is Command Code's mcp.json: transport stdio or http,
+	// and enabled
+	fmtCommandCode
 )
 
 // mcpFile is the file an agent keeps its user-wide MCP servers in.
@@ -136,7 +156,7 @@ func (f *mcpFile) files() []string { return append([]string{f.Path}, f.Also...) 
 // key is the object the servers are kept under.
 func (f *mcpFile) key() string {
 	switch f.Format {
-	case fmtCodex:
+	case fmtCodex, fmtHermes, fmtGrok:
 		return "mcp_servers"
 	case fmtOpenCode, fmtCrush:
 		return "mcp"
@@ -153,7 +173,7 @@ func (f *mcpFile) supports(s *Server) error {
 	if f.Format == fmtDesktop && s.Remote() {
 		return errNoRemote
 	}
-	if s.Transport == "sse" && (f.Format == fmtCodex || f.Format == fmtGoose || f.Format == fmtDsh || f.Format == fmtPiNative) {
+	if s.Transport == "sse" && (f.Format == fmtCodex || f.Format == fmtGoose || f.Format == fmtDsh || f.Format == fmtPiNative || f.Format == fmtGrok || f.Format == fmtCommandCode) {
 		return errNoSSE
 	}
 	if f.Format == fmtDsh && s.Name != "" && !dshServerName.MatchString(s.Name) {
@@ -167,7 +187,9 @@ func (f *mcpFile) supports(s *Server) error {
 var errNoRemote = errors.New("no-remote")
 
 // errNoSSE is what the page says of an agent that can't reach a server
-// over SSE (Codex, Goose, DeepSeek Harness, Pi's own MCP).
+// over SSE (Codex, Goose, DeepSeek Harness, Pi's own MCP, Grok Build — its
+// type = "sse" is taken, but it speaks streamable HTTP to it all the same,
+// Command Code, whose own add refuses sse).
 var errNoSSE = errors.New("no-sse")
 
 // ordered is a JSON object that keeps its keys in the order given, so an
@@ -211,6 +233,19 @@ func list(a []string) []string {
 		return []string{}
 	}
 	return a
+}
+
+// MarshalYAML writes the object as a YAML mapping in the same order.
+func (o ordered) MarshalYAML() (any, error) {
+	n := &yaml.Node{Kind: yaml.MappingNode}
+	for _, e := range o {
+		var v yaml.Node
+		if err := v.Encode(e.v); err != nil {
+			return nil, err
+		}
+		n.Content = append(n.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: e.k}, &v)
+	}
+	return n, nil
 }
 
 // encode is the server as this agent writes it.
@@ -315,6 +350,86 @@ func (f *mcpFile) encode(s *Server) ordered {
 		}
 	case fmtPiNative:
 		// "type" is optional: a url is streamable HTTP, a command stdio
+		if s.Remote() {
+			add("url", s.URL)
+			optional("headers", s.Headers)
+		} else {
+			add("command", s.Command)
+			add("args", list(s.Args))
+			optional("env", s.Env)
+		}
+	case fmtHermes:
+		// Hermes' own `hermes mcp add` writes url/headers or
+		// command/args/env; transport: sse is its only other transport
+		// (tools/mcp_tool.py)
+		if s.Remote() {
+			add("url", s.URL)
+			optional("headers", s.Headers)
+			if s.Transport == "sse" {
+				add("transport", "sse")
+			}
+		} else {
+			add("command", s.Command)
+			add("args", list(s.Args))
+			optional("env", s.Env)
+		}
+	case fmtOmp:
+		if s.Remote() {
+			add("type", s.Transport)
+			add("url", s.URL)
+			optional("headers", s.Headers)
+		} else {
+			add("command", s.Command)
+			add("args", list(s.Args))
+			optional("env", s.Env)
+		}
+	case fmtKimi, fmtDevin:
+		// as `kimi mcp add` and `devin mcp add` write them; Kimi's
+		// transport is left out for a command, as its own add leaves it
+		if s.Remote() {
+			add("url", s.URL)
+			add("transport", s.Transport)
+			optional("headers", s.Headers)
+		} else {
+			add("command", s.Command)
+			add("args", list(s.Args))
+			optional("env", s.Env)
+			if f.Format == fmtDevin {
+				add("transport", "stdio")
+			}
+		}
+	case fmtCline:
+		// as `cline mcp add` writes it; a url with no type would be SSE
+		if s.Remote() {
+			t := ordered{{"type", "streamableHttp"}, {"url", s.URL}}
+			if s.Transport == "sse" {
+				t[0].v = "sse"
+			}
+			if len(s.Headers) > 0 {
+				t = append(t, kv{"headers", s.Headers})
+			}
+			add("transport", t)
+		} else {
+			t := ordered{{"type", "stdio"}, {"command", s.Command}, {"args", list(s.Args)}}
+			if len(s.Env) > 0 {
+				t = append(t, kv{"env", s.Env})
+			}
+			add("transport", t)
+		}
+	case fmtCommandCode:
+		if s.Remote() {
+			add("transport", "http")
+			add("enabled", true)
+			add("url", s.URL)
+			optional("headers", s.Headers)
+		} else {
+			add("transport", "stdio")
+			add("enabled", true)
+			add("command", s.Command)
+			add("args", list(s.Args))
+			optional("env", s.Env)
+		}
+	case fmtGrok:
 		if s.Remote() {
 			add("url", s.URL)
 			optional("headers", s.Headers)
@@ -458,6 +573,53 @@ func (f *mcpFile) decode(name string, m map[string]any) (*Server, bool) {
 		case "streamable-http":
 			remote("http", str(m, "url"), m["headers"])
 		}
+	case fmtHermes, fmtKimi, fmtDevin:
+		// each takes a url over a command when an entry has both
+		if u := str(m, "url"); u != "" {
+			t := "http"
+			if str(m, "transport") == "sse" {
+				t = "sse"
+			}
+			remote(t, u, m["headers"])
+		} else {
+			local(str(m, "command"), m["args"], m["env"])
+		}
+	case fmtCline:
+		// the flat shape Cline's extension wrote is read too, a url with
+		// no type being SSE there
+		t, nested := m["transport"].(map[string]any)
+		if !nested {
+			t = m
+		}
+		ty := str(t, "type")
+		if ty == "" && !nested {
+			ty = str(t, "transportType")
+		}
+		if u := str(t, "url"); u != "" {
+			tr := "sse"
+			if ty == "streamableHttp" || ty == "http" {
+				tr = "http"
+			}
+			remote(tr, u, t["headers"])
+		} else {
+			local(str(t, "command"), t["args"], t["env"])
+		}
+	case fmtCommandCode:
+		// Command Code reads type for transport too, and speaks
+		// streamable HTTP to any url
+		t := str(m, "transport")
+		if t == "" {
+			t = str(m, "type")
+		}
+		if u := str(m, "url"); u != "" && (t != "stdio" || str(m, "command") == "") {
+			tr := "http"
+			if t == "sse" {
+				tr = "sse"
+			}
+			remote(tr, u, m["headers"])
+		} else {
+			local(str(m, "command"), m["args"], m["env"])
+		}
 	case fmtPi, fmtPiNative:
 		// an entry moved from mcp-adapter.json keeps its httpTransport, so
 		// an SSE server still reads as one, which Pi's own can't reach
@@ -470,7 +632,7 @@ func (f *mcpFile) decode(name string, m map[string]any) (*Server, bool) {
 		} else {
 			local(str(m, "command"), m["args"], m["env"])
 		}
-	default: // Claude Code, Cursor, Copilot, Crush, ZCode
+	default: // Claude Code, Cursor, Copilot, Crush, ZCode, omp, Grok
 		t := str(m, "type")
 		if u := str(m, "url"); u != "" {
 			if t != "sse" {
@@ -502,9 +664,9 @@ func (f *mcpFile) entries() (map[string]map[string]any, error) {
 	}
 	var doc map[string]any
 	switch f.Format {
-	case fmtCodex:
+	case fmtCodex, fmtGrok:
 		err = toml.Unmarshal(raw, &doc)
-	case fmtGoose:
+	case fmtGoose, fmtHermes:
 		err = yaml.Unmarshal(raw, &doc)
 	default:
 		err = json.Unmarshal(jsonc.ToJSON(raw), &doc)
@@ -605,6 +767,16 @@ var owned = map[mcpFormat][]string{
 	fmtPiNative: {"type", "transport", "httpTransport", "url", "headers", "command", "args", "env"},
 	fmtZCode:    {"type", "url", "headers", "command", "args", "env"},
 	fmtDsh:      {"serverName", "transport", "url", "headers", "command", "args", "env"},
+	// timeout, enabled, tools, sampling, auth… are the user's
+	fmtHermes: {"transport", "url", "headers", "command", "args", "env"},
+	fmtOmp:    {"type", "url", "headers", "command", "args", "env"},
+	fmtKimi:   {"transport", "type", "url", "headers", "command", "args", "env"},
+	fmtDevin:  {"transport", "type", "url", "headers", "command", "args", "env"},
+	// enabled and the timeouts are the user's
+	fmtGrok: {"type", "url", "headers", "command", "args", "env"},
+	// the flat shape's keys go when magpie writes the entry again
+	fmtCline:       {"transport", "type", "transportType", "url", "headers", "command", "args", "cwd", "env"},
+	fmtCommandCode: {"transport", "type", "url", "headers", "command", "args", "env"},
 
 	// a url agy read in place of serverUrl goes when magpie writes one
 	fmtAntigravity: {"type", "serverUrl", "url", "headers", "command", "args", "env"},
@@ -635,7 +807,7 @@ func (f *mcpFile) merged(s *Server, old map[string]any) ordered {
 func (f *mcpFile) put(s *Server, old map[string]any) error {
 	o := f.merged(s, old)
 	switch f.Format {
-	case fmtCodex:
+	case fmtCodex, fmtGrok:
 		return putCodex(f.Path, s.Name, o)
 	case fmtGoose:
 		m := map[string]any{}
@@ -643,6 +815,9 @@ func (f *mcpFile) put(s *Server, old map[string]any) error {
 			m[e.k] = e.v
 		}
 		return edit.SetYAML(f.Path, edit.KV{Path: "extensions." + s.Name, Value: m})
+	case fmtHermes:
+		// in its order, beside the user's other settings and comments
+		return edit.SetYAML(f.Path, edit.KV{Path: f.key() + "." + s.Name, Value: o})
 	case fmtDsh:
 		for _, p := range f.files() {
 			if err := dshPut(p, s.Name, o); err != nil {
@@ -676,10 +851,12 @@ func (f *mcpFile) del(name string) error {
 			}
 		}
 		return nil
-	case fmtCodex:
+	case fmtCodex, fmtGrok:
 		return delCodex(f.Path, name, true)
 	case fmtGoose:
 		return edit.DelYAML(f.Path, "extensions."+name)
+	case fmtHermes:
+		return edit.DelYAML(f.Path, f.key()+"."+name)
 	}
 	return edit.Atomically(func() error {
 		for _, a := range f.also() {

@@ -29,6 +29,31 @@ type ModelInfo struct {
 	Thinks        bool   `json:"-"`
 	AlwaysThinks  bool   `json:"-"`
 	DefaultEffort string `json:"-"`
+	// Free is set on a model that costs the plan no credits, as Qoder's
+	// client reads it: is_free, or a price_factor of 0.
+	Free bool `json:"-"`
+}
+
+// free reads whether the listing marks a model free: is_free true, or a
+// price_factor (the credits a request costs, as a multiple) of 0. Either
+// may come in snake or camel case.
+func (m *ModelInfo) free(raw json.RawMessage) {
+	var v struct {
+		IsFree      *bool    `json:"is_free"`
+		IsFreeC     *bool    `json:"isFree"`
+		PriceFactor *float64 `json:"price_factor"`
+		PriceC      *float64 `json:"priceFactor"`
+	}
+	if json.Unmarshal(raw, &v) != nil {
+		return
+	}
+	if v.IsFree == nil {
+		v.IsFree = v.IsFreeC
+	}
+	if v.PriceFactor == nil {
+		v.PriceFactor = v.PriceC
+	}
+	m.Free = v.IsFree != nil && *v.IsFree || v.PriceFactor != nil && *v.PriceFactor == 0
 }
 
 // effortOrder ranks Qoder's effort names, lowest first.
@@ -141,7 +166,7 @@ func ParseModels(body []byte) ([]catalog.Model, error) {
 			name = m.Key
 		}
 		out = append(out, catalog.Model{ID: m.Key, Name: name, Provider: ProviderKey,
-			Context: m.MaxInputTokens, Images: m.IsVL, Efforts: m.Efforts})
+			Context: m.MaxInputTokens, Images: m.IsVL, Efforts: m.Efforts, Free: m.Free})
 	}
 	return out, nil
 }
@@ -165,6 +190,7 @@ func ModelConfigs(body []byte) ([]ModelInfo, error) {
 		}
 		m.Config = raw
 		m.thinking(raw)
+		m.free(raw)
 		out = append(out, m)
 	}
 	return out, nil

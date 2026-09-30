@@ -287,7 +287,7 @@ func probe(ctx context.Context, p Provider, proto Protocol, url string, body []b
 		return r
 	}
 	start := time.Now()
-	res, err := http.DefaultClient.Do(req)
+	res, err := p.Do(http.DefaultClient, req)
 	r.Millis = time.Since(start).Milliseconds()
 	if err != nil {
 		r.Error = strings.TrimPrefix(err.Error(), "Post \""+url+"\": ")

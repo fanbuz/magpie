@@ -78,6 +78,7 @@ func Rename(from, to string) error {
 			g.Rules[k].Use = renamedRef(r.Use, from, to)
 		}
 		g.Classifier = renamedRef(g.Classifier, from, to)
+		g.Pick = renamedRef(g.Pick, from, to)
 	}
 	// the vendor's list last fetched goes with it
 	os.Rename(catalog.LivePath(from), catalog.LivePath(to))

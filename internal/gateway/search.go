@@ -40,6 +40,23 @@ func searching(ctx context.Context) bool {
 	return v
 }
 
+// searchForKey holds the request magpie's searches are run for, which the
+// Routing view names by a search's row: magpie's own call, on the model it
+// searches with, not the conversation's (#314).
+type searchForKey struct{}
+
+// CallFor is the request a call magpie made on its own was made for: its
+// agent, and the model that agent asked for.
+type CallFor struct {
+	Agent string `json:"agent"`
+	Model string `json:"model"`
+}
+
+func searchFor(ctx context.Context) *CallFor {
+	f, _ := ctx.Value(searchForKey{}).(*CallFor)
+	return f
+}
+
 // searchesItself says whether the provider searches the web by itself when
 // asked on this API.
 func searchesItself(p provider.Provider, proto provider.Protocol) bool {
@@ -245,7 +262,7 @@ type round func(ctx context.Context, req *Request) (<-chan Event, int, string)
 // reply. The first round's failure is a status, as another provider may
 // take over.
 func (s *Server) searchReply(w http.ResponseWriter, r *http.Request, from provider.Protocol, name string, req *Request, usage *Usage, ask round) (int, string) {
-	ctx, cancel := context.WithCancel(r.Context())
+	ctx, cancel := context.WithCancel(context.WithValue(r.Context(), searchForKey{}, &CallFor{Agent: agentOf(r), Model: unprefixed(req.Model)}))
 	defer cancel()
 	q := *req
 	q.WebSearch = false

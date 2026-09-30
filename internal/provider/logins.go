@@ -339,8 +339,10 @@ func claudeSignedInUser(plan, statusPlan, status string) (user string, acct map[
 // none.
 func savedButSignedOut() []Exclusion {
 	saved := map[string]int{}
+	users := map[string][]string{}
 	for _, l := range readLogins() {
 		saved[l.Agent]++
+		users[l.Agent] = append(users[l.Agent], l.User)
 	}
 	var out []Exclusion
 	for _, a := range loginAgents {
@@ -358,7 +360,7 @@ func savedButSignedOut() []Exclusion {
 		if saved[a] > 1 {
 			n = fmt.Sprintf("%d accounts are", saved[a])
 		}
-		out = append(out, Exclusion{Agent: a, SignedOut: true,
+		out = append(out, Exclusion{Agent: a, SignedOut: true, Users: users[a],
 			Why: fmt.Sprintf("%s saved in magpie, but it isn't signed in here (%s), and they are only offered beside the account it is signed in to. Sign in (%s) with this HOME.", n, why, signIn)})
 	}
 	return out

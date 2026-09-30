@@ -159,7 +159,9 @@ type Call struct {
 	Agent string    `json:"agent"` // who called, from the client's User-Agent
 	// Kind: what the agent made the call for, when it isn't its turn —
 	// a Codex subagent's (callKind) — "" for a turn
-	Kind     string            `json:"kind,omitempty"`
+	Kind string `json:"kind,omitempty"`
+	// For: the request a call of magpie's own (a web search) was made for
+	For      *CallFor          `json:"for,omitempty"`
 	Model    string            `json:"model"`
 	Provider string            `json:"provider"`
 	From     provider.Protocol `json:"from"`
@@ -655,6 +657,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	w = capture
 	call := Call{Time: start, From: from, Model: unprefixed(modelOf(body)), Agent: agentOf(r), Kind: callKind(r.Header),
 		RequestBody: requestBody, RequestTruncated: requestTruncated}
+	if call.Kind == "web_search" {
+		call.For = searchFor(r.Context())
+	}
 	usage.Saw(call.Agent)
 	finishCapture := func() {
 		call.ResponseBody = capture.body.text()
@@ -712,6 +717,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// a routing group's rules pick the member that goes first, looked at
 	// before any image is taken out of the request: one may be for images
 	g, ms, isGroup := provider.FindGroup(asked)
+	g = g.Live() // a manual group's rules wait
 	var hit *RuleHit
 	var ruled []provider.Member
 	var ruleAt, words string
@@ -889,14 +895,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	if len(cands) == 1 {
 		shown = nil // nobody else to stay away from
 	}
-	tr := s.trace.begin(Route{Time: start, Agent: call.Agent, Kind: call.Kind, Model: call.Model, Effort: requestEffort(from, body), Provider: p.ID, Group: group, Rule: hit, Nested: nested, Affinity: shown, Order: pl.order, Left: pl.left})
+	tr := s.trace.begin(Route{Time: start, Agent: call.Agent, Kind: call.Kind, For: call.For, Model: call.Model, Effort: requestEffort(from, body), Provider: p.ID, Group: group, Rule: hit, Nested: nested, Affinity: shown, Order: pl.order, Left: pl.left})
 	var skipped []string
-	sent := ""        // the reasoning the last try's model was asked for
-	where := ""       // the last try's provider.Where, for the usage
-	again := 0        // times the last one left has been tried again
-	resealed := false // the conversation's reasoning sealed by another account taken out
-	floored := false  // the reply's length raised to what the provider takes
-	var other *Try    // the first failure that wasn't an allowance run out
+	sent := ""       // the reasoning the last try's model was asked for
+	where := ""      // the last try's provider.Where, for the usage
+	again := 0       // times the last one left has been tried again
+	resealed := 0    // what of the conversation another account sealed was taken out: its reasoning, then its compaction
+	floored := false // the reply's length raised to what the provider takes
+	var other *Try   // the first failure that wasn't an allowance run out
 	for i := 0; i < len(cands); i++ {
 		c := cands[i]
 		last := i == len(cands)-1
@@ -987,15 +993,29 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
 			break
 		}
-		if !resealed && from == provider.Responses && !hw.passing && hw.code() >= 400 && foreignReasoning.Match(hw.errBody()) {
+		if resealed < 2 && from == provider.Responses && !hw.passing && hw.code() >= 400 && foreignReasoning.Match(hw.errBody()) {
 			// the conversation moved here from another account or vendor,
 			// whose sealed reasoning this one can't read: asked again
 			// without it, and what it refused isn't sent here again. xAI
 			// says so as a 400, or as the stream's error, which may be
-			// read as another status
-			if b, ok := withoutReasoning(body); ok {
-				refused(stuck, c.who(), attemptBody)
-				resealed, body = true, b
+			// read as another status. Refused again, or with no reasoning
+			// to leave out, it's the compaction OpenAI sealed that goes
+			// (waroy: Codex compacted on GPT, then switched to Grok)
+			b, ok := []byte(nil), false
+			if resealed == 0 {
+				resealed = 1
+				if b, ok = withoutReasoning(body); ok {
+					refused(stuck, c.who(), attemptBody, "reasoning")
+				}
+			}
+			if !ok {
+				resealed = 2
+				if b, ok = withoutCompaction(body); ok {
+					refused(stuck, c.who(), attemptBody, compactionKinds...)
+				}
+			}
+			if ok {
+				body = b
 				try.Fail = failForeign
 				s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
 				i--
@@ -1019,6 +1039,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			try.Fail = failRefused
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
 			skipped = append(skipped, c.label()+": "+call.Error)
+			matesFirst(cands[i+1:], c)
 			if call.To != "" {
 				usage.Append(usage.Record{Time: began, Agent: call.Agent, Provider: call.Provider, Host: where, Model: c.model,
 					Requested: call.Model, Served: call.Usage.Served,
@@ -1318,6 +1339,18 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 			req.Header.Del("anthropic-beta")
 		}
 	}
+	if p.Account == nil && (to == provider.Responses || to == provider.Chat) && fromCodex(in) {
+		// a relay that serves only Codex (Discord: "This account only
+		// allows Codex official clients") knows it by its User-Agent,
+		// originator and x-codex- headers, which go on as Codex sent them,
+		// as they do when Codex talks to the relay itself; its key to
+		// magpie never does
+		for k, vs := range in {
+			if codexClientHeader(k) {
+				req.Header[k] = slices.Clone(vs)
+			}
+		}
+	}
 	if p.IsOpenCode() {
 		req.Header.Set("x-opencode-session", conversationID(in, body))
 	}
@@ -1331,10 +1364,13 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 			}
 		}
 	}
+	if p.IsPlugin() {
+		req.Header.Set(provider.ConversationHeader, conversationID(in, body))
+	}
 	if err := p.Sign(ctx, req, to, body); err != nil {
 		return nil, err
 	}
-	return s.client.Do(req)
+	return p.Do(s.client, req)
 }
 
 // fromClaudeCode is a request Claude Code sent, by the User-Agent it gives
@@ -1359,6 +1395,31 @@ func claudeCodeHeader(k string) bool {
 	return false
 }
 
+// fromCodex is a request Codex sent — its CLI, exec, the IDE extension or
+// the desktop app — by the User-Agent (codex_cli_rs/0.159.2 (Mac OS 26.6.0;
+// arm64) kitty, Codex Desktop/0.162.3 …) or the originator it gives
+// (codex_cli_rs, codex_exec, codex_vscode, Codex Desktop).
+func fromCodex(in http.Header) bool {
+	for _, v := range []string{in.Get("User-Agent"), in.Get("originator")} {
+		if strings.HasPrefix(strings.ToLower(v), "codex") {
+			return true
+		}
+	}
+	return false
+}
+
+// codexClientHeader is one of the headers Codex tells itself by to an API
+// it talks to with a key: its User-Agent and originator, the session and
+// thread (session-id, thread-id), and what codexHeader lets through. Never
+// the key it was given, nor its sign-in's attestation.
+func codexClientHeader(k string) bool {
+	switch strings.ToLower(k) {
+	case "user-agent", "originator", "session-id", "thread-id":
+		return true
+	}
+	return codexHeader(k)
+}
+
 // passthrough relays a request the provider understands as-is, with the
 // model name swapped for the provider's own. The token counts the reply
 // carries are read on the way past into u. done is false, with nothing
@@ -1373,6 +1434,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		if p.Account == nil || p.Account.Agent != "codex" {
 			body, searchFn = searchAsFunction(body)
 		}
+		body = forVendor(p, body)
 	case provider.Chat:
 		body = developerAsSystem(body)
 		if strings.HasSuffix(p.Host(), "openai.com") || p.IsAzure() {

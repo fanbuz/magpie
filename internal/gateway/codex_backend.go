@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -465,11 +466,21 @@ func codexHeader(k string) bool {
 // conversation, as Codex names it in x-openai-subagent: "guardian" (auto
 // review of an approval), "review", "compact", "memory_consolidation",
 // "thread_title", "collab_spawn"… A turn Codex sends on Luna Reserve, once
-// the plan's own allowance is used up, is "luna_reserve".
+// the plan's own allowance is used up, is "luna_reserve". A call Codex
+// makes on a hidden thread of its own goes without x-openai-subagent: its
+// x-codex-turn-metadata names the thread's source instead — "thread_title"
+// for the title of a new chat (#314), "guardian_review". A web search
+// magpie runs for a model that can't search is "web_search".
 func callKind(h http.Header) string {
 	v := strings.TrimSpace(h.Get("x-openai-subagent"))
 	if v == "" && h.Get("x-openai-memgen-request") != "" {
 		v = "memgen"
+	}
+	if v == "" {
+		v = threadSource(h.Get("x-codex-turn-metadata"))
+	}
+	if v == "" && h.Get("User-Agent") == SearchAgent {
+		v = "web_search"
 	}
 	if v == "" && h.Get("x-openai-codex-luna-reserve") != "" {
 		v = "luna_reserve"
@@ -478,6 +489,29 @@ func callKind(h http.Header) string {
 		v = v[:40]
 	}
 	return v
+}
+
+// threadSource is the source Codex's turn metadata gives the thread a call
+// was made on, when that isn't the user's conversation or a subagent's
+// (which x-openai-subagent names): a feature's own thread, as Codex's
+// ThreadSource has it — "thread_title", "guardian_review",
+// "memory_consolidation".
+func threadSource(meta string) string {
+	if !strings.Contains(meta, "thread_source") {
+		return ""
+	}
+	var m struct {
+		Source string `json:"thread_source"`
+	}
+	if json.Unmarshal([]byte(meta), &m) != nil {
+		return ""
+	}
+	switch s := strings.TrimSpace(m.Source); s {
+	case "", "user", "subagent":
+		return ""
+	default:
+		return s
+	}
 }
 
 func copyHeaders(dst, src http.Header) {
@@ -641,6 +675,81 @@ func codexInput(body []byte, magpieModel bool) (_ []byte, compact bool) {
 		return body, false
 	}
 	return nb, compact
+}
+
+// openaiOnly are the parts of a Responses request Codex sends only to a
+// provider named "OpenAI": its built-in one (signed in, through
+// openai_base_url), or CC Switch's table so named for remote compaction.
+// Under any other name Codex leaves them out itself (client.rs, !is_openai).
+var openaiOnly = [][]byte{[]byte(`"internal_chat_message_metadata_passthrough"`),
+	[]byte(`"encrypted_function_args"`), []byte(`"stream_options"`), []byte(`"configuration_update"`)}
+
+// forVendor is a Responses request as Codex sends it to a provider not
+// OpenAI's: without its messages' internal metadata, a call's
+// encrypted_function_args, stream_options' reasoning_summary_delivery and
+// configuration_update items.
+// A relay that checks it is Codex's turned the lot away ("invalid codex
+// request", #292). OpenAI's API and the ChatGPT backend get it as it came;
+// so does anything else, byte for byte, when none of them is in it.
+func forVendor(p provider.Provider, body []byte) []byte {
+	if p.Account != nil && p.Account.Agent == "codex" || strings.HasSuffix(p.Host(), "openai.com") {
+		return body
+	}
+	if !slices.ContainsFunc(openaiOnly, func(k []byte) bool { return bytes.Contains(body, k) }) {
+		return body
+	}
+	var q map[string]json.RawMessage
+	if json.Unmarshal(body, &q) != nil {
+		return body
+	}
+	changed := false
+	// Codex's stream_options holds reasoning_summary_delivery alone; another
+	// client's other options stay
+	var so map[string]json.RawMessage
+	if json.Unmarshal(q["stream_options"], &so) == nil {
+		if _, ok := so["reasoning_summary_delivery"]; ok {
+			changed = true
+			delete(so, "reasoning_summary_delivery")
+			if q["stream_options"], _ = marshalPlain(so); len(so) == 0 {
+				delete(q, "stream_options")
+			}
+		}
+	}
+	var items []json.RawMessage
+	if json.Unmarshal(q["input"], &items) == nil {
+		out := items[:0]
+		for _, raw := range items {
+			var it map[string]json.RawMessage
+			if json.Unmarshal(raw, &it) != nil {
+				out = append(out, raw)
+				continue
+			}
+			if string(it["type"]) == `"configuration_update"` {
+				changed = true
+				continue
+			}
+			_, meta := it["internal_chat_message_metadata_passthrough"]
+			_, sealed := it["encrypted_function_args"]
+			if meta || sealed {
+				changed = true
+				delete(it, "internal_chat_message_metadata_passthrough")
+				delete(it, "encrypted_function_args")
+				raw, _ = marshalPlain(it)
+			}
+			out = append(out, raw)
+		}
+		if changed {
+			q["input"], _ = marshalPlain(out)
+		}
+	}
+	if !changed {
+		return body
+	}
+	nb, err := marshalPlain(q)
+	if err != nil {
+		return body
+	}
+	return nb
 }
 
 func userMessage(text string) map[string]any {

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"regexp"
+	"slices"
 	"sync"
 	"time"
 
@@ -245,9 +246,17 @@ type sealedItem struct {
 	Enc  string `json:"encrypted_content"`
 }
 
-// seals are the sealed reasoning (encrypted_content) in a Responses
-// request's input.
-func seals(body []byte) [][sha256.Size]byte {
+// sealedKinds are the input items a vendor seals for itself: its
+// reasoning, and the compaction a conversation's earlier turns were
+// folded into (OpenAI's, when Codex compacts on its own models; magpie's
+// own is text by the time a request is sent).
+var sealedKinds = map[string]bool{"reasoning": true, "compaction": true, "compaction_summary": true}
+
+var compactionKinds = []string{"compaction", "compaction_summary"}
+
+// seals are the sealed reasoning and compactions (encrypted_content) in a
+// Responses request's input, of these types.
+func seals(body []byte, kinds ...string) [][sha256.Size]byte {
 	var q struct {
 		Input []sealedItem `json:"input"`
 	}
@@ -256,17 +265,17 @@ func seals(body []byte) [][sha256.Size]byte {
 	}
 	var out [][sha256.Size]byte
 	for _, it := range q.Input {
-		if it.Type == "reasoning" && it.Enc != "" {
+		if slices.Contains(kinds, it.Type) && it.Enc != "" {
 			out = append(out, sha256.Sum256([]byte(it.Enc)))
 		}
 	}
 	return out
 }
 
-// refused notes that who turned away the sealed reasoning in body, in the
-// conversation key names.
-func refused(key, who string, body []byte) {
-	ss := seals(body)
+// refused notes that who turned away the sealed items of these types in
+// body, in the conversation key names.
+func refused(key, who string, body []byte, kinds ...string) {
+	ss := seals(body, kinds...)
 	if len(ss) == 0 {
 		return
 	}
@@ -293,7 +302,8 @@ func refused(key, who string, body []byte) {
 }
 
 // withoutRefused takes out of a Responses request the sealed reasoning
-// who already refused in this conversation; the rest stays as it is.
+// and compactions who already refused in this conversation; the rest
+// stays as it is.
 func withoutRefused(key, who string, body []byte) ([]byte, bool) {
 	k := key + "|" + who
 	refusedSeals.Lock()
@@ -317,7 +327,7 @@ func withoutRefused(key, who string, body []byte) ([]byte, bool) {
 	kept := items[:0:0]
 	for _, it := range items {
 		var t sealedItem
-		if json.Unmarshal(it, &t) == nil && t.Type == "reasoning" && t.Enc != "" && r.seals[sha256.Sum256([]byte(t.Enc))] {
+		if json.Unmarshal(it, &t) == nil && sealedKinds[t.Type] && t.Enc != "" && r.seals[sha256.Sum256([]byte(t.Enc))] {
 			continue
 		}
 		kept = append(kept, it)
@@ -334,6 +344,32 @@ func withoutRefused(key, who string, body []byte) ([]byte, bool) {
 // input — what another account wrote and this one can't read. What was
 // said and done stays; only the model's private notes to itself go.
 func withoutReasoning(body []byte) ([]byte, bool) {
+	return withoutKinds(body, "reasoning")
+}
+
+// withoutCompaction takes out of a Responses request's input the sealed
+// compaction of its earlier turns — OpenAI's, which no other vendor or
+// account can read (waroy: Grok's "Could not decrypt the provided
+// encrypted_content" with the reasoning already gone). What the turns
+// since said and did stays; the summary of those before goes.
+func withoutCompaction(body []byte) ([]byte, bool) {
+	var q struct {
+		Input []sealedItem `json:"input"`
+	}
+	if json.Unmarshal(body, &q) != nil {
+		return nil, false
+	}
+	for _, it := range q.Input {
+		if slices.Contains(compactionKinds, it.Type) && it.Enc != "" {
+			return withoutKinds(body, compactionKinds...)
+		}
+	}
+	return nil, false
+}
+
+// withoutKinds is a Responses request without its input items of these
+// types.
+func withoutKinds(body []byte, kinds ...string) ([]byte, bool) {
 	var q map[string]json.RawMessage
 	if json.Unmarshal(body, &q) != nil {
 		return nil, false
@@ -347,7 +383,7 @@ func withoutReasoning(body []byte) ([]byte, bool) {
 		var t struct {
 			Type string `json:"type"`
 		}
-		if json.Unmarshal(it, &t) == nil && t.Type == "reasoning" {
+		if json.Unmarshal(it, &t) == nil && slices.Contains(kinds, t.Type) {
 			continue
 		}
 		kept = append(kept, it)

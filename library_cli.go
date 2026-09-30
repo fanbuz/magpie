@@ -20,6 +20,8 @@ const libraryUsage = `magpie library                     what the library gives 
   magpie library skill agents <name> <a,b…|none>
   magpie library skill rm <name>     (skills are installed from the app's Library page)
   magpie library skill update [name] fetch a skill from GitHub again; with no name, every one from there
+  magpie library skill use-library <name> <agent>   an agent's own skill by that name is in the way: set it aside, link the library's
+  magpie library skill keep-own <name> <agent>      …or keep the agent's, and take the agent off the library's
   magpie library rtk                 which agents run their shell commands through RTK (rtk-ai.app), to save tokens
   magpie library rtk on|off <agent>  switch it (on with RTK's own installer; off works with RTK gone)
   magpie library rtk install         install RTK (Homebrew, winget, or RTK's own script)
@@ -112,6 +114,10 @@ func libraryCmd(args []string) error {
 			}
 		case len(rest) == 2 && rest[0] == "rm":
 			res, err = library.RemoveSkill(rest[1])
+		case len(rest) == 3 && rest[0] == "use-library":
+			res, err = library.UseLibrarySkill(rest[1], rest[2])
+		case len(rest) == 3 && rest[0] == "keep-own":
+			res, err = library.KeepAgentSkill(rest[1], rest[2])
 		case len(rest) == 2 && rest[0] == "update":
 			if res, err = library.UpdateSkill(rest[1]); err == nil {
 				fmt.Println(green.Render("✓"), rest[1], "is up to date")
@@ -169,6 +175,10 @@ func printLibraryResult(res *library.Result) {
 	}
 	for _, p := range res.Problems {
 		fmt.Println(amber.Render("!"), p.Agent, muted.Render(p.What+":"), p.Error)
+		if n, ok := strings.CutPrefix(p.What, "skill:"); ok && p.Own {
+			fmt.Println(muted.Render("  use the library's (the agent's kept aside): magpie library skill use-library " + n + " " + p.Agent))
+			fmt.Println(muted.Render("  or keep the agent's:                       magpie library skill keep-own " + n + " " + p.Agent))
+		}
 	}
 	if len(res.Updated) > 0 {
 		fmt.Println(green.Render("✓"), "up to date:", strings.Join(res.Updated, ", "))

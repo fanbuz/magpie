@@ -74,10 +74,16 @@ func main() {
 	}
 }
 
+// trayK is the tray bird's size in its 22pt square: drawn to the edges it
+// was a full 22pt wide, bigger than the menu bar's own glyphs (@SherlockYoYo:
+// 感觉这只鸟有些大); at .8 it is about 18pt by 14pt, centred.
+const trayK = 0.8
+
 // tray draws the silhouette as a macOS template image (black + alpha).
 func tray() image.Image {
 	const S = 44
-	cov := coverage(parse(smallSVG), S, 8, 1, 0, 0)
+	off := S / 2 * (1 - trayK)
+	cov := coverage(parse(smallSVG), S, 8, trayK, off, off)
 	img := image.NewNRGBA(image.Rect(0, 0, S, S))
 	for i, a := range cov {
 		img.SetNRGBA(i%S, i/S, color.NRGBA{0, 0, 0, uint8(a*255 + 0.5)})
@@ -131,7 +137,9 @@ func trayFlap(dir string, S int) error {
 			for i, r := range rings {
 				moved[i] = make([][2]float64, len(r))
 				for j, p := range r {
-					moved[i][j] = turn(turn(p, at, deg), bobAt, bob)
+					q := turn(turn(p, at, deg), bobAt, bob)
+					// shrunk about the middle, as tray() draws the still bird
+					moved[i][j] = [2]float64{22 + (q[0]-22)*trayK, 22 + (q[1]-22)*trayK}
 				}
 			}
 			return mask(moved, S*ss, k*ss)

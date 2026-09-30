@@ -53,6 +53,9 @@ type SignInState struct {
 	Code          string `json:"code,omitempty"`          // what to type there, for a device code
 	State         string `json:"state"`                   // installing, waiting, done, failed or canceled
 	PasteCallback bool   `json:"pasteCallback,omitempty"` // a callback URL can also finish this sign-in
+	// PasteCode is a plugin's sign-in finished by the code its page shows
+	PasteCode    bool   `json:"pasteCode,omitempty"`
+	Instructions string `json:"instructions,omitempty"` // a plugin's words for its page
 	// Installing is the CLI being installed before the sign-in can start
 	Installing string `json:"installing,omitempty"`
 	User       string `json:"user,omitempty"`  // the account, once done
@@ -71,6 +74,7 @@ type signInFlow struct {
 	stop     func() // ends an agent's own login command, when that is the sign-in
 	kiro     *kiroFlow
 	site     string // where to sign in, for an agent with more than one (ZCode: "zai" or "bigmodel")
+	plugin   string // a plugin's sign-in session, finished with the code pasted back
 	done     chan struct{}
 }
 
@@ -349,14 +353,18 @@ func CancelSignIn(id string) {
 }
 
 // SubmitSignInCallback finishes a browser sign-in whose callback could not
-// reach this machine. No sign-in magpie makes now takes one (PasteCallback is
-// never set); the route and the page's field stay for one that will.
+// reach this machine, or a plugin's with the code its page showed. No
+// built-in sign-in takes a callback now (PasteCallback is never set); the
+// route and the page's field stay for one that will.
 func SubmitSignInCallback(id, raw string) error {
 	signIns.Lock()
-	_, ok := signIns.m[id]
+	s, ok := signIns.m[id]
 	signIns.Unlock()
 	if !ok {
 		return errors.New("no such sign-in")
+	}
+	if s.plugin != "" {
+		return s.pluginCode(raw)
 	}
 	return errors.New("this sign-in can't be finished from a pasted address")
 }

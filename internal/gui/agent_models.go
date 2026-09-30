@@ -28,7 +28,8 @@ type agentModelJSON struct {
 	Icon  string   `json:"icon,omitempty"`
 	Icons []string `json:"icons,omitempty"`
 	// Logo is its maker's: known by the model's family, or its provider's
-	// when that is the maker; "" when neither says
+	// when that is the maker; "" when neither says, and for a group, which
+	// has Icons
 	Logo    string `json:"logo,omitempty"`
 	Context int    `json:"context,omitempty"`
 	Hidden  bool   `json:"hidden,omitempty"`
@@ -92,12 +93,8 @@ func agentModelList(a *agent.Agent) []agentModelJSON {
 		}
 		m.Logo = agent.ModelIcon(e.Model)
 		if e.Group != "" {
-			// a group's first member says nothing of the others: known by
-			// the name it was given, or its id
-			m.Group, m.Icons = agent.RoutingGroups, e.Icons
-			if m.Logo = agent.ModelIcon(m.Name); m.Logo == "" {
-				m.Logo = agent.ModelIcon(e.Group)
-			}
+			// a group shows its providers' icons, as it does everywhere else
+			m.Group, m.Icons, m.Logo = agent.RoutingGroups, e.Icons, ""
 		} else if m.Logo == "" {
 			if p := provider.Preset(e.Provider.Preset); p != nil && p.Kind == provider.KindVendor {
 				m.Logo = e.Provider.Icon

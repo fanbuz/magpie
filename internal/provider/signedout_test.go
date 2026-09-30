@@ -74,6 +74,44 @@ func TestSavedButSignedOutClaudeSaysWhy(t *testing.T) {
 	}
 }
 
+// A saved Claude account whose Claude Code is signed out (a banned account
+// logged out, say) names its accounts, so they can be removed from magpie
+// while none is offered; removing one drops it from magpie's store and
+// leaves Claude Code's own files as they are.
+func TestSavedButSignedOutCanBeRemoved(t *testing.T) {
+	home := claudeHome(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	if err := writeLogins([]savedLogin{
+		{Agent: "claude", User: "banned@x.com", Auth: []byte(`{}`)},
+		{Agent: "codex", User: "c@x.com", Auth: []byte(`{}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var claude *Exclusion
+	for _, x := range Excluded() {
+		if x.Agent == "claude" && x.SignedOut {
+			claude = &x
+		}
+	}
+	if claude == nil || len(claude.Users) != 1 || claude.Users[0] != "banned@x.com" {
+		t.Fatalf("claude: %+v", claude)
+	}
+	if err := ForgetLogin("claude", "banned@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range Excluded() {
+		if x.Agent == "claude" {
+			t.Errorf("removed, yet: %+v", x)
+		}
+	}
+	if ls := readLogins(); len(ls) != 1 || ls[0].Agent != "codex" {
+		t.Errorf("logins: %+v", ls)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude")); !os.IsNotExist(err) {
+		t.Errorf("Claude Code's folder was touched: %v", err)
+	}
+}
+
 // Claude Code's sign-in is read from the keychain as Claude Code reads it,
 // under its account: another item for the same service (one an earlier
 // sign-in left) that comes first by service alone isn't taken for it.

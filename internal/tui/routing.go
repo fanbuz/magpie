@@ -34,7 +34,7 @@ func (m *model) reloadGroups() {
 	m.grow = clamp(m.grow, len(m.groups))
 }
 
-var routings = []string{"", provider.Ordered, provider.Rotate, provider.LeastUsed}
+var routings = []string{"", provider.Ordered, provider.Rotate, provider.LeastUsed, provider.Manual}
 
 func routingName(v string) string {
 	switch v {
@@ -44,8 +44,18 @@ func routingName(v string) string {
 		return "rotate"
 	case provider.LeastUsed:
 		return "least used"
+	case provider.Manual:
+		return "manual"
 	}
 	return "smart"
+}
+
+// groupRouting is how a group routes: a manual one names its pick.
+func groupRouting(g provider.Group) string {
+	if g.Routing == provider.Manual {
+		return "manual → " + g.Picked()
+	}
+	return routingName(g.Routing)
 }
 
 func staysName(v string) string {
@@ -509,7 +519,7 @@ func (m model) viewGroups() string {
 			b.WriteString(line + "\n")
 			continue
 		}
-		notes := []string{fmt.Sprintf("%d model%s", len(g.Members), plural(len(g.Members))), routingName(g.Routing)}
+		notes := []string{fmt.Sprintf("%d model%s", len(g.Members), plural(len(g.Members))), groupRouting(g)}
 		if g.Affinity != "" {
 			notes = append(notes, staysName(g.Affinity))
 		}
@@ -537,7 +547,7 @@ func (m model) viewGroup() string {
 	var b strings.Builder
 	b.WriteString(m.header("routing", g.Name))
 	b.WriteString("\n\n")
-	head := []string{provider.GroupPrefix + g.ID, routingName(g.Routing), staysName(g.Affinity)}
+	head := []string{provider.GroupPrefix + g.ID, groupRouting(g), staysName(g.Affinity)}
 	if g.Context > 0 {
 		head = append(head, "context "+fmtTokens(g.Context))
 	}

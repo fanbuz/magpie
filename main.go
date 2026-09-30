@@ -50,6 +50,7 @@ const usage = `magpie — one place to pick every agent's model
   magpie backup [--no-keys] [--no-library] [file]    providers, keys, settings, profiles, agent models and the library in one file, sealed with a passphrase
   magpie restore [--no-agents] [--no-library] <file> put a backup in on this machine
   magpie webdav [on <address>|set k=v…|now|off]      the same, kept the same on every computer through a WebDAV folder (magpie webdav help)
+  magpie s3 [on s3://<bucket>[/<prefix>]|set k=v…|now|off]   the same through an S3-compatible bucket: AWS, R2, B2, MinIO… (magpie s3 help)
 
   magpie library [sync|instructions|mcp|skill]   the instructions, MCP servers and skills written into every agent (magpie library help)
 
@@ -74,6 +75,8 @@ const usage = `magpie — one place to pick every agent's model
   magpie accounts refresh         renew the saved Claude and ChatGPT sign-ins now (the gateway does it daily)
   magpie accounts checkin         WorkBuddy's daily check-in (签到) for each WorkBuddy account, now (Settings can do it daily)
   magpie accounts project <gemini|antigravity> <email> <project>   the Google Cloud project a Google account's requests go to
+  magpie plugin [add <package>|rm|update|on|off|login <provider>|logout <provider>]
+                                  OpenCode provider plugins: subscriptions signed in to, and served, through a plugin
 
   magpie serve                    run the gateway alone (the app runs it too)
   magpie mcp image                the image generation MCP server an agent is given from the library (stdio)
@@ -216,6 +219,10 @@ func run(args []string) error {
 		return restoreCmd(args[1:])
 	case "webdav", "dav":
 		return webdavCmd(args[1:])
+	case "plugin", "plugins":
+		return pluginCmd(args)
+	case "s3":
+		return s3Cmd(args[1:])
 	case "mcp":
 		return imagemcp.Run(args[1:])
 	case "claude-mcp-helper": // internal: stdio MCP subprocess spawned by Claude Code

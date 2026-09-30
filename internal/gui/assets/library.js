@@ -299,12 +299,24 @@
     };
   }
   // take is the page as magpie answered it, with the rows still being
-  // written kept as they were last clicked
+  // written kept as they were last clicked. A server or skill added,
+  // removed or renamed changes what the market calls added (#300): one gone
+  // from the library loses its mark at once, and the market is asked again.
   function take(v) {
+    const was = lib && shelf();
     lib = v;
     for (const w of writing.values()) {
       const x = lib[w.list].find((y) => y.name === w.name);
       if (x) x.agents = w.want;
+    }
+    if (!was || shelf() === was) return;
+    for (const [kind, list] of [["mcp", lib.servers], ["skills", lib.skills]]) {
+      const m = market[kind];
+      if (!m.items) continue;
+      const names = new Set((list || []).map((x) => x.name));
+      for (const x of m.items) if (x.have && !names.has(x.have)) x.have = "";
+      drawMarket(kind);
+      fetchMarket(kind);
     }
   }
   function morphChips(box, fresh) {
@@ -387,7 +399,20 @@
       const li = el("li");
       const who = p.what.startsWith("project:") ? tilde(p.agent) : p.agent ? nameOf(p.agent) : "";
       if (who) li.append(el("b", "", who), el("span", "lib-problems-sep", " · "));
-      li.append(el("span", "", problemWhat(p.what)), el("span", "lib-problems-err", p.error));
+      // an agent's own skill in the library's way is settled right here:
+      // the library's in its place (the agent's kept aside), or the agent's
+      const own = p.own && p.what.startsWith("skill:") && p.agent;
+      const name = own && p.what.slice("skill:".length);
+      li.append(el("span", "", problemWhat(p.what)), el("span", "lib-problems-err", own ? t("{agent} has a skill of its own called {name}, not the same as the library's", { agent: who, name }) : p.error));
+      if (own) {
+        const fix = el("div", "lib-problems-fix");
+        const use = button(t("Use the library's"), "action", () => change("skills/use-library", { name, agent: p.agent }, t("{agent} has the library's {name} now; its own is kept with the backups", { agent: who, name })));
+        use.title = t("Sets {agent}'s own {name} aside with the backups and gives it the library's in its place", { agent: who, name });
+        const keep = button(t("Keep {agent}'s", { agent: who }), "action", () => change("skills/keep-own", { name, agent: p.agent }, t("{agent} keeps its own {name}", { agent: who, name })));
+        keep.title = t("{agent} keeps its own {name}, and the library no longer gives it this skill", { agent: who, name });
+        fix.append(use, keep);
+        li.append(fix);
+      }
       ul.append(li);
     }
     card.append(ttl, ul);
@@ -1173,7 +1198,7 @@
       if (d.transport === "stdio") Object.assign(body.server, { command: d.command, args: d.args, env: d.env });
       else Object.assign(body.server, { url: d.url, headers: d.headers });
       try {
-        lib = await api("library/servers/save", body);
+        take(await api("library/servers/save", body));
         report(lib.result, s ? t("{name} saved", { name: d.name }) : "");
         closeLibModal();
         render();
@@ -1244,9 +1269,9 @@
       for (const f of found.filter((x) => pick.has(x.name))) {
         try {
           last = await api("library/servers/save", { old: "", server: { ...f, agents: who.filter((id) => reaches(f)(agentOf(id))) } });
-        } catch (e) { err.textContent = f.name + ": " + e.message; go.disabled = false; if (last) { lib = last; render(); } return; }
+        } catch (e) { err.textContent = f.name + ": " + e.message; go.disabled = false; if (last) { take(last); render(); } return; }
       }
-      lib = last;
+      take(last);
       report(lib.result, t("Added {n} servers", { n: pick.size }));
       closeLibModal();
       render();
@@ -1307,6 +1332,19 @@
     if (lib.foundSkills.length) {
       const rh = el("div", "row-head");
       rh.append(el("span", "label", t("In your agents")), el("span", "grow"), el("span", "note", t("not in the library — bring one in to give it to the others")));
+      // every one at once, rather than a click for each
+      if (lib.foundSkills.length > 1) {
+        const names = lib.foundSkills.map((f) => f.name);
+        const all = button(t("Bring in all"), "action lib-updall lib-importall", async (e, b) => {
+          b.classList.add("busy");
+          b.textContent = t("Bringing in…");
+          await importAllSkills(names);
+          b.classList.remove("busy");
+          b.textContent = t("Bring in all");
+        });
+        all.title = t("Brings the {n} skills into the library: the agents that have them go on having them, and you can give them to the others", { n: names.length });
+        rh.append(all);
+      }
       body.append(rh);
       const list = el("div", "list lib-list");
       for (const f of lib.foundSkills) list.append(foundSkillRow(f));
@@ -1888,6 +1926,23 @@
     }
   }
 
+  // Every skill found in the agents brought in at once: one that couldn't be
+  // is said, and the others are brought in all the same.
+  async function importAllSkills(names) {
+    try {
+      const v = await api("library/skills/import-all", { names });
+      take(v);
+      const res = v.result || {}, no = res.unimported || [];
+      if (no.length) {
+        const p = no[0];
+        status(t("{name} wasn't brought in: {error}", { name: p.what.replace(/^skill:/, ""), error: p.error }) + (no.length > 1 ? " " + t("(and {n} more)", { n: no.length - 1 }) : ""), "warn", 8000);
+      } else report(res, t("{n} skills are in the library now", { n: names.length }));
+      render();
+    } catch (e) {
+      status(e.message, "err", 6000);
+    }
+  }
+
   // Which skills GitHub changed since they were installed: each row says,
   // and the heading offers to update just those.
   async function checkSkills() {
@@ -2130,13 +2185,15 @@
     if (f.shared) { const src = el("div", "lib-src"); src.append(el("span", "", t("shared in")), pathLink(f.shared)); who.append(src); }
     if (f.link) { const src = el("div", "lib-src"); src.append(el("span", "", t("linked from")), pathLink(f.link)); who.append(src); }
     const have = el("div", "lib-have");
-    for (const id of f.agents) { const a = agentOf(id); if (a) { const i = agentIcon(a.icon); i.title = a.name; have.append(i); } }
+    // an agent with a copy of the very same files has it as much as one
+    // with the folder itself: it isn't said to differ
+    for (const id of [...f.agents, ...(f.copies || [])]) { const a = agentOf(id); if (a) { const i = agentIcon(a.icon); i.title = f.agents.includes(id) ? a.name : a.name + " — " + t("{agents} has the very same files; bringing it in gives it the library's, its copy kept with the backups", { agents: a.name }); have.append(i); } }
     row.append(glyph(GLYPH.skill), who, have);
     if (f.others?.length) row.append(tag(t("differs in {agents}", { agents: f.others.map(nameOf).join(", ") }), "warn", t("{agents} has another skill by this name; bringing this one in leaves that one as it is", { agents: f.others.map(nameOf).join(", ") })));
     const b = button(t("Bring in"), "action", () => change("skills/import", { name: f.name }, t("{name} is in the library now", { name: f.name })));
     b.title = f.shared ? t("Keeps it where it is in the shared skills folder and links to it: you can give it to any agent")
-      : f.link ? t("Keeps a link to where it is: {agents} go on having it, and you can give it to the others", { agents: f.agents.map(nameOf).join(", ") })
-      : t("Moves it into the library and links it back: {agents} go on having it, and you can give it to the others", { agents: f.agents.map(nameOf).join(", ") });
+      : f.link ? t("Keeps a link to where it is: {agents} go on having it, and you can give it to the others", { agents: [...f.agents, ...(f.copies || [])].map(nameOf).join(", ") })
+      : t("Moves it into the library and links it back: {agents} go on having it, and you can give it to the others", { agents: [...f.agents, ...(f.copies || [])].map(nameOf).join(", ") });
     row.append(b);
     return row;
   }
@@ -2338,7 +2395,7 @@
     const body = { id: x.id, values };
     if (agents) body.agents = agents;
     const ok = await change("market/server", body, t("{name} is in the library now", { name: x.title || x.name }));
-    if (ok) { x.have = x.name; drawMarket("mcp"); fetchMarket("mcp"); }
+    if (ok) { x.have = x.name; drawMarket("mcp"); } // take asked the market again
     return ok;
   }
 
@@ -2439,7 +2496,7 @@
     const body = { source: x.source, id: x.skillId };
     if (agents) body.agents = agents;
     const ok = await change("market/skill", body, t("{name} is in the library now", { name: x.name }));
-    if (ok) { x.have = x.name; drawMarket("skills"); fetchMarket("skills"); }
+    if (ok) { x.have = x.name; drawMarket("skills"); } // take asked the market again
     return ok;
   }
 
@@ -2502,12 +2559,10 @@
   // in another window or through the CLI meanwhile. Not over an open dialog,
   // unsaved text, or a lookup under way.
   page.addEventListener("scroll", () => page.querySelector(".lib-head")?.classList.toggle("stuck", page.scrollTop > 0), { passive: true });
-  // What changed there changes what the market calls added, too.
+  // What changed there changes what the market calls added, too: take asks it again.
   async function quietLoad() {
     if (page.hidden || modal || dirty() || probing) return;
-    const was = shelf();
     await load(true);
-    if (shelf() !== was) for (const kind of ["mcp", "skills"]) if (market[kind].items) fetchMarket(kind);
   }
   const shelf = () => JSON.stringify([lib?.servers?.map((x) => x.name), lib?.skills?.map((x) => x.name)]);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) quietLoad(); });

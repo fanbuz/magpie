@@ -24,6 +24,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -862,18 +863,27 @@ func renderParts(blocks []map[string]any, text *strings.Builder, parts []Part) [
 			fmt.Fprintf(text, "\n[tool call %s id=%s args=%s]", p.Name, p.ID, argsString(p))
 		case ToolResult:
 			fmt.Fprintf(text, "\n[tool result id=%s%s]\n%s", p.CallID, map[bool]string{true: " error"}[p.IsError], p.Text)
+			// the images the tool returned follow its text
+			for _, im := range p.Images {
+				blocks = imageBlocks(blocks, text, im)
+			}
 		case Image:
-			if text.Len() > 0 {
-				blocks = append(blocks, map[string]any{"type": "text", "text": text.String()})
-				text.Reset()
-			}
-			switch {
-			case p.Data != "":
-				blocks = append(blocks, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": p.MediaType, "data": p.Data}})
-			case p.URL != "":
-				blocks = append(blocks, map[string]any{"type": "image", "source": map[string]any{"type": "url", "url": p.URL}})
-			}
+			blocks = imageBlocks(blocks, text, p)
 		}
+	}
+	return blocks
+}
+
+func imageBlocks(blocks []map[string]any, text *strings.Builder, p Part) []map[string]any {
+	if text.Len() > 0 {
+		blocks = append(blocks, map[string]any{"type": "text", "text": text.String()})
+		text.Reset()
+	}
+	switch {
+	case p.Data != "":
+		blocks = append(blocks, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": p.MediaType, "data": p.Data}})
+	case p.URL != "":
+		blocks = append(blocks, map[string]any{"type": "image", "source": map[string]any{"type": "url", "url": p.URL}})
 	}
 	return blocks
 }
@@ -891,20 +901,32 @@ func closeBlocks(blocks []map[string]any, text *strings.Builder) []map[string]an
 // findRun is the run the request's new tool results are for, and those
 // results: the ones sent since the last assistant message. They are the
 // run's when one of them is a call it made; the rest it hasn't made yet.
+// An image sent beside the results, as a client whose tool messages hold
+// text only sends a tool's (Chat), goes with the result before it.
 func (b *subscriptionBridge) findRun(req *Request) (*subscriptionRun, []Part) {
-	var fresh []Part
-	for i := len(req.Messages) - 1; i >= 0 && req.Messages[i].Role != "assistant"; i-- {
-		var parts []Part
-		for _, p := range req.Messages[i].Parts {
-			if p.Kind == ToolResult {
-				parts = append(parts, p)
+	i := len(req.Messages)
+	for i > 0 && req.Messages[i-1].Role != "assistant" {
+		i--
+	}
+	var fresh, loose []Part
+	for _, m := range req.Messages[i:] {
+		for _, p := range m.Parts {
+			switch {
+			case p.Kind == ToolResult:
+				p.Images = slices.Clone(p.Images)
+				fresh = append(fresh, p)
+			case p.Kind == Image && len(fresh) > 0:
+				last := &fresh[len(fresh)-1]
+				last.Images = append(last.Images, p)
+			case p.Kind == Image:
+				loose = append(loose, p)
 			}
 		}
-		fresh = append(parts, fresh...)
 	}
 	if len(fresh) == 0 {
 		return nil, nil
 	}
+	fresh[0].Images = append(loose, fresh[0].Images...)
 	// Claude emits message_stop just before its MCP calls are all scheduled.
 	// A very fast client can return a result while the callback is still being
 	// registered; give that tiny race a bounded grace period.
@@ -956,7 +978,7 @@ func (r *subscriptionRun) continueWith(results []Part) (<-chan Event, error) {
 	}
 	delivered := 0
 	for _, p := range results {
-		result := mcpToolResult{Content: []map[string]any{{"type": "text", "text": p.Text}}, IsError: p.IsError}
+		result := mcpResult(p)
 		r.mu.Lock()
 		waiter := r.pending[p.CallID]
 		delete(r.pending, p.CallID)
@@ -985,6 +1007,34 @@ func (r *subscriptionRun) continueWith(results []Part) (<-chan Event, error) {
 		r.resume()
 	}
 	return ch, nil
+}
+
+// mcpResult is a tool result as an MCP tools/call answers: its text, then
+// the images the tool returned as MCP image content, which Claude Code hands
+// its model as image blocks. MCP carries an image's bytes only, so one known
+// by its URL alone is named in text.
+func mcpResult(p Part) mcpToolResult {
+	content := []map[string]any{{"type": "text", "text": p.Text}}
+	for _, im := range p.Images {
+		switch {
+		case im.Data != "":
+			content = append(content, map[string]any{"type": "image", "data": im.Data, "mimeType": imageMediaType(im)})
+		case im.URL != "":
+			content = append(content, map[string]any{"type": "text", "text": "[image: " + im.URL + "]"})
+		}
+	}
+	return mcpToolResult{Content: content, IsError: p.IsError}
+}
+
+// imageMediaType is an inline image's type, read from its bytes when the
+// client did not say.
+func imageMediaType(p Part) string {
+	if p.MediaType != "" {
+		return p.MediaType
+	}
+	head := p.Data[:min(len(p.Data), 64)]
+	b, _ := base64.StdEncoding.DecodeString(head[:len(head)/4*4])
+	return http.DetectContentType(b)
 }
 
 func callIDs(parts []Part) string {

@@ -48,13 +48,57 @@ const EffortAuto = "auto"
 // begins: a rule to put a member first, or the turn's effort.
 func (g Group) Ruled() bool { return len(g.Rules) > 0 || g.Effort == EffortAuto }
 
+// Manual is a group's routing when the user picks which member it uses,
+// as CC Switch has one provider on at a time (#317): every request goes to
+// the member picked (Group.Pick), over its own keys or accounts; the
+// others, and the rules, wait until another is picked or the group is
+// routed otherwise. The pick is changed on the group's card, in a click.
+const Manual = "manual"
+
+// Picked is the member a manual group sends to: the one the user picked
+// while it is in the group, else its first.
+func (g Group) Picked() string {
+	if slices.Contains(g.Members, g.Pick) {
+		return g.Pick
+	}
+	if len(g.Members) > 0 {
+		return g.Members[0]
+	}
+	return ""
+}
+
+// routes are the members requests to the group may go to now: a manual
+// group's pick alone, else every one.
+func (g Group) routes() []string {
+	if g.Routing == Manual {
+		if p := g.Picked(); p != "" {
+			return []string{p}
+		}
+		return nil
+	}
+	return g.Members
+}
+
+// Live is the group as the gateway routes it: a manual group's rules
+// wait (the member picked is all it sends to), though they are kept.
+func (g Group) Live() Group {
+	if g.Routing == Manual {
+		g.Rules = nil
+	}
+	return g
+}
+
 // Group is a routing group.
 type Group struct {
 	ID       string   `json:"id"`
 	Name     string   `json:"name"`
 	Members  []string `json:"members"`            // "provider/model[:effort]" or "group/<id>", in order (see MemberEffort)
-	Routing  string   `json:"routing,omitempty"`  // as Provider.Routing, over all the members' keys and accounts
+	Routing  string   `json:"routing,omitempty"`  // as Provider.Routing, over all the members' keys and accounts; or Manual
 	Affinity string   `json:"affinity,omitempty"` // as Provider.Affinity
+	// Pick is the member a Manual group sends every request to, as the
+	// user picked it on the group's card; "" is its first. It is kept
+	// while the group routes otherwise, for when it is manual again.
+	Pick string `json:"pick,omitempty"`
 	// Rules send the requests they match to one member first, in order:
 	// the first that matches decides (see Rule).
 	Rules []Rule `json:"rules,omitempty"`
@@ -282,20 +326,21 @@ func groupOf(all []Group, id string) (Group, bool) {
 // membersIn are a group's models, ready now, in its order: a group in it
 // gives its own there, as deep as they go. A model met again is left
 // where it was first — the same model at another effort is another
-// member — and a group that would be in itself is cut there.
+// member — and a group that would be in itself is cut there. A manual
+// group has only the member picked (see Manual), however deep.
 func membersIn(entries []Entry, all []Group, g Group) []Member {
 	var out []Member
 	seen := map[string]bool{}
 	var walk func(g Group, path []string, via []Group, in []string)
 	walk = func(g Group, path []string, via []Group, in []string) {
-		for _, id := range g.Members {
+		for _, id := range g.routes() {
 			at := append(slices.Clone(path), id)
 			if gid, ok := strings.CutPrefix(id, GroupPrefix); ok {
 				sub, ok := groupOf(all, gid)
 				if !ok || slices.Contains(in, gid) || len(via) >= maxNest {
 					continue // gone, a loop, or deeper than anyone nests
 				}
-				walk(sub, at, append(slices.Clone(via), sub), append(slices.Clone(in), gid))
+				walk(sub, at, append(slices.Clone(via), sub.Live()), append(slices.Clone(in), gid))
 				continue
 			}
 			model, effort := memberEffortIn(entries, id)
@@ -393,7 +438,7 @@ func groupEntries(entries []Entry) []Entry {
 		if e.ImageInput != nil && !*e.ImageInput {
 			e.Images = false
 		}
-		ruledEntry(&e, g, ms, entries)
+		ruledEntry(&e, g.Live(), ms, entries)
 		if g.Context > 0 {
 			e.Context = g.Context
 		}
@@ -440,11 +485,20 @@ func SaveGroup(g Group) error {
 			return fmt.Errorf("%s decides a group's model and effort; it holds no conversation, so it can only be the group's classifier", m)
 		}
 	}
-	if g.Routing != Ordered && g.Routing != Rotate && g.Routing != LeastUsed {
+	if g.Routing != Ordered && g.Routing != Rotate && g.Routing != LeastUsed && g.Routing != Manual {
 		g.Routing = ""
 	}
 	if !slices.Contains(Affinities, g.Affinity) {
 		g.Affinity = ""
+	}
+	if g.Pick = strings.TrimPrefix(strings.TrimSpace(g.Pick), "magpie/"); g.Pick != "" {
+		g.Pick = cleanMember(entries, g.Pick)
+	}
+	if !slices.Contains(g.Members, g.Pick) {
+		g.Pick = "" // taken out of the group: its first, when manual
+	}
+	if g.Routing == Manual && g.Pick == "" {
+		g.Pick = g.Members[0]
 	}
 	rules, err := cleanRules(g.Rules, g.Members)
 	if err != nil {
@@ -660,6 +714,9 @@ func RenameGroup(from, to string) error {
 			if r.Use == old {
 				f.Groups[i].Rules[j].Use = now
 			}
+		}
+		if f.Groups[i].Pick == old {
+			f.Groups[i].Pick = now
 		}
 		if f.Groups[i].Classifier == old {
 			f.Groups[i].Classifier = now

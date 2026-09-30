@@ -94,6 +94,8 @@
   const dayBar = el("div", "rt-days");
   const actHead = el("div", "row-head"), actNote = el("span", "note");
   const acts = el("div", "list rt-acts");
+  const actLabel = el("span", "label");
+  actHead.append(actLabel, el("span", "grow"), actNote);
   const hist = el("div", "rt-cols");
   const colA = el("div", "rt-col"), colB = el("div", "rt-col");
   colA.append(reqHead, dayBar, reqs);
@@ -102,6 +104,7 @@
   more.append(hist);
 
   const path = () => { const p = document.createElementNS(NS, "path"); wires.appendChild(p); return p; };
+  const setText = (e, s) => { if (e.textContent !== s) e.textContent = s; };
   const tick = (e) => { e.classList.remove("tick"); void e.offsetWidth; e.classList.add("tick"); };
 
   // ---------- words ----------
@@ -122,10 +125,13 @@
     return t("{n} d", { n: Math.round(m / 1440) });
   }
   const took = (ms = 0) => ms < 1000 ? t("{n} ms", { n: ms }) : t("{n} s", { n: (ms / 1000).toFixed(ms < 10e3 ? 1 : 0) });
+  // (the formats made once: made for each call, they were much of what the
+  // accounts' countdowns cost)
+  const HM = new Intl.DateTimeFormat([], { hour: "2-digit", minute: "2-digit" }), WD = new Intl.DateTimeFormat([], { weekday: "short" });
   function clock(s) {
     const d = new Date(s), n = new Date();
-    const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    return d.toDateString() === n.toDateString() ? hm : d.toLocaleDateString([], { weekday: "short" }) + " " + hm;
+    const hm = HM.format(d);
+    return d.toDateString() === n.toDateString() ? hm : WD.format(d) + " " + hm;
   }
   // how long a reply took to begin, and how fast it wrote after (#196)
   const speedOf = (out, ms, ttft) => out && ttft && ms > ttft ? out / ((ms - ttft) / 1000) : 0;
@@ -147,6 +153,7 @@
     order: ["In order", "In order: the first answers everything until it can't; then the next."],
     rotate: ["In turn", "In turn: each conversation's next turn goes to the account after the one that answered its last, and a new conversation starts one further along; the requests within a turn stay put, keeping the prompt cache."],
     usage: ["Least used", "Least used first: the account with the most of its allowance left goes first; a key by the tokens magpie sent it lately."],
+    manual: ["Manual", "Manual: every request goes to the model picked on the group's card, over its own accounts or keys."],
   };
   const GROUP_ORDER = "In order: member by member, the first model the group names until it can't answer, each over its own accounts or keys as its provider routes them.";
   const KEYS_SMART = "Smart: keys that suit the request go first — one made for the model's own API — then in their order. One resting after a failure goes last.";
@@ -434,6 +441,11 @@
       ? t("The turn's pick replaced the {asked} {agent} asked for.", { asked: r.effort, agent })
       : t("{level} is the model's nearest to the {asked} {agent} asked for.", { level: tr.effort, asked: r.effort, agent }));
   }
+
+  // what the gateway adds to WorkBuddy's "unapproved channel" refusal
+  // (provider.WBRefusedHint, #182): the agent gets it in English, the page
+  // says it apart from the vendor's words, in its own language
+  const WB_REFUSED = "WorkBuddy refuses chats from Codex and Claude Code (their system prompt); use it from Hermes, OpenCode or Pi, or add another provider to this group";
 
   function trySaid(r, i) {
     const tr = r.tries[i], w = tried(r, tr), agent = agentName(r.agent);
@@ -880,31 +892,41 @@
 
   // ---------- the log: how one request was routed ----------
 
+  // the log is drawn again only when what it says changes: it is asked to
+  // on every trace update (#308)
+  let logR = null, headKey = "", stepsKey = "";
   function renderLog() {
-    const r = pinned || cur;
+    const r = logR = pinned || cur;
     log.hidden = !r;
     if (!r) return;
-    logHead.replaceChildren(
-      el("span", "", rp ? t("How the request at {time} was routed", { time: clock(r.time) })
-        : pinned ? t("How the request at {time} was routed", { time: clock(r.time) }) : t("How the last request was routed")),
-      el("span", "grow"));
-    if (!rp && r.done) {
-      const again = el("button", "text", t("Replay"));
-      again.onclick = () => replay([r], pinned);
-      logHead.append(again);
-      // and on from it: the requests listed after it, as they came
-      const on = listed().filter((x) => x.id >= r.id);
-      if (pinned && on.length > 1) {
-        const from = el("button", "text", t("Replay from here"));
-        from.onclick = () => replay(on, pinned);
-        logHead.append(from);
+    const on = () => listed().filter((x) => x.id >= logR.id);
+    const head = JSON.stringify([document.documentElement.lang, !!rp, pinned?.id, r.id, r.time, r.done, !!pinned && on().length > 1]);
+    if (headKey !== head) {
+      headKey = head;
+      logHead.replaceChildren(
+        el("span", "", rp ? t("How the request at {time} was routed", { time: clock(r.time) })
+          : pinned ? t("How the request at {time} was routed", { time: clock(r.time) }) : t("How the last request was routed")),
+        el("span", "grow"));
+      if (!rp && r.done) {
+        const again = el("button", "text", t("Replay"));
+        again.onclick = () => replay([logR], pinned);
+        logHead.append(again);
+        // and on from it: the requests listed after it, as they came
+        if (pinned && on().length > 1) {
+          const from = el("button", "text", t("Replay from here"));
+          from.onclick = () => replay(on(), pinned);
+          logHead.append(from);
+        }
+      }
+      if (pinned && !rp) {
+        const live = el("button", "text", t("Back to live"));
+        live.onclick = () => { if (day) lookAt(""); else { pinned = null; cur = newest(); sync(true); renderAll(); } };
+        logHead.append(live);
       }
     }
-    if (pinned && !rp) {
-      const live = el("button", "text", t("Back to live"));
-      live.onclick = () => { if (day) lookAt(""); else { pinned = null; cur = newest(); sync(true); renderAll(); } };
-      logHead.append(live);
-    }
+    renderSteps(r);
+  }
+  function renderSteps(r) {
     const items = [];
     const main = r.order.find((x) => !x.fallback);
     items.push([r.group
@@ -919,11 +941,19 @@
     r.tries.forEach((tr, i) => {
       items.push([tryWhy(r, i), tr.done ? (tr.status < 400 ? "ok" : "bad") : "wait"]);
       // what the vendor said, word for word: the why above is magpie's reading of it
-      if (tr.done && tr.status >= 400 && tr.error) items.push([t("It said: {error}", { error: tr.error.length > 600 ? tr.error.slice(0, 600) + "…" : tr.error }), "aside said"]);
+      if (tr.done && tr.status >= 400 && tr.error) {
+        const hinted = tr.error.endsWith(" — " + WB_REFUSED);
+        const said = hinted ? tr.error.slice(0, -(WB_REFUSED.length + 3)) : tr.error;
+        items.push([t("It said: {error}", { error: said.length > 600 ? said.slice(0, 600) + "…" : said }), "aside said"]);
+        if (hinted) items.push([t(WB_REFUSED), "aside"]);
+      }
       // the reply said another model answered it
       if (tr.done && tr.status < 400 && tr.swapped) items.push([swapWhy(tr), "swap", tr]);
     });
     if (r.done && !r.tries.length) items.push([t("Nothing was tried: {error}", { error: r.error || r.status }), "bad"]);
+    const key = JSON.stringify([r.kind, items.map(([s, c, tr]) => [s, c, tr?.model, tr?.served])]);
+    if (stepsKey === key) return;
+    stepsKey = key;
     steps.replaceChildren(...items.map(([s, c, tr]) => {
       const li = el("li", c, s);
       if (c === "aside kind") li.prepend(kindTag(r), " ");
@@ -948,7 +978,9 @@
   // what a call was for when it isn't a turn of the conversation, as
   // Codex names it (x-openai-subagent): its own guardian review of an
   // approval, a thread's title, memories… — each on the model Codex picks
-  // for it, so a list of Luna calls under a Sol composer reads as it is
+  // for it, so a list of Luna calls under a Sol composer reads as it is.
+  // A web search is magpie's own, run for a model that can't search on the
+  // model it searches with (a DeepSeek chat showing GPT calls, #314)
   const KIND = {
     guardian: "Approval check", auto_review: "Approval check", guardian_review: "Approval check",
     review: "Review", compact: "Compaction",
@@ -956,6 +988,7 @@
     thread_title: "Title", title: "Title",
     collab_spawn: "Subagent", thread_spawn: "Subagent", agent_job: "Subagent",
     luna_reserve: "Luna Reserve",
+    web_search: "Web search",
   };
   const kindName = (k) => KIND[k] ? t(KIND[k]) : k;
   function kindTag(r) {
@@ -976,6 +1009,9 @@
   function kindWhy(r) {
     const agent = agentName(r.agent);
     if (r.kind === "luna_reserve") return t("{agent} sent this turn on Luna Reserve, which it turns to once the plan's own allowance is used up; it picks the model itself.", { agent });
+    if (r.kind === "web_search") return r.for
+      ? t("magpie ran this web search for {agent}'s {model}, which can't search the web by itself: {searcher} searched, and {model} goes on answering once it has what was found. Not a turn of the conversation.", { agent: agentName(r.for.agent), model: r.for.model, searcher: r.model })
+      : t("magpie ran this web search for a model that can't search the web by itself: {searcher} searched, and that model goes on answering once it has what was found. Not a turn of the conversation.", { searcher: r.model });
     return t("{agent} made this call itself ({kind}), not as a turn of the conversation, and picks its model itself.", { agent, kind: kindName(r.kind) });
   }
 
@@ -1033,17 +1069,23 @@
     dayBar.replaceChildren(b("", t("Live")), ...days.map((d) => b(d.day, dayName(d.day), d.requests)));
     dayBar.hidden = !days.length && !day;
   }
+  // the list's head, made once: a trace update redraws the list, and a
+  // button made again each time is one WebKit may drop a click on
+  const reqLabel = el("span", "label"), replayAll = el("button", "text");
+  replayAll.onclick = () => replay(listed(), pinned);
+  reqHead.append(reqLabel, el("span", "grow"), reqNote, replayAll);
+  // each request's row, kept while what it says is the same: the list
+  // is redrawn on every trace update, and made again whole each time it
+  // was most of what a busy gateway cost the page (#308)
+  const reqRows = new Map(); // id → { b, sig, r }
   function renderHist() {
     const rs = listed();
     hist.hidden = !rs.length && !day && !days.length;
-    reqHead.replaceChildren(el("span", "label", t("Requests")), el("span", "grow"), reqNote);
-    if (rs.filter((r) => r.done).length > 1 && !rp) {
-      const all = el("button", "text", t("Replay them all"));
-      all.onclick = () => replay(rs, pinned);
-      reqHead.append(all);
-    }
-    reqNote.textContent = day ? t(pastCut ? "the last {n} of {day}" : "{n} on {day}", { n: rs.length, day: dayName(day) })
-      : t("the last {n} the gateway keeps", { n: rs.length });
+    setText(reqLabel, t("Requests"));
+    setText(replayAll, t("Replay them all"));
+    replayAll.hidden = !(rs.filter((r) => r.done).length > 1 && !rp);
+    setText(reqNote, day ? t(pastCut ? "the last {n} of {day}" : "{n} on {day}", { n: rs.length, day: dayName(day) })
+      : t("the last {n} the gateway keeps", { n: rs.length }));
     renderDays();
     if (!reqs.style.maxHeight) requestAnimationFrame(fitReqs); // first shown
     // none yet: what the list is for in its place, and no accounts column
@@ -1059,52 +1101,74 @@
         t("Each request an agent sends through magpie shows up here: who answered it, why, and each try."));
       if (!day && days.length) p.append(" " + t("Earlier ones are kept by day, in the bar above."));
       reqs.replaceChildren(p);
+      reqRows.clear();
       renderActs(rs);
       return;
     }
-    // the list scrolls on its own; WebKit, emptied for a moment, would
-    // send it back to its top from under the row just picked
-    const listTop = reqs.scrollTop;
-    reqs.replaceChildren(...rs.map((r) => {
+    const lang = document.documentElement.lang, ids = new Set();
+    const els = rs.map((r) => {
       const [said, how, tr] = outcome(r);
-      const b = el("button", "rt-req " + how);
-      const sel = pinned ? pinned.id === r.id : cur?.id === r.id;
-      b.setAttribute("aria-pressed", String(sel));
+      const sel = String(pinned ? pinned.id === r.id : cur?.id === r.id);
       const ag = agentOf(r.agent);
-      const when = el("span", "at", new Date(r.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
-      const asked = el("span", "asked");
-      const sw = el("i", "ag");
-      sw.style.setProperty("--agent", hueOf(r.agent));
-      asked.append(sw, icon(ag?.icon || "generic"), el("span", "m", r.model));
-      if (r.kind) { asked.classList.add("kinded"); asked.append(kindTag(r)); }
-      // the reasoning the model was sent at — the turn's pick, or the
-      // agent's fitted to the model's levels — after the one the agent
-      // asked for when that was another (xhigh → max), so a level the
-      // agent didn't pick reads as the agent's or as magpie's at a glance
-      // (呆滞 on X: Pi 里面选择是 xhigh 但是 magpie 里面显示的是 max);
-      // how it came to be is in its title and the request's story
-      const to = el("span", "to");
-      to.append(el("i"), el("span", "", said));
-      if (tr?.effort) {
-        const ef = el("span", "ef" + (tr.picked ? " picked" : ""));
-        if (r.effort && r.effort !== tr.effort) ef.append(el("span", "was", r.effort), " → ");
-        ef.append(tr.effort);
-        ef.title = effortNote(r, tr);
-        to.append(ef);
-      }
-      if (tr?.swapped && tr.done && tr.status < 400) to.append(swapTag(tr, true)); // beside the model asked for
       const meta = [];
       if (r.tries.length > 1) meta.push(t("{n} tries", { n: r.tries.length }));
       if (r.done && r.ms) meta.push(took(r.ms));
       if (r.done && r.ttft) meta.push(t("TTFT {ms}", { ms: took(r.ttft) }));
       if (r.tokens) meta.push(t("{n} tokens", { n: tokens(r.tokens) }));
-      b.append(when, asked, to, el("span", "meta", meta.join(" · ")));
-      b.title = `${agentName(r.agent)} · ${r.model} → ${r.provider}`;
-      b.onclick = () => pick(r);
-      return b;
-    }));
-    if (reqs.scrollTop !== listTop) reqs.scrollTop = listTop;
+      // all the row says, and its titles
+      const sig = JSON.stringify([lang, said, how, r.time, r.agent, agentName(r.agent), ag?.icon, r.model, r.provider, r.kind, r.effort,
+        tr?.effort, tr?.picked, tr?.fixed, tr?.swapped && tr.done && tr.status < 400 ? [tr.model, tr.served] : 0, meta]);
+      ids.add(r.id);
+      let x = reqRows.get(r.id);
+      if (!x || x.sig !== sig) {
+        const row = x = { sig, b: reqRow(r, said, how, tr, ag, meta) };
+        row.b.onclick = () => pick(row.r); // the request as it is when clicked
+        reqRows.set(r.id, x);
+      }
+      x.r = r;
+      if (x.b.getAttribute("aria-pressed") !== sel) x.b.setAttribute("aria-pressed", sel);
+      return x.b;
+    });
+    for (const id of reqRows.keys()) if (!ids.has(id)) reqRows.delete(id);
+    // the rows moved only where they changed; the list scrolls on its own,
+    // and WebKit, a row taken out for a moment, would send it back to its
+    // top from under the row just picked
+    const kids = reqs.children;
+    if (kids.length !== els.length || els.some((e, i) => kids[i] !== e)) {
+      const listTop = reqs.scrollTop;
+      els.forEach((e, i) => { if (kids[i] !== e) reqs.insertBefore(e, kids[i] || null); });
+      while (kids.length > els.length) reqs.lastElementChild.remove();
+      if (reqs.scrollTop !== listTop) reqs.scrollTop = listTop;
+    }
     renderActs(rs);
+  }
+  function reqRow(r, said, how, tr, ag, meta) {
+    const b = el("button", "rt-req " + how);
+    const when = el("span", "at", new Date(r.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+    const asked = el("span", "asked");
+    const sw = el("i", "ag");
+    sw.style.setProperty("--agent", hueOf(r.agent));
+    asked.append(sw, icon(ag?.icon || "generic"), el("span", "m", r.model));
+    if (r.kind) { asked.classList.add("kinded"); asked.append(kindTag(r)); }
+    // the reasoning the model was sent at — the turn's pick, or the
+    // agent's fitted to the model's levels — after the one the agent
+    // asked for when that was another (xhigh → max), so a level the
+    // agent didn't pick reads as the agent's or as magpie's at a glance
+    // (呆滞 on X: Pi 里面选择是 xhigh 但是 magpie 里面显示的是 max);
+    // how it came to be is in its title and the request's story
+    const to = el("span", "to");
+    to.append(el("i"), el("span", "", said));
+    if (tr?.effort) {
+      const ef = el("span", "ef" + (tr.picked ? " picked" : ""));
+      if (r.effort && r.effort !== tr.effort) ef.append(el("span", "was", r.effort), " → ");
+      ef.append(tr.effort);
+      ef.title = effortNote(r, tr);
+      to.append(ef);
+    }
+    if (tr?.swapped && tr.done && tr.status < 400) to.append(swapTag(tr, true)); // beside the model asked for
+    b.append(when, asked, to, el("span", "meta", meta.join(" · ")));
+    b.title = `${agentName(r.agent)} · ${r.model} → ${r.provider}`;
+    return b;
   }
 
   // each account or key the kept requests weighed: how often it was
@@ -1130,8 +1194,8 @@
       }
     }
     const list = [...by.values()].sort((x, y) => (x.w.name || "").localeCompare(y.w.name || "") || x.w.provider.localeCompare(y.w.provider) || x.pos - y.pos);
-    actHead.replaceChildren(el("span", "label", t("Accounts and keys")), el("span", "grow"), actNote);
-    actNote.textContent = t("over those requests");
+    setText(actLabel, t("Accounts and keys"));
+    setText(actNote, t("over those requests"));
     const n = now();
     let prov = "";
     const out = [];
@@ -1204,7 +1268,16 @@
     while (box.children.length > rows.length) box.lastElementChild.remove();
   }
 
-  function renderAll() { render(); renderLog(); renderHist(); }
+  // renderAll redraws once a frame, however many trace updates and plays
+  // asked for it in between (#308), and not at all while nobody sees the
+  // page: coming back into sight redraws it (see resume)
+  let drawing = 0;
+  function renderAll() { if (!drawing) drawing = requestAnimationFrame(drawAll); }
+  function drawAll() {
+    drawing = 0;
+    if (!shown()) return;
+    render(); renderLog(); renderHist();
+  }
   const newest = () => [...routes.values()].reduce((a, b) => (!a || b.id > a.id ? b : a), null);
 
   // ---------- playing a request ----------
@@ -1251,13 +1324,13 @@
   // who routing put first, and lets it go there while it answers; another
   // picks up the answer and brings it back — a failure only as far as
   // magpie, where the first takes the request on to the next.
-  async function play(id) {
+  async function play(id, synced) {
     const routes = src(); // a replay's, if it is one
     let r = routes.get(id);
     const g = gen;
     playing.set(id, g);
     cur = r;
-    sync();
+    if (!synced) sync();
     say(affWhy(r, true) || ruleWhy(r, true) || firstWhy(r));
     const aside = asides(r).find((s) => s);
     if (aside) say(aside, true);
@@ -1429,7 +1502,7 @@
   function step(ts) {
     const p = rp;
     if (!p) return;
-    p.v += (ts - p.t) * p.speed;
+    p.v += Math.min(ts - p.t, 250) * p.speed; // a replay out of sight waits
     p.t = ts;
     let fast;
     [p.real, fast] = realAt(p, p.v);
@@ -1449,7 +1522,6 @@
     if (p.v > p.total && !playing.size) { endReplay(); return; }
     requestAnimationFrame(step);
   }
-  const setText = (e, s) => { if (e.textContent !== s) e.textContent = s; };
   function replayBar(p, fast) {
     const d = new Date(p.real);
     rClock.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) + "." + Math.floor(d.getMilliseconds() / 100);
@@ -1549,8 +1621,28 @@
     b.setAttribute("transform", `translate(${pt.x.toFixed(1)} ${pt.y.toFixed(1)}) scale(${b._flip ? -1 : 1} 1) rotate(${b._a.toFixed(1)})`);
   }
 
+  // resume: the page back in sight — another tab left, the window shown
+  // again, or frames not drawn for a while (a hidden or covered window
+  // draws none, and may not say it is hidden). What was flying then is
+  // stale: it ends, the stage is drawn as it is now, and only the requests
+  // still under way fly (#302).
+  const LIVE = 4;
+  function resume() {
+    stopPlays();
+    if (!loaded) return;
+    if (!pinned && !rp) cur = newest() || cur;
+    if (cur) sync(true);
+    const live = pinned ? [] : [...src().values()].filter((r) => !r.done).sort((a, b) => a.id - b.id).slice(-LIVE);
+    for (const r of live) play(r.id);
+    renderAll();
+  }
+  let seen = false, lastFrame = 0;
   function frame(ts) {
-    if (shown()) {
+    const vis = shown();
+    if (vis && (!seen || ts - lastFrame > 1000)) resume();
+    seen = vis;
+    lastFrame = ts;
+    if (vis) {
       const now_ = trips; trips = [];
       for (const tr of now_) {
         if (tr.g !== gen) { tr.res(); continue; }
@@ -1653,7 +1745,12 @@
         } else {
           if (cur && routes.has(cur.id) && !rp) cur = routes.get(cur.id);
           if (pinned && routes.has(pinned.id)) pinned = routes.get(pinned.id);
-          for (const id of fresh) if (!pinned && !rp) play(id);
+          // played only in sight: coming back into it plays those still
+          // under way, not all that came meanwhile (#302)
+          const go = !pinned && !rp && shown() ? fresh : [];
+          for (const id of go) playing.set(id, gen);
+          if (go.length) sync(); // the stage once for them all (#308)
+          for (const id of go) play(id, true);
           for (const id of fresh.slice(-4)) pPlay(id);
           wake();
           renderAll();
@@ -1691,6 +1788,9 @@
   // so the list sits right under it
   more.append(gsec);
   const ROUTE_OPTS = [["", "Smart"], ["order", "In order"], ["rotate", "In turn"], ["usage", "Least used"]];
+  // a group may also be routed by hand: every request to the member the
+  // user picks on its card (provider.Manual, #317) — a provider's keys can't
+  const GROUP_ROUTE_OPTS = [...ROUTE_OPTS, ["manual", "Manual"]];
   const AFF_OPTS = [["", "Auto"], ["session", "Session"], ["turn", "Within a turn"], ["off", "Off"]];
   const AFF_HINT = {
     "": "A conversation stays with the account or key that answered it while what the vendor cached of it is worth keeping — within a turn always, across turns while it's fresh.",
@@ -1703,6 +1803,7 @@
     order: "In order: the first model until it can't answer, then the next — each over its own accounts or keys as its provider routes them.",
     rotate: "In turn: each conversation's next turn goes to the next member's account or key, spreading the load.",
     usage: "Least used first: the account or key with the most of its allowance left goes first.",
+    manual: "Manual: every request goes to the model you pick on the group's card, over its own accounts or keys; the others, and the rules, wait until you pick another — none takes over when it fails.",
   };
   const EFFORTS = ["low", "medium", "high", "xhigh", "max"]; // provider.Efforts
   // what a rule matches, in words
@@ -1791,25 +1892,58 @@
     const nm = el("div", "nm");
     nm.append(el("b", "", g.name), el("code", "mdl", "group/" + g.id));
     if (g.auto) nm.append(el("small", "auto", t("found by magpie")));
+    const manual = g.routing === "manual";
     const sep = g.routing === "order" ? " → " : " · ";
-    const mem = el("div", "mem", g.members.map((id) => memberLabel(g, id)).join(sep));
+    const mem = manual ? pickRow(g) : el("div", "mem", g.members.map((id) => memberLabel(g, id)).join(sep));
     main.append(nm, mem);
-    const m = ROUTE_OPTS.find(([id]) => id === (g.routing || "")) || ROUTE_OPTS[0];
+    const m = GROUP_ROUTE_OPTS.find(([id]) => id === (g.routing || "")) || ROUTE_OPTS[0];
     const tags = el("span", "tags");
     tags.append(el("span", "tag", t(m[1])));
     if (g.affinity) tags.append(el("span", "tag", t(AFF_OPTS.find(([id]) => id === g.affinity)?.[1] || "")));
     if (g.rules?.length) {
-      const r = el("span", "tag", t(g.rules.length === 1 ? "1 rule" : "{n} rules", { n: g.rules.length }));
-      r.title = g.rules.map((x, i) => `${i + 1}. ${ruleText(x)} → ${memberLabel(g, x.use)}`).join("\n");
+      const r = el("span", "tag" + (manual ? " idle" : ""), t(g.rules.length === 1 ? "1 rule" : "{n} rules", { n: g.rules.length }));
+      r.title = (manual ? t("The rules wait while you pick the model by hand.") + "\n" : "") + g.rules.map((x, i) => `${i + 1}. ${ruleText(x)} → ${memberLabel(g, x.use)}`).join("\n");
       tags.append(r);
     }
     if (!g.ready) tags.append(el("span", "tag bad", t("no member ready")));
     const edit = el("button", "text", t("Edit"));
     edit.onclick = (e) => { e.stopPropagation(); open(); };
-    const open = () => { gEdit = { id: g.id, draft: { name: g.name, members: [...g.members], routing: g.routing || "", affinity: g.affinity || "", classifier: g.classifier || "", effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, intent: r.intent || "", agents: [...(r.agents || [])] })) } }; renderGroups(); };
+    const open = () => { gEdit = { id: g.id, draft: { name: g.name, members: [...g.members], routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", classifier: g.classifier || "", effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, intent: r.intent || "", agents: [...(r.agents || [])] })) } }; renderGroups(); };
     row.onclick = open;
     row.append(ics, main, tags, edit);
     return row;
+  }
+  // pickRow: a manual group's members on its card, the one every request
+  // goes to marked; clicking another sends them there from the next
+  // request on (#317), as CC Switch switches a provider
+  function pickRow(g) {
+    const picked = g.picked || (g.members.includes(g.pick) ? g.pick : g.members[0]);
+    const box = el("div", "rt-picks");
+    box.setAttribute("role", "radiogroup");
+    box.setAttribute("aria-label", t("Model every request goes to"));
+    for (const id of g.members) {
+      const info = g.memberInfo?.find((x) => x.id === id);
+      const on = id === picked;
+      const b = el("button", "rt-pick" + (on ? " on" : "") + (info && !info.ready ? " off" : ""));
+      b.type = "button";
+      b.setAttribute("role", "radio");
+      b.setAttribute("aria-checked", String(on));
+      b.dataset.member = id;
+      b.append(el("span", "dot"), memberIcon(id), el("span", "n", memberName(id)));
+      const note = memberNote(id);
+      if (note) b.append(el("small", "", note));
+      b.title = on ? t("Every request goes to {name}", { name: memberLabel(g, id) })
+        : info && !info.ready ? t("No provider serves {id} now; it is skipped", { id })
+        : t("Send every request to {name}", { name: memberLabel(g, id) });
+      b.onclick = (e) => {
+        e.stopPropagation(); // the card opens the editor; this picks
+        if (on) return;
+        groupAction("save", { id: g.id, name: g.name, members: g.members, routing: "manual", pick: id, affinity: g.affinity || "", rules: g.rules || [], effort: g.effort || "", classifier: g.classifier || "", context: g.context || 0, levels: g.levels || [], family: g.family || "" },
+          t("{name}: every request to {model}", { name: g.name, model: memberName(id) }));
+      };
+      box.append(b);
+    }
+    return box;
   }
   function groupEditor(g) {
     const d = gEdit.draft;
@@ -1918,7 +2052,7 @@
 
     const rHint = el("div", "hint", t(GROUP_HINT[d.routing] || GROUP_HINT[""]));
     const rw = el("div");
-    rw.append(segs(ROUTE_OPTS.map(([id, n]) => [id, t(n)]), d.routing, (v) => { d.routing = v; rHint.textContent = t(GROUP_HINT[v] || GROUP_HINT[""]); }), rHint);
+    rw.append(segs(GROUP_ROUTE_OPTS.map(([id, n]) => [id, t(n)]), d.routing, (v) => { d.routing = v; rHint.textContent = t(GROUP_HINT[v] || GROUP_HINT[""]); drawRules(); }), rHint);
     ed.append(el("label", "", t("Routing")), rw);
     const aHint = el("div", "hint", t(AFF_HINT[d.affinity] || AFF_HINT[""]));
     const aw = el("div");
@@ -1934,7 +2068,9 @@
     const drawRules = () => {
       rlist.replaceChildren();
       rAdd.hidden = d.members.length < 2;
-      rHint2.textContent = t(d.members.length < 2 ? "With two models or more, a rule can send some turns to one of them first." : "Checked top first when you send a message: the first that matches sends that turn to its model first; the rest stay behind it if it fails. A turn under way is never moved.");
+      rHint2.textContent = t(d.members.length < 2 ? "With two models or more, a rule can send some turns to one of them first."
+        : d.routing === "manual" ? "The rules wait while you pick the model by hand."
+        : "Checked top first when you send a message: the first that matches sends that turn to its model first; the rest stay behind it if it fails. A turn under way is never moved.");
       d.rules.forEach((r, i) => {
         const row = el("div", "rt-rule");
         const when = el("div", "when");
@@ -2129,7 +2265,7 @@
       if (d.effort === "auto" && !d.classifier) return status(t("Choose the model that rates how hard a turn is"), "warn");
       if (own && !d.levels.length) return status(t("Pick a level to offer, or leave them to its models"), "warn");
       saveBtn.classList.add("busy");
-      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), members: d.members, routing: d.routing, affinity: d.affinity, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", context: g?.context || 0, levels: own ? d.levels : [], family: g?.family || "" }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }));
+      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), members: d.members, routing: d.routing, pick: d.pick || "", affinity: d.affinity, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", context: g?.context || 0, levels: own ? d.levels : [], family: g?.family || "" }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }));
     };
     saveBtn.onclick = save;
     bar.append(cancel, saveBtn);

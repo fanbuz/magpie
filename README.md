@@ -138,6 +138,27 @@ first day, `qianfan-token-plan`, is taken too. The plans serve no model list,
 so the preset carries their documented models; pay as you go serves its own
 at `/v2/models`.
 
+### Plugins
+
+A subscription magpie doesn't sign in to itself can come from an
+[OpenCode](https://opencode.ai) provider plugin: the npm packages OpenCode
+users install to sign in to a plan (their `auth` hook) work in magpie as they
+do there. magpie runs them on [Bun](https://bun.sh), downloaded the first
+time a plugin needs it, and the plugin signs in, lists the models and makes
+each request; magpie serves them to agents like any provider's.
+
+```sh
+magpie plugin add opencode-gemini-auth   # an npm package, or a path to a plugin of your own
+magpie plugin                           # the plugins, what each signs in to, and whether you are
+magpie plugin login google-plugin       # its sign-in: the method, its questions, the browser or a key
+magpie plugin logout google-plugin
+magpie plugin off opencode-gemini-auth  # on brings it back; rm removes it; update updates them all
+```
+
+A provider id magpie already has (google, openai, anthropic) is
+`<id>-plugin`. In the app, Settings → Plugins adds and removes them, and
+the providers they sign in to are in Add provider → From plugins.
+
 ### Routing groups
 
 A routing group is several models, from one provider or many, that an agent
@@ -480,11 +501,51 @@ only for agents installed on that machine. Subscriptions are not in it: sign
 in to them on each machine. Piped in, the passphrase is the first line of
 stdin.
 
+### Keeping machines in sync
+
+*Settings → Sync and backup → WebDAV or S3 sync* keeps the same backup on a
+server and brings every machine up to date with it, every 3 minutes while the
+gateway runs. Choose one of these:
+
+- **WebDAV**: a folder on a WebDAV server such as 坚果云, Nextcloud or a
+  Synology.
+- **S3**: a bucket on AWS S3, Cloudflare R2, Backblaze B2, MinIO, Garage, a
+  NAS or any other S3-compatible server.
+
+The file is sealed on your machine with the passphrase, so the server only
+ever stores ciphertext. Each machine writes only over the version it read (a
+conditional write), so an update that another machine made in between is
+merged rather than lost.
+
+```sh
+magpie webdav on https://dav.jianguoyun.com/dav/ user=me@example.com
+magpie s3 on s3://my-bucket/magpie endpoint=https://<account>.r2.cloudflarestorage.com access-key-id=…
+magpie s3 on s3://backups endpoint=http://nas.local:9000 path-style=yes access-key-id=…
+magpie s3                       # where it syncs to and how the last sync went; magpie s3 now, off
+```
+
+For S3:
+
+- `endpoint` is empty for AWS.
+- `region` defaults to `us-east-1`, or to `auto` on R2.
+- `path-style=yes` puts the bucket in the path, which MinIO and most servers
+  you run yourself need.
+- The secret is asked for and saved like the WebDAV password. It is used only
+  with the endpoint and access key it was given for.
+- The bucket must already exist.
+- The access key needs to read and write `<prefix>/magpie/`. On AWS it also
+  needs to list the bucket.
+- A server without conditional writes is supported. There magpie checks the
+  object's ETag just before each write.
+
 ## Files
 
 - `~/.config/magpie/profiles.json` — saved profiles
 - `~/.config/magpie/providers.json` — your providers, keys included (0600)
 - `~/.config/magpie/stash.json` — values magpie replaced, restored on switch-back
+- `~/.config/magpie/plugins.json`, `plugins/` — the plugins added, and their packages
+- `~/.config/magpie/plugin-auth.json` — the plugins' sign-ins (0600)
+- `~/.cache/magpie/bun/` — the Bun plugins run on
 - `~/.cache/magpie/models.json` — models.dev catalog (OpenCode's cache at
   `~/.cache/opencode/models.json` is used when present)
 - `~/.cache/magpie/models/<provider>.json` — model lists fetched from vendors

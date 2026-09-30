@@ -23,7 +23,7 @@ func TestTrayUsageText(t *testing.T) {
 	if label != "42% · 18%" {
 		t.Errorf("label %q", label)
 	}
-	if want := "Claude\n5-hour 42% used · resets in 2h 10m\nWeekly 18% used · resets in 3d 4h"; tip != want {
+	if want := "Claude\n5-hour 42.2% used · resets in 2h 10m\nWeekly 17.6% used · resets in 3d 4h"; tip != want {
 		t.Errorf("tip %q, want %q", tip, want)
 	}
 	// or what is left of each, as Settings or the Usage page says (#122)
@@ -31,7 +31,7 @@ func TestTrayUsageText(t *testing.T) {
 	if label != "58% · 82%" {
 		t.Errorf("left label %q", label)
 	}
-	if want := "Claude\n5-hour 58% left · resets in 2h 10m\nWeekly 82% left · resets in 3d 4h"; tip != want {
+	if want := "Claude\n5-hour 57.8% left · resets in 2h 10m\nWeekly 82.4% left · resets in 3d 4h"; tip != want {
 		t.Errorf("left tip %q, want %q", tip, want)
 	}
 	if id := trayCardID(q); id != "claude|a@b.c" {
@@ -53,6 +53,16 @@ func TestTrayUsageText(t *testing.T) {
 	}
 	if id := trayCardID(q); id != "zcode" {
 		t.Errorf("id %q", id)
+	}
+
+	q = provider.SubscriptionQuota{Name: "Copilot", Windows: []provider.QuotaWindow{{Name: "Premium", Used: 187418.3 / 218000 * 100}}}
+	label, tip = trayUsageText(q, now, false)
+	if label != "86%" || tip != "Copilot\nPremium 86.0% used" {
+		t.Errorf("copilot used: %q %q", label, tip)
+	}
+	label, tip = trayUsageText(q, now, true)
+	if label != "14%" || tip != "Copilot\nPremium 14.0% left" {
+		t.Errorf("copilot left: %q %q", label, tip)
 	}
 
 	// a balance, an error, nothing

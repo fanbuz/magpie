@@ -1,5 +1,5 @@
 // Package davsync keeps magpie's setup the same on every computer through
-// a WebDAV folder. What goes there is a backup (see internal/backup),
+// a WebDAV folder or an S3-compatible bucket. What goes there is a backup (see internal/backup),
 // sealed with a passphrase before it leaves the computer, so the server
 // only ever holds a file it can't read.
 //
@@ -47,20 +47,40 @@ const Every = 3 * time.Minute
 var Parts = []string{"providers", "settings", "profiles", "agents", "library"}
 
 // Config is the sync's setup, kept in sync.json beside magpie's other
-// files, readable by the user alone, as provider keys are.
+// files, readable by the user alone, as provider keys are. An s3://bucket/prefix
+// address is an S3-compatible bucket, User its access key ID and Password
+// the secret, kept as a WebDAV password is.
 type Config struct {
 	URL        string `json:"url"`
 	User       string `json:"user,omitempty"`
 	Password   string `json:"password,omitempty"`
 	Passphrase string `json:"passphrase"`
-	Keys       bool   `json:"keys"`   // providers carry their API keys
-	Agents     bool   `json:"agents"` // the agents' models go too
+	// S3 alone: the server (none is AWS), its region (none is us-east-1,
+	// auto for R2), and the bucket in the path rather than the host name
+	Endpoint  string `json:"endpoint,omitempty"`
+	Region    string `json:"region,omitempty"`
+	PathStyle bool   `json:"pathStyle,omitempty"`
+	Keys      bool   `json:"keys"`   // providers carry their API keys
+	Agents    bool   `json:"agents"` // the agents' models go too
 	// Library is whether the library goes too; nil, as in a setup made
 	// before it could, is yes
 	Library *bool `json:"library,omitempty"`
 }
 
 func (c Config) library() bool { return c.Library == nil || *c.Library }
+
+// S3 is whether c keeps the file in an S3 bucket rather than a WebDAV folder.
+func (c Config) S3() bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.URL)), "s3://")
+}
+
+// Kind is the server's kind, as the user reads it: "WebDAV" or "S3".
+func (c Config) Kind() string {
+	if c.S3() {
+		return "S3"
+	}
+	return "WebDAV"
+}
 
 // Notice says what a sync replaced when a part had changed on both sides,
 // or when this computer first joined a folder with a setup in it.
@@ -100,8 +120,15 @@ func Load() (Config, bool) {
 // and user: it is never sent to another, and is asked for again there.
 func Configure(c Config) error {
 	c.URL, c.User = strings.TrimSpace(c.URL), strings.TrimSpace(c.User)
-	if err := CheckAddress(c.URL); err != nil {
+	c.Endpoint, c.Region = strings.TrimSpace(c.Endpoint), strings.TrimSpace(c.Region)
+	if !c.S3() { // WebDAV's own: nothing of an S3 setup left behind
+		c.Endpoint, c.Region, c.PathStyle = "", "", false
+	}
+	if err := Check(c); err != nil {
 		return err
+	}
+	if c.S3() && c.User == "" {
+		return errors.New("S3 sync needs an access key ID, and its secret")
 	}
 	// after a sync in progress, which would save its state for the setup it
 	// began with
@@ -112,10 +139,10 @@ func Configure(c Config) error {
 				c.Password = old.Password
 			}
 			if needed {
-				who := c.URL
-				if u, err := url.Parse(c.URL); err == nil && u.Host != "" {
-					who = u.Host
+				if c.S3() {
+					return fmt.Errorf("type the secret for the access key %s on %s: the one saved is only used with the server and key it was given for", c.User, c.server())
 				}
+				who := c.server()
 				if c.User != "" {
 					who = c.User + " on " + who
 				}
@@ -125,11 +152,18 @@ func Configure(c Config) error {
 				c.Passphrase = old.Passphrase
 			}
 		}
+		if c.S3() && c.Password == "" {
+			return fmt.Errorf("type the secret for the access key %s", c.User)
+		}
 		if c.Passphrase == "" {
 			return errors.New("sync needs a passphrase: the file is sealed with it before it leaves this computer")
 		}
 		if c.Password != "" && c.Passphrase == c.Password {
-			// the server is sent the password: with it, it could open the file
+			// the server is sent the password (an S3 server holds the
+			// secret): with it, it could open the file
+			if c.S3() {
+				return errors.New("the passphrase is the access key's secret: the S3 server holds it, and could open the file with it. Pick a passphrase of its own")
+			}
 			return errors.New("the passphrase is the server's password: the server is sent the password, and could open the file with it. Pick a passphrase of its own")
 		}
 		b, err := json.MarshalIndent(c, "", "  ")
@@ -144,11 +178,27 @@ func Configure(c Config) error {
 	})
 }
 
-// CheckAddress is Configure's look at the address alone, for a caller to
-// make before asking for the password and passphrase.
-func CheckAddress(u string) error {
-	_, err := newDAV(Config{URL: u})
+// Check is Configure's look at the address (and an S3 endpoint), for a
+// caller to make before asking for the password and passphrase.
+func Check(c Config) error {
+	_, err := newRemote(c)
 	return err
+}
+
+// server is the host c's password or secret goes with: the WebDAV
+// address's, or the S3 endpoint's (AWS's when none is given).
+func (c Config) server() string {
+	a := strings.TrimSpace(c.URL)
+	if c.S3() {
+		if strings.TrimSpace(c.Endpoint) == "" {
+			return "AWS"
+		}
+		a = s3Endpoint(c.Endpoint, "")
+	}
+	if u, err := url.Parse(a); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return a
 }
 
 // password is what becomes of the saved password when old is changed to
@@ -181,6 +231,10 @@ func SavedPassword(c Config) (kept, needed bool) {
 // sameAccount is whether c and o are one user on one server: the password
 // given for one is only ever sent to the other when they are.
 func (c Config) sameAccount(o Config) bool {
+	if c.S3() || o.S3() { // one access key at one endpoint, whatever the bucket
+		return c.S3() && o.S3() && strings.TrimSpace(c.User) == strings.TrimSpace(o.User) &&
+			strings.EqualFold(s3Endpoint(c.Endpoint, ""), s3Endpoint(o.Endpoint, ""))
+	}
 	a, err := url.Parse(strings.TrimSpace(c.URL))
 	if err != nil {
 		return false
@@ -213,6 +267,10 @@ type View struct {
 	PassphraseSet bool      `json:"passphraseSet,omitempty"`
 	Keys          bool      `json:"keys"`
 	Agents        bool      `json:"agents"`
+	Kind          string    `json:"kind,omitempty"` // "webdav" or "s3", when on
+	Endpoint      string    `json:"endpoint,omitempty"`
+	Region        string    `json:"region,omitempty"`
+	PathStyle     bool      `json:"pathStyle,omitempty"`
 	Library       bool      `json:"library"`
 	Last          time.Time `json:"last,omitzero"`
 	Error         string    `json:"error,omitempty"`
@@ -227,7 +285,8 @@ func Status() View {
 	}
 	st := loadState()
 	v := View{On: true, URL: c.URL, User: c.User, PasswordSet: c.Password != "", PassphraseSet: c.Passphrase != "",
-		Keys: c.Keys, Agents: c.Agents, Library: c.library(), Error: st.Error, Notice: st.Notice}
+		Keys: c.Keys, Agents: c.Agents, Library: c.library(), Error: st.Error, Notice: st.Notice,
+		Kind: strings.ToLower(c.Kind()), Endpoint: c.Endpoint, Region: c.Region, PathStyle: c.PathStyle}
 	if st.Key == stateKey(c) {
 		v.Last = st.Last
 	}
@@ -257,7 +316,14 @@ func saveState(st state) {
 	edit.WriteAtomic(path("sync-state.json"), b)
 }
 
-func stateKey(c Config) string { return sum([]byte(c.URL + "\x00" + c.User + "\x00" + c.Passphrase)) }
+// stateKey is the setup the state is for: an S3 endpoint too, when there is one
+func stateKey(c Config) string {
+	k := c.URL
+	if c.Endpoint != "" {
+		k += "\x00" + c.Endpoint
+	}
+	return sum([]byte(k + "\x00" + c.User + "\x00" + c.Passphrase))
+}
 
 func sum(b []byte) string {
 	h := sha256.Sum256(b)
@@ -318,7 +384,11 @@ func Run(ctx context.Context) {
 		err := Now(c)
 		cancel()
 		if msg := fmt.Sprint(err); err != nil && msg != last {
-			log.Printf("syncing through WebDAV: %s", msg)
+			kind := "WebDAV"
+			if c, ok := Load(); ok {
+				kind = c.Kind()
+			}
+			log.Printf("syncing through %s: %s", kind, msg)
 			last = msg
 		} else if err == nil {
 			last = ""
@@ -469,7 +539,7 @@ func bring(b backup.Bundle, part string) error {
 }
 
 func syncOnce(ctx context.Context, c Config, st *state) error {
-	d, err := newDAV(c)
+	d, err := newRemote(c)
 	if err != nil {
 		return err
 	}

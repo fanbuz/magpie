@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,6 +41,14 @@ var claudeEfforts = []string{"low", "medium", "high", "xhigh", "max"}
 // among them.
 const claudeEffortEnv = "CLAUDE_CODE_EFFORT_LEVEL"
 
+// claudeContextEnv is the context window Claude Code takes a model it
+// doesn't know for (any but Claude's own names); without it, 200K. Its
+// auto-compact window (CLAUDE_CODE_AUTO_COMPACT_WINDOW, the autoCompactWindow
+// setting) is only ever the smaller of its own value and this one, so this
+// is what tells it where a 128K or a 400K model runs out. A name marked [1m]
+// is 1M whatever it says.
+const claudeContextEnv = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
+
 func tierEnv(tier string) string { return "ANTHROPIC_DEFAULT_" + strings.ToUpper(tier) + "_MODEL" }
 
 func claude(home string) *Agent { return claudeIn(here(home)) }
@@ -62,6 +71,20 @@ func claudeIn(at place) *Agent {
 		}
 		return model()
 	}
+	// the context window magpie last wrote, so a value the user wrote is
+	// never taken for magpie's: that one is left as it is
+	windowKey := at.key("claude.context_tokens")
+	windowOurs := func() bool {
+		cur := env(claudeContextEnv)
+		return cur != "" && cur == stashLoad()[windowKey]
+	}
+	dropWindow := func() error {
+		defer forget(windowKey)
+		if windowOurs() {
+			return edit.DelJSON(path, "env."+claudeContextEnv)
+		}
+		return nil
+	}
 	var writeTiers func(main string, tiers map[string]string) error
 	set := func(v string) error {
 		if v == "" {
@@ -71,6 +94,9 @@ func claudeIn(at place) *Agent {
 				keys = append(keys, "env."+k)
 			}
 			forget(at.key("claude.model"), at.key("claude.base_url"), at.key("claude.auth_token"))
+			if err := dropWindow(); err != nil {
+				return err
+			}
 			return edit.DelJSON(path, keys...)
 		}
 		if isMagpie(v) {
@@ -91,6 +117,9 @@ func claudeIn(at place) *Agent {
 				}
 			}
 			return writeTiers(v, tiers)
+		}
+		if err := dropWindow(); err != nil {
+			return err
 		}
 		if routed() {
 			keys := make([]string, len(claudeEnv))
@@ -139,6 +168,18 @@ func claudeIn(at place) *Agent {
 			}
 		} else {
 			kvs = append(kvs, edit.KV{Path: "env.CLAUDE_CODE_SUBAGENT_MODEL", Value: main})
+		}
+		// the new model's window replaces the old one's, when magpie knows
+		// it; one the user set is theirs
+		if env(claudeContextEnv) == "" || windowOurs() {
+			if w := claudeWindow(main, tiers); w > 0 {
+				kvs = append(kvs, edit.KV{Path: "env." + claudeContextEnv, Value: strconv.Itoa(w)})
+				stash(map[string]string{windowKey: strconv.Itoa(w)})
+			} else if err := dropWindow(); err != nil {
+				return err
+			}
+		} else {
+			forget(windowKey)
 		}
 		return edit.SetJSON(path, kvs...)
 	}
@@ -279,6 +320,30 @@ func claudeViaMagpie() []Option {
 	return opts
 }
 
+// claudeWindow is the context window to tell Claude Code for the models it
+// runs on, 0 when magpie doesn't know it. One value serves every model not
+// marked [1m]: the main model's, or when that one is marked, the smallest of
+// the tiers' that aren't, so none of them outgrows its own.
+func claudeWindow(main string, tiers map[string]string) int {
+	const mark = "[1m]"
+	window := map[string]int{}
+	for _, m := range magpieModels("claude") {
+		window[m.ID] = m.Context
+	}
+	if !strings.HasSuffix(main, mark) {
+		return window[main]
+	}
+	w := 0
+	for _, t := range claudeTiers {
+		if v := tiers[t]; !strings.HasSuffix(v, mark) {
+			if c := window[v]; c > 0 && (w == 0 || c < w) {
+				w = c
+			}
+		}
+	}
+	return w
+}
+
 // claudeManaged is where an administrator's Claude Code settings live; a var
 // so tests can point it elsewhere.
 var claudeManaged = func() string {
@@ -294,15 +359,18 @@ var claudeManaged = func() string {
 // StandIn is the model Claude Code is set to use in place of one it named
 // that magpie doesn't serve: claude-haiku-4-5-… for a title or a small
 // task goes to its haiku tier's model, and a name of no tier to its main
-// model. "" when Claude Code isn't routed through magpie or asked for
-// isn't Claude Code. For gateway.StandIn.
+// model. For Codex, the model it is set to (codexStandIn). "" when the
+// agent isn't routed through magpie or is neither. For gateway.StandIn.
 func StandIn(agent, model string) string {
-	if agent != "claude" {
+	if agent != "claude" && agent != "codex" {
 		return ""
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
+	}
+	if agent == "codex" {
+		return codexStandIn(filepath.Join(home, ".codex", "config.toml"))
 	}
 	if m := claudeStandIn(filepath.Join(home, ".claude", "settings.json"), model); m != "" || runtime.GOOS != "windows" {
 		return m

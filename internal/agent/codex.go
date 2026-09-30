@@ -6,9 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
 
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/codexcat"
@@ -38,6 +42,22 @@ import (
 // again without the table ("Model provider `magpie` not found"), whichever
 // way Codex is routed now.
 
+// codexStandIn is the model Codex is set to use, when magpie is its
+// provider, for a model it names that magpie doesn't serve. Codex asks for
+// some by a name of OpenAI's whatever its provider: auto-review of an
+// approval goes out as "codex-auto-review" (the guardian's reviewer model,
+// "independent of current login"), which magpie answered 404 "magpie knows
+// no model", and Codex reported the review as failed. Codex itself reviews
+// with the turn's model when its catalog lacks the reviewer; so does magpie.
+// Signed in, Codex's own names go on to OpenAI (codexUpstream) instead.
+func codexStandIn(path string) string {
+	if p, _ := edit.GetTOMLTop(path, "model_provider"); p != magpieID {
+		return ""
+	}
+	m, _ := edit.GetTOMLTop(path, "model")
+	return m
+}
+
 func codex(home string) *Agent { return codexIn(here(home)) }
 
 // codexIn is Codex as it lives at a place: this machine's home, or a WSL
@@ -60,7 +80,13 @@ func codexIn(at place) *Agent {
 		return catalog.Codex()
 	}
 	// keep the effort valid for the model; a fresh model gets its default.
+	// Routed, the Codex app offers magpie's models' efforts too (#310).
 	settle := func() error {
+		if routed() {
+			if err := codexEnableEfforts(path, magpieModels("codex")); err != nil {
+				return err
+			}
+		}
 		ms := models()
 		model, effort := get("model"), get("model_reasoning_effort")
 		if e := catalog.Efforts(ms, model); len(e) > 0 && !contains(e, effort) {
@@ -91,6 +117,74 @@ func codexIn(at place) *Agent {
 			return err
 		}
 		os.Remove(catalogPath)
+		return nil
+	}
+	// CC Switch's provider tables in Codex's config, each one's base URL
+	// by its id. A thread keeps the provider it was
+	// started on, and CC Switch moves every third-party thread onto its
+	// "custom" one, so one reopened there still went to the relay, a
+	// magpie model picked in it too, which the relay didn't know. While a
+	// magpie model is on, those tables go through magpie as well; a table
+	// a profile names is the user's to pick, and stays as it is.
+	ccSwitchTables := func() map[string]string {
+		names, _ := edit.TOMLTables(path)
+		named := map[string]bool{}
+		for _, n := range names {
+			if strings.HasPrefix(n, "profiles.") {
+				if t, _ := edit.GetTOMLTable(path, n); t["model_provider"] != "" {
+					named[t["model_provider"]] = true
+				}
+			}
+		}
+		out := map[string]string{}
+		for _, n := range names {
+			id, ok := strings.CutPrefix(n, "model_providers.")
+			if !ok || !ccSwitchProvider.MatchString(id) || named[id] {
+				continue
+			}
+			if t, _ := edit.GetTOMLTable(path, n); t["base_url"] != "" {
+				out[id] = t["base_url"]
+			}
+		}
+		return out
+	}
+	// takeTables points CC Switch's tables at magpie, each one's own base
+	// URL kept in the stash for giveTables (a table already on magpie's
+	// keeps the one kept for it)
+	takeTables := func() error {
+		was := map[string]string{}
+		json.Unmarshal([]byte(stashLoad()[at.key("codex.tables")]), &was)
+		for id, u := range ccSwitchTables() {
+			if u == at.v1() {
+				continue
+			}
+			if err := edit.SetTOMLKey(path, "model_providers."+id, "base_url", at.v1()); err != nil {
+				return err
+			}
+			was[id] = u
+		}
+		if len(was) == 0 {
+			return nil
+		}
+		b, _ := json.Marshal(was)
+		stash(map[string]string{at.key("codex.tables"): string(b)})
+		return nil
+	}
+	// giveTables puts the base URLs back, on the tables still pointed at
+	// magpie; one changed since is left as it is now
+	giveTables := func() error {
+		var was map[string]string
+		json.Unmarshal([]byte(stashLoad()[at.key("codex.tables")]), &was)
+		now := ccSwitchTables()
+		for id, u := range was {
+			if now[id] != at.v1() {
+				continue
+			}
+			if err := edit.SetTOMLKey(path, "model_providers."+id, "base_url", u); err != nil {
+				return err
+			}
+		}
+		forget(at.key("codex.tables"))
 		return nil
 	}
 	// api: the user wants magpie as Codex's provider even while Codex is
@@ -154,6 +248,9 @@ func codexIn(at place) *Agent {
 			if err := dropSubagent(); err != nil {
 				return err
 			}
+			if err := giveTables(); err != nil {
+				return err
+			}
 			// Codex as installed: OpenAI, its own catalog, its default model
 			if err := dropBase(); err != nil {
 				return err
@@ -192,6 +289,9 @@ func codexIn(at place) *Agent {
 				); err != nil {
 					return err
 				}
+				if err := takeTables(); err != nil {
+					return err
+				}
 				return settle()
 			}
 			if err := putProvider(); err != nil {
@@ -216,7 +316,13 @@ func codexIn(at place) *Agent {
 			if err := edit.SetTOMLTop(path, kv...); err != nil {
 				return err
 			}
+			if err := takeTables(); err != nil {
+				return err
+			}
 			return settle()
+		}
+		if err := giveTables(); err != nil {
+			return err
 		}
 		if routed() {
 			if err := dropSubagent(); err != nil {
@@ -265,6 +371,12 @@ func codexIn(at place) *Agent {
 			// while magpie is wired, for the threads that name it
 			if isMagpie(get("model")) && viaBase() && !hasProvider() {
 				if err := putProvider(); err != nil {
+					return err
+				}
+			}
+			// CC Switch's tables, left from before magpie took them over
+			if isMagpie(get("model")) && routed() {
+				if err := takeTables(); err != nil {
 					return err
 				}
 			}
@@ -334,6 +446,11 @@ func codexIn(at place) *Agent {
 				}
 			default:
 				return "Codex's config no longer sends its model through magpie (no openai_base_url or model_provider of magpie's), so Codex asks OpenAI for a model OpenAI doesn't have"
+			}
+			for id, u := range ccSwitchTables() {
+				if u != at.v1() {
+					return "Codex's [model_providers." + id + "] (CC Switch's) sends to " + u + ", not magpie's gateway: a Codex thread started on it goes there when reopened, a magpie model picked in it too"
+				}
 			}
 			return ""
 		},
@@ -431,6 +548,11 @@ func codexIn(at place) *Agent {
 	}, path, catalogPath)
 }
 
+// ccSwitchProvider matches the ids of the provider tables CC Switch writes
+// into Codex's config: "custom", and "cc-switch", "cc-switch-2"… from its
+// older versions. Its "cc-switch-official" is its own proxy to OpenAI.
+var ccSwitchProvider = regexp.MustCompile(`^(custom|cc-switch(-[0-9]+)?)$`)
+
 func contains(xs []string, x string) bool {
 	for _, v := range xs {
 		if v == x {
@@ -438,6 +560,76 @@ func contains(xs []string, x string) bool {
 		}
 	}
 	return false
+}
+
+// The reasoning efforts the Codex app knows, in its order (the enum of its
+// enabled-reasoning-efforts setting), and those it offers while the
+// setting is unset.
+var (
+	codexAppEfforts   = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent"}
+	codexAppEffortsOn = []string{"low", "medium", "high", "xhigh", "ultra", "persistent"}
+)
+
+// codexEnableEfforts adds the efforts magpie's models take to the Codex
+// app's [desktop] enabled-reasoning-efforts in config.toml: its model
+// picker offers a model's efforts only when they are there, so a model's
+// "max" or "minimal" was never offered (#310). The user's entries stay,
+// only what is missing is added, and nothing is written when nothing is;
+// an effort the app doesn't know is left out, as it would drop the whole
+// setting for it. A [desktop] spelled some other way (inline, dotted
+// keys) is left alone.
+func codexEnableEfforts(path string, ms []catalog.Model) error {
+	raw, err := edit.Read(path)
+	if err != nil {
+		return nil
+	}
+	var cfg struct {
+		Desktop map[string]any `toml:"desktop"`
+	}
+	if err := toml.Unmarshal(raw, &cfg); err != nil {
+		return nil
+	}
+	on := codexAppEffortsOn
+	if cfg.Desktop != nil {
+		if tables, _ := edit.TOMLTables(path); !slices.Contains(tables, "desktop") {
+			return nil
+		}
+		if v, ok := cfg.Desktop["enabled-reasoning-efforts"]; ok {
+			xs, ok := v.([]any)
+			if !ok {
+				return nil
+			}
+			on = nil
+			for _, x := range xs {
+				s, ok := x.(string)
+				if !ok {
+					return nil
+				}
+				on = append(on, s)
+			}
+		}
+	}
+	add := false
+	out := slices.Clone(on)
+	for _, e := range codexAppEfforts {
+		if slices.Contains(on, e) {
+			continue
+		}
+		for _, m := range ms {
+			if slices.Contains(m.Efforts, e) {
+				out, add = append(out, e), true
+				break
+			}
+		}
+	}
+	if !add {
+		return nil
+	}
+	q := make([]string, len(out))
+	for i, e := range out {
+		q[i] = strconv.Quote(e)
+	}
+	return edit.SetTOMLKey(path, "desktop", "enabled-reasoning-efforts", edit.Raw("["+strings.Join(q, ", ")+"]"))
 }
 
 // ownCodex is Codex's own models, narrowed to the ones ticked on its ChatGPT

@@ -33,6 +33,8 @@ type groupJSON struct {
 	// its members have in common, which it offers unless it names its own
 	Offers []string `json:"offers"`
 	Shared []string `json:"shared"`
+	// Picked: the member a manual group sends every request to
+	Picked string `json:"picked,omitempty"`
 }
 
 type memberJSON struct {
@@ -184,6 +186,12 @@ func groupsState() groupsJSON {
 				gj.Ready = true
 			}
 			gj.Info = append(gj.Info, m)
+		}
+		if g.Routing == provider.Manual {
+			// agents can pick it while the member picked can answer
+			gj.Picked = g.Picked()
+			i := slices.IndexFunc(gj.Info, func(m memberJSON) bool { return m.ID == gj.Picked })
+			gj.Ready = i >= 0 && gj.Info[i].Ready
 		}
 		out.Groups = append(out.Groups, gj)
 	}

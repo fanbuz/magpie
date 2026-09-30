@@ -245,7 +245,14 @@ func addSideLogin(l savedLogin, ownUser string, dup func(savedLogin)) error {
 		if ls[i].Agent == l.Agent && strings.EqualFold(ls[i].User, l.User) {
 			if ls[i].own() && strings.EqualFold(ownUser, l.User) {
 				dup(l)
-				return nil
+				// removed in magpie, the agent's own is brought back by
+				// signing in to it again: kept hidden, the sign-in said
+				// done and the account was listed nowhere (#320)
+				if ls[i].Hidden == "" {
+					return nil
+				}
+				ls[i].Hidden = ""
+				return writeLogins(ls)
 			}
 			old := ls[i]
 			ls[i].Auth, ls[i].Home, ls[i].Plan, ls[i].Seen = l.Auth, l.Home, l.Plan, l.Seen

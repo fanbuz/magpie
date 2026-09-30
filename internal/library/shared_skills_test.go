@@ -67,7 +67,7 @@ func TestSharedAgentsSkills(t *testing.T) {
 	if f.Shared == "" || f.Link != "" || !slices.Equal(agents, []string{"codex", "pi"}) || len(f.Others) != 0 {
 		t.Errorf("orchestration is one skill in the shared folder, pi and codex: %+v", f)
 	}
-	if f := byName["orca-cli"]; f.Shared == "" || len(f.Agents) != 0 || !slices.Equal(f.Others, []string{"codex"}) {
+	if f := byName["orca-cli"]; f.Shared == "" || len(f.Agents) != 0 || len(f.Others) != 0 || !slices.Equal(f.Copies, []string{"codex"}) {
 		t.Errorf("orca-cli: %+v", f)
 	}
 
@@ -95,14 +95,15 @@ func TestSharedAgentsSkills(t *testing.T) {
 			t.Errorf("the library's %s isn't a link to %s", n, want)
 		}
 	}
-	// the agents that had it have the library's, the one with its own copy keeps it
-	for _, d := range []string{".pi/agent/skills/orchestration", ".codex/skills/orchestration", ".gemini/skills/grilling"} {
+	// the agents that had it have the library's, and so has the one with a
+	// byte copy of its own, kept aside with the backups
+	for _, d := range []string{".pi/agent/skills/orchestration", ".codex/skills/orchestration", ".gemini/skills/grilling", ".codex/skills/orca-cli"} {
 		if !ours(filepath.Join(h, d), filepath.Base(d)) {
 			t.Errorf("%s isn't the library's", d)
 		}
 	}
-	if linked(filepath.Join(h, ".codex/skills/orca-cli")) {
-		t.Error("codex's own copy was replaced")
+	if m, _ := filepath.Glob(filepath.Join(BackupDir(), "*", "codex", "skills", "orca-cli", "SKILL.md")); len(m) != 1 {
+		t.Errorf("codex's own copy isn't kept aside: %v", m)
 	}
 	v, _ := Read(nil)
 	for _, s := range v.Skills {

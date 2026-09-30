@@ -234,6 +234,8 @@ body.panel .seg { display: none; }
 .top.tight .update { width: 22px; padding: 0; justify-content: center; margin-right: 4px; }
 body.window .top.cramped .seg { position: relative; left: auto; top: auto; transform: none; margin: 0 auto; } /* relative still: its thumb sits in it, not over the whole header */
 .top.cramped .seg button { padding: 0 8px; }
+.top.crowded .seg button { padding: 0 6px; font-size: 12px; }
+.top.crowded .brand { display: none; }
 @keyframes update-in { from { opacity: 0; transform: translateY(-3px) scale(.94); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -1453,6 +1455,11 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .signing .callback-form { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; }
 .signing .callback-form input { flex: 1; min-width: 120px; width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--fg); font-size: 12px; }
 .signing .why { color: var(--red); }
+/* a plugin's ways to sign in: the question keeps the row, the choices
+   wrap beneath it at whatever length the plugin names them */
+.signing.plugin-ask { flex-wrap: wrap; }
+.signing.plugin-ask .choices { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
+.signing.plugin-ask .choices button { height: auto; min-height: 26px; max-width: 100%; padding: 4px 10px; white-space: normal; text-align: left; line-height: 1.3; overflow-wrap: anywhere; }
 /* an import: what is pasted is sign-ins, so it is masked */
 .signing.import textarea { margin-top: 6px; width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; outline: none; -webkit-text-security: disc; }
 .signing.import textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
@@ -1730,6 +1737,10 @@ input.words.rule-match { flex: 1 1 auto; width: auto; min-width: 0; }
 :root[data-theme="dark"] .warm-at input.at { color-scheme: dark; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .warm-at input.at { color-scheme: dark; } }
 @media (max-width: 520px) { .proxy-segs { flex-wrap: wrap; justify-content: flex-end; } }
+/* Settings → Plugins: what a plugin signs in to, or why it didn't load, said whole */
+.row.pref.plugin-row .sub, .row.pref.plugin-add .sub { white-space: normal; }
+.row.pref.plugin-row.off .name { color: var(--muted); }
+.row.pref.plugin-add .val { flex-wrap: wrap; justify-content: flex-end; }
 .prefs .val { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; min-width: 0; max-width: 60%; flex: none; }
 .prefs .val code { font-size: 12px; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; -webkit-user-select: text; padding: 0 6px; }
 .prefs .val .text { padding: 3px 6px; }
@@ -2033,10 +2044,18 @@ body.window .row.agent .who.with-models { flex-wrap: wrap; row-gap: 0; }
 @media (hover: none) { .am-all { opacity: 1; } }
 .am-mr { display: flex; align-items: center; gap: 10px; width: calc(100% - 4px); height: 32px; margin: 0 2px; padding: 0 12px; border: 0; border-radius: 8px; background: none; color: var(--fg); font: inherit; font-size: 13px; text-align: left; cursor: pointer; transition: background-color .12s; }
 .am-mr:hover { background: var(--pill); }
+/* under its group: the model's icon in the group icon's column, past the
+   twisty, so the rows read as the group's */
+.am-rows .am-mr { padding-left: 28px; }
 .am-mr:focus-visible { outline: 1.5px solid var(--accent); outline-offset: -1.5px; }
 .am-mr .lg { flex: none; }
 .am-mr .lg > svg { color: var(--muted); }
 .am-mr.off .lg { opacity: .45; }
+/* a routing group's providers, discs as in a picker's field, in one width of slot, so the
+   names still start in a column */
+.am-g.routes .am-mr .lg { min-width: 56px; justify-content: flex-start; }
+.am-mr .ic-stack .disc { width: 17px; height: 17px; }
+.am-mr .ic-stack .disc > .ic { width: 11px !important; height: 11px !important; }
 .am-mr .n { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color .15s; }
 .am-mr .x { flex: none; font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .am-mr .ck { flex: none; display: inline-flex; justify-content: center; width: 16px; color: var(--accent); }

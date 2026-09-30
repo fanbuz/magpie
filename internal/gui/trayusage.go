@@ -70,16 +70,22 @@ func trayUsageText(q provider.SubscriptionQuota, now time.Time, left bool) (labe
 	}
 	var short, long []string
 	for _, w := range ws {
-		n := int(math.Round(math.Max(0, math.Min(100, w.Used))))
+		used := math.Max(0, math.Min(100, w.Used))
+		n := int(math.Round(used))
 		word := "used"
 		if left {
+			used = 100 - used
 			n, word = 100-n, "left"
 		}
 		pct := fmt.Sprintf("%d%%", n)
 		short = append(short, pct)
-		line := w.Name + " " + pct + " " + word
+		tipPct := pct
+		if used != math.Trunc(used) {
+			tipPct = fmt.Sprintf("%.1f%%", used)
+		}
+		line := w.Name + " " + tipPct + " " + word
 		if w.Display != "" {
-			line = w.Name + " " + w.Display + " · " + pct + " " + word
+			line = w.Name + " " + w.Display + " · " + tipPct + " " + word
 		}
 		if at := resetAt(w, now); !at.IsZero() && at.After(now) {
 			line += " · resets in " + until(at.Sub(now))

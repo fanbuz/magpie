@@ -17,6 +17,9 @@ type Result struct {
 	// fetched again and the ones that couldn't be (What is skill:<name>)
 	Updated   []string  `json:"updated,omitempty"`
 	Unupdated []Problem `json:"unupdated,omitempty"`
+	// Unimported are, for skills brought in together, the ones that
+	// couldn't be (What is skill:<name>)
+	Unimported []Problem `json:"unimported,omitempty"`
 }
 
 // Problem is one thing that couldn't be given to an agent.
@@ -24,6 +27,9 @@ type Problem struct {
 	Agent string `json:"agent"`
 	What  string `json:"what"` // instructions, mcp:<name>, skill:<name>
 	Error string `json:"error"`
+	// Own is a skill the agent has a folder of its own for, not the
+	// library's: the page offers to use the library's or keep the agent's
+	Own bool `json:"own,omitempty"`
 }
 
 func (r *Result) changed(agent string) {
@@ -314,7 +320,12 @@ func RemoveServer(name string) (*Result, error) {
 		if i < 0 {
 			return fmt.Errorf("no server called %s", name)
 		}
+		k := serverKey(l.MCP[i])
 		l.MCP = slices.Delete(l.MCP, i, i+1)
+		// its icon goes with it, unless another server runs the same thing
+		if !slices.ContainsFunc(l.MCP, func(x *Server) bool { return serverKey(x) == k }) {
+			delete(l.Icons, k)
+		}
 		return nil
 	})
 }

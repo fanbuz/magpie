@@ -145,6 +145,7 @@ func CacheEntries() map[string]map[string]any {
 		return nil
 	}
 	var cache struct {
+		ETag   string           `json:"etag"`
 		Models []map[string]any `json:"models"`
 	}
 	if json.Unmarshal(b, &cache) != nil {
@@ -152,7 +153,8 @@ func CacheEntries() map[string]map[string]any {
 	}
 	out := map[string]map[string]any{}
 	for _, m := range cache.Models {
-		if slug, _ := m["slug"].(string); slug != "" {
+		desc, _ := m["description"].(string)
+		if slug, _ := m["slug"].(string); slug != "" && !catalog.MagpieAdded(cache.ETag, slug, desc) {
 			out[slug] = m
 		}
 	}

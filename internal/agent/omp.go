@@ -1,6 +1,7 @@
 package agent
 
-// omp (oh-my-pi, a fork of Pi) keeps its settings in ~/.omp/agent/config.yml,
+// omp (oh-my-pi, a fork of Pi) keeps its settings in ~/.omp/agent/config.yml
+// (or where ompDir says its variables move it),
 // the model of each role under modelRoles as "provider/model", and providers
 // of the user's own in models.yml beside it. magpie adds itself there as the
 // provider "magpie", keyless (auth: none), with the catalog as its models; a
@@ -10,6 +11,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -19,8 +21,35 @@ import (
 // ompEfforts are the thinking levels omp knows.
 var ompEfforts = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
 
+// ompProfileName is a profile name omp takes (pi-utils dirs.ts,
+// normalizeProfileName); it refuses any other.
+var ompProfileName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+
+// ompDir is omp's agent folder, found as omp's pi-utils (dirs.ts) finds it:
+// under ~/.omp, or ~/$PI_CONFIG_DIR; a profile's (OMP_PROFILE, else
+// PI_PROFILE; "default" is none) is profiles/<name>/agent there; with none,
+// PI_CODING_AGENT_DIR — the variable Pi reads — moves it, else it is
+// agent there. omp takes that variable as given, without expanding "~".
+func ompDir(home string) string {
+	root := filepath.Join(home, ".omp")
+	if d := os.Getenv("PI_CONFIG_DIR"); d != "" {
+		root = filepath.Join(home, d)
+	}
+	p, set := os.LookupEnv("OMP_PROFILE")
+	if !set {
+		p = os.Getenv("PI_PROFILE")
+	}
+	if p = strings.TrimSpace(p); p != "" && p != "default" && ompProfileName.MatchString(p) && !strings.HasSuffix(p, ".") {
+		return filepath.Join(root, "profiles", p, "agent")
+	}
+	if d := os.Getenv("PI_CODING_AGENT_DIR"); filepath.IsAbs(d) {
+		return filepath.Clean(d)
+	}
+	return filepath.Join(root, "agent")
+}
+
 func omp(home string) *Agent {
-	dir := filepath.Join(home, ".omp", "agent")
+	dir := ompDir(home)
 	// omp reads the .yml and falls back to the .yaml
 	pick := func(name string) string {
 		yml := filepath.Join(dir, name+".yml")

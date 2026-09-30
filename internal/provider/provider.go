@@ -8,6 +8,7 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,8 +18,10 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -536,6 +539,12 @@ func ShowAccount(id string) error {
 // Delete removes a provider. An account is only hidden from magpie (its
 // model picks kept); signing out is the agent's job.
 func Delete(id string) error {
+	if p, ok := find(Accounts(), id); ok && p.IsPlugin() {
+		// a plugin's sign-in is magpie's own: removing it signs out
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return plugin.SignOut(ctx, p.Account.plugin.ID)
+	}
 	if _, ok := find(Accounts(), id); ok {
 		f := load()
 		for i := range f.Providers {
@@ -709,7 +718,7 @@ func (p Provider) Base(proto Protocol) string {
 // Speaks lists the protocols the vendor serves natively, preferred first.
 func (p Provider) Speaks() []Protocol {
 	// a Google sign-in speaks Code Assist, and only that
-	if p.Account != nil && p.Account.codeAssist != "" {
+	if p.Account != nil && p.Account.codeAssist != "" && !p.IsPlugin() {
 		return []Protocol{CodeAssist}
 	}
 	var out []Protocol
@@ -717,6 +726,10 @@ func (p Provider) Speaks() []Protocol {
 		if p.Base(pr) != "" {
 			out = append(out, pr)
 		}
+	}
+	// a plugin's Gemini models, beside what else it serves
+	if p.IsPlugin() && p.Account.codeAssist != "" {
+		out = append(out, CodeAssist)
 	}
 	return out
 }

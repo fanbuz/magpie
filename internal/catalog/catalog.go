@@ -714,9 +714,11 @@ func Codex() []Model {
 
 func parseCodex(b []byte) ([]Model, error) {
 	var cache struct {
+		ETag   string `json:"etag"`
 		Models []struct {
 			Slug        string   `json:"slug"`
 			DisplayName string   `json:"display_name"`
+			Description string   `json:"description"`
 			Visibility  string   `json:"visibility"`
 			Priority    int      `json:"priority"`
 			Input       []string `json:"input_modalities"`
@@ -733,7 +735,7 @@ func parseCodex(b []byte) ([]Model, error) {
 	sort.SliceStable(cache.Models, func(i, j int) bool { return cache.Models[i].Priority < cache.Models[j].Priority })
 	var out []Model
 	for _, m := range cache.Models {
-		if m.Visibility == "hide" {
+		if m.Visibility == "hide" || MagpieAdded(cache.ETag, m.Slug, m.Description) {
 			continue
 		}
 		mm := Model{ID: m.Slug, Name: m.DisplayName, Provider: "openai", ImageInput: imageInput(m.Input)}
@@ -749,6 +751,17 @@ func parseCodex(b []byte) ([]Model, error) {
 		out = append(out, mm)
 	}
 	return out, nil
+}
+
+// MagpieAdded reports whether an entry of Codex's models_cache.json is one
+// of magpie's, not Codex's own: the list Codex keeps is the one it was last
+// handed, and handed through the gateway it has magpie's models in it too
+// ("group/semantic", "deepseek/deepseek-v4", "codex/gpt-5.5" — magpie's ids,
+// which Codex's slugs never look like). Read back as Codex's own, they were
+// listed under OpenAI, and kept there after Codex was routed elsewhere.
+func MagpieAdded(etag, slug, description string) bool {
+	return strings.HasSuffix(description, " via magpie") ||
+		strings.Contains(etag, "+magpie-") && strings.Contains(slug, "/")
 }
 
 // Efforts returns the reasoning levels a model supports, if known.

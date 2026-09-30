@@ -104,10 +104,8 @@ func targetOf(a *agent.Agent) *Target {
 		t.MCP = &mcpFile{Path: a.Path, Format: fmtOpenCode}
 		t.Skills = filepath.Join(d, "skills")
 	case "pi":
-		d := os.Getenv("PI_CODING_AGENT_DIR")
-		if d == "" {
-			d = filepath.Join(h, ".pi", "agent")
-		}
+		// PI_CODING_AGENT_DIR's, else ~/.pi/agent (agent.piDir)
+		d := a.Dir
 		t.Instructions = filepath.Join(d, "AGENTS.md")
 		// Pi 0.99 reads MCP servers itself, from its mcp.json; before it,
 		// and while an MCP extension replaces its own (pi-mcp-adapter,
@@ -124,8 +122,12 @@ func targetOf(a *agent.Agent) *Target {
 		t.MCP = &mcpFile{Path: files[0], Also: files[1:], Format: fmtDsh}
 		t.Skills = filepath.Join(d, "skills")
 	case "omp":
-		d := filepath.Join(h, ".omp", "agent")
+		// ~/.omp/agent, or where omp's variables move it (agent.ompDir)
+		d := a.Dir
 		t.Instructions = filepath.Join(d, "AGENTS.md")
+		// omp reads mcpServers from its agent folder's mcp.json
+		// (discovery/builtin.ts), type choosing the transport
+		t.MCP = &mcpFile{Path: filepath.Join(d, "mcp.json"), Format: fmtOmp}
 		t.Skills = filepath.Join(d, "skills")
 	case "omo":
 		// OmO's engine (senpi, a fork of Pi) reads its agent folder's
@@ -180,6 +182,10 @@ func targetOf(a *agent.Agent) *Target {
 		// skills, ~/.agents/skills (kimi_cli/skill), wherever KIMI_SHARE_DIR
 		// is; before its 1.x brand/generic split, only the first of all five.
 		// The new Kimi Code (2.x) reads its own and ~/.agents/skills only.
+		//
+		// Its MCP servers are the mcp.json in its folder, which the old
+		// kimi-cli (fastmcp's MCPConfig) and the new Kimi Code read alike.
+		t.MCP = &mcpFile{Path: filepath.Join(a.Dir, "mcp.json"), Format: fmtKimi}
 		if _, legacy := agent.KimiDir(h); !legacy {
 			t.Skills = sharedSkillsDir()
 		} else if d := filepath.Join(h, ".config", "agents", "skills"); isDir(d) {
@@ -190,12 +196,54 @@ func targetOf(a *agent.Agent) *Target {
 	case "cindy":
 		// Cindy keeps its user-wide skills in ~/.agents/skills
 		t.Skills = sharedSkillsDir()
-	case "commandcode", "devin", "hermes", "droid", "cline", "qoder", "qoder-cn", "grok", "workbuddy", "hanako", "fx":
-		// a skills folder in the agent's own: Command Code's ~/.commandcode,
-		// Devin's ~/.config/devin, Hermes' $HERMES_HOME, Factory's ~/.factory,
-		// Cline's $CLINE_DIR, Qoder's ~/.qoder(-cn), Grok's $GROK_HOME,
-		// WorkBuddy's ~/.workbuddy, Hanako's $HANA_HOME, fx's ~/.fx — each
-		// said by its docs or source; most read ~/.agents/skills as well
+	case "hermes":
+		// Hermes Agent reads mcp_servers from $HERMES_HOME/config.yaml, the
+		// file magpie sets its model in too (tools/mcp_tool.py), and skills
+		// from $HERMES_HOME/skills
+		t.MCP = &mcpFile{Path: a.Path, Format: fmtHermes}
+		t.Skills = filepath.Join(a.Dir, "skills")
+	case "devin":
+		// Devin reads its user-wide MCP servers from mcp_config.json
+		// beside its config.json (devin mcp add --scope user)
+		t.MCP = &mcpFile{Path: filepath.Join(a.Dir, "mcp_config.json"), Format: fmtDevin}
+		t.Skills = filepath.Join(a.Dir, "skills")
+	case "grok":
+		// Grok Build reads [mcp_servers.<name>] from its config.toml, as
+		// `grok mcp add` writes them
+		t.MCP = &mcpFile{Path: a.Path, Format: fmtGrok}
+		t.Skills = filepath.Join(a.Dir, "skills")
+	case "droid":
+		// Droid's user-wide servers are ~/.factory/mcp.json's mcpServers,
+		// type stdio, http or sse as Claude Code's (docs.factory.ai/cli/
+		// configuration/mcp)
+		t.MCP = &mcpFile{Path: filepath.Join(a.Dir, "mcp.json"), Format: fmtClaude}
+		t.Skills = filepath.Join(a.Dir, "skills")
+	case "qoder", "qoder-cn":
+		// Qoder's user-wide servers are its settings.json's mcpServers
+		// (docs.qoder.com/cli/mcp-reference), beside magpie's provider
+		t.MCP = &mcpFile{Path: a.Path, Format: fmtOmp}
+		t.Skills = filepath.Join(a.Dir, "skills")
+	case "cline":
+		// Cline's CLI reads its MCP servers from settings/
+		// cline_mcp_settings.json beside providers.json, or
+		// $CLINE_MCP_SETTINGS_PATH (@cline/shared's storage)
+		p := os.Getenv("CLINE_MCP_SETTINGS_PATH")
+		if p == "" {
+			p = filepath.Join(filepath.Dir(a.Path), "cline_mcp_settings.json")
+		}
+		t.MCP = &mcpFile{Path: p, Format: fmtCline}
+		t.Skills = filepath.Join(a.Dir, "skills")
+	case "commandcode":
+		// Command Code reads ~/.commandcode/mcp.json (getUserMcpConfigPath)
+		t.MCP = &mcpFile{Path: filepath.Join(a.Dir, "mcp.json"), Format: fmtCommandCode}
+		t.Skills = filepath.Join(a.Dir, "skills")
+	case "workbuddy", "hanako", "fx":
+		// a skills folder in the agent's own: WorkBuddy's ~/.workbuddy,
+		// Hanako's $HANA_HOME, fx's ~/.fx — each said by its docs or
+		// source. No MCP servers: WorkBuddy runs one in its mcp.json only
+		// once it is approved in WorkBuddy, OpenHanako only once switched
+		// on for each agent and tool, and fx's mcp.json, which one entry it
+		// refuses makes it read none of, isn't one magpie could try.
 		t.Skills = filepath.Join(a.Dir, "skills")
 	case "claude-desktop":
 		// Claude Desktop reads only commands from its file: a remote server

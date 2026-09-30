@@ -29,6 +29,7 @@ func setupAgents(t *testing.T) (home string) {
 	copyTree(t, "testdata/qoder-cn", filepath.Join(home, ".qoder-cn"))
 	copyTree(t, "testdata/grok", filepath.Join(home, ".grok"))
 	copyTree(t, "testdata/workbuddy", filepath.Join(home, ".workbuddy"))
+	copyTree(t, "testdata/omp", filepath.Join(home, ".omp"))
 	zcMakeDB(t, filepath.Join(home, ".zcode", "cli", "db", "db.sqlite"))
 	return
 }
@@ -272,7 +273,7 @@ func TestDirsMore(t *testing.T) {
 	home := setupAgents(t)
 	d := Dirs()
 	want := []string{filepath.Join(home, ".zcode"), filepath.Join(home, ".dsh"), filepath.Join(home, ".cline", "data", "sessions"), filepath.Join(home, ".qoder"), filepath.Join(home, ".qoder-cn"),
-		filepath.Join(home, ".grok"), filepath.Join(home, ".workbuddy")}
+		filepath.Join(home, ".grok"), filepath.Join(home, ".workbuddy"), filepath.Join(home, ".omp", "agent")}
 	if len(d) != 2+len(want) {
 		t.Fatalf("dirs %v", d)
 	}

@@ -62,12 +62,12 @@ function server(lang, refreshed) {
 const L = {
   en: {
     statuses: ["429 · rate_limit_error", "200", "Succeeded", "rate_limit"], badge: "Local session",
-    labels: { fail: ["Status", "Error type", "Upstream said", "Request ID", "Endpoint", "Session ID"], ok: ["Request ID", "Endpoint", "First token"], log: ["Request ID", "Session ID", "Source"], logFail: ["Status", "Error type", "Error", "Request ID", "Session ID", "Source"] },
+    labels: { fail: ["Status", "Error type", "Upstream said", "Request ID", "Endpoint", "Session ID"], ok: ["Request ID", "Endpoint", "First token"], log: ["Request ID", "Session ID", "Data source"], logFail: ["Status", "Error type", "Error", "Request ID", "Session ID", "Data source"] },
     noStatus: "Read from the agent's session file. The account is shown only when local metadata identifies it; no service provider is inferred.",
   },
   zh: {
     statuses: ["429 · rate_limit_error", "200", "成功", "rate_limit"], badge: "本地会话",
-    labels: { fail: ["状态", "错误类型", "上游返回", "请求 ID", "终结点", "会话 ID"], ok: ["请求 ID", "终结点", "首响"], log: ["请求 ID", "会话 ID", "来源"], logFail: ["状态", "错误类型", "错误", "请求 ID", "会话 ID", "来源"] },
+    labels: { fail: ["状态", "错误类型", "上游返回", "请求 ID", "终结点", "会话 ID"], ok: ["请求 ID", "终结点", "首响"], log: ["请求 ID", "会话 ID", "数据来源"], logFail: ["状态", "错误类型", "错误", "请求 ID", "会话 ID", "数据来源"] },
     noStatus: "读自 Agent 的会话文件；仅在本地元数据能够明确识别时显示账号，不推断供应商。",
   },
 };
