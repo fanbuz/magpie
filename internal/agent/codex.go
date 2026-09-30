@@ -29,7 +29,9 @@ import (
 // is too for a ChatGPT account that has used its allowance up, which the
 // Codex app won't send anything for, whoever serves the model, and when
 // the user asks for it (the sign-in field's api): the Codex app is then in
-// its API state rather than signed in to ChatGPT.
+// its API state rather than signed in to ChatGPT. The base URL is set then
+// too: a thread started on the built-in provider is opened on it again, and
+// a magpie model picked in it would otherwise go to the ChatGPT backend.
 //
 // The [model_providers.magpie] table stays once written. A thread keeps the
 // provider it was started on, and one started on magpie can't be opened
@@ -192,20 +194,26 @@ func codexIn(at place) *Agent {
 				}
 				return settle()
 			}
-			if err := dropBase(); err != nil {
-				return err
-			}
 			if err := putProvider(); err != nil {
 				return err
 			}
 			if err := edit.WriteAtomic(catalogPath, codexcat.Catalog(magpieModels("codex"))); err != nil {
 				return err
 			}
-			if err := edit.SetTOMLTop(path,
-				edit.KV{Path: "model_provider", Value: magpieID},
-				edit.KV{Path: "model_catalog_json", Value: at.native(catalogPath)},
-				edit.KV{Path: "model", Value: v},
-			); err != nil {
+			// a thread started on Codex's built-in provider stays on it when
+			// opened again, and its model can be switched to one of magpie's
+			// there (the Codex app's, ChatGPT Desktop's picker): the base
+			// URL sends that one to magpie too, not to the ChatGPT backend,
+			// which refuses it (#259). A base URL of the user's own stays.
+			kv := []edit.KV{
+				{Path: "model_provider", Value: magpieID},
+				{Path: "model_catalog_json", Value: at.native(catalogPath)},
+				{Path: "model", Value: v},
+			}
+			if u := get("openai_base_url"); u == "" || viaBase() {
+				kv = append(kv, edit.KV{Path: "openai_base_url", Value: at.codexURL()})
+			}
+			if err := edit.SetTOMLTop(path, kv...); err != nil {
 				return err
 			}
 			return settle()
@@ -246,7 +254,7 @@ func codexIn(at place) *Agent {
 		return settle()
 	}
 
-	return &Agent{
+	return atomic(&Agent{
 		ID: "codex", Name: "Codex", Icon: "codex-color", Bin: "codex", Dir: dir, Path: path,
 		UA: []string{"codex"},
 		Sync: func() error {
@@ -262,6 +270,13 @@ func codexIn(at place) *Agent {
 			}
 			switch {
 			case asProvider() && get("model_catalog_json") == at.native(catalogPath):
+				// set up by a magpie from before #259: the threads started
+				// on Codex's built-in provider reach magpie too
+				if get("openai_base_url") == "" {
+					if err := edit.SetTOMLTop(path, edit.KV{Path: "openai_base_url", Value: at.codexURL()}); err != nil {
+						return err
+					}
+				}
 				b := codexcat.Catalog(magpieModels("codex"))
 				if cur, _ := edit.Read(catalogPath); string(cur) != string(b) {
 					if err := edit.WriteAtomic(catalogPath, b); err != nil {
@@ -413,7 +428,7 @@ func codexIn(at place) *Agent {
 				},
 			},
 		},
-	}
+	}, path, catalogPath)
 }
 
 func contains(xs []string, x string) bool {
@@ -426,11 +441,12 @@ func contains(xs []string, x string) bool {
 }
 
 // ownCodex is Codex's own models, narrowed to the ones ticked on its ChatGPT
-// subscription in magpie when any are.
+// subscription in magpie when any are — the subscription switched off, its
+// picks narrow nothing, as it serves no agent anything.
 func ownCodex() []catalog.Model {
 	ms := catalog.Codex()
 	p, err := provider.Find("codex")
-	if err != nil || len(p.Models) == 0 {
+	if err != nil || p.Off || len(p.Models) == 0 {
 		return ms
 	}
 	var out []catalog.Model

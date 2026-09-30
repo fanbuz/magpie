@@ -230,6 +230,13 @@ func (c remoteWindows) TintPanel(rgba [4]uint8, ms int) bool {
 	q := url.Values{"c": {fmt.Sprintf("%d,%d,%d,%d", rgba[0], rgba[1], rgba[2], rgba[3])}, "ms": {strconv.Itoa(ms)}}
 	return c.post("tint", url.Values{"arg": {q.Encode()}}) == "ok"
 }
+func (c remoteWindows) TintTitleBar(rgba [4]uint8, dark bool) bool {
+	q := url.Values{"c": {fmt.Sprintf("%d,%d,%d,%d", rgba[0], rgba[1], rgba[2], rgba[3])}}
+	if dark {
+		q.Set("dark", "1")
+	}
+	return c.post("titlebar", url.Values{"arg": {q.Encode()}}) == "ok"
+}
 func (c remoteWindows) SetTextSize(percent int) {
 	c.post("textsize", url.Values{"arg": {strconv.Itoa(percent)}})
 }
@@ -305,6 +312,12 @@ func devShell(h *host) http.Handler {
 		case "tint":
 			q, _ := url.ParseQuery(arg)
 			if c, ms, ok := parseTint(q); ok && h.TintPanel(c, ms) {
+				rw.Write([]byte("ok"))
+				return
+			}
+		case "titlebar":
+			q, _ := url.ParseQuery(arg)
+			if c, _, ok := parseTint(q); ok && h.TintTitleBar(c, q.Get("dark") == "1") {
 				rw.Write([]byte("ok"))
 				return
 			}

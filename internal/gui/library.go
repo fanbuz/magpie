@@ -23,6 +23,9 @@ type libraryJSON struct {
 	*library.View
 	Result *library.Result `json:"result,omitempty"`
 	Home   string          `json:"home"` // for the page to show paths under it as ~
+	// Problems are every one still standing, the page's list of what an
+	// agent couldn't be given: not only those a chip can carry
+	Problems []library.Problem `json:"problems,omitempty"`
 }
 
 func libraryView(res *library.Result) (libraryJSON, error) {
@@ -34,7 +37,7 @@ func libraryView(res *library.Result) (libraryJSON, error) {
 	lastProblems.Unlock()
 	v, err := library.Read(p)
 	home, _ := os.UserHomeDir()
-	return libraryJSON{View: v, Result: res, Home: home}, err
+	return libraryJSON{View: v, Result: res, Home: home, Problems: p}, err
 }
 
 // marketJSON is a market's list, and why it may be short: a search that

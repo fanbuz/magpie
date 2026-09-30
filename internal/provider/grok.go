@@ -438,7 +438,7 @@ func startGrokSignIn(s *signInFlow) error {
 		return runCLISignIn(s, "grok login", nil, true, nil, func() (string, string, bool) {
 			c, ok := readGrokCredential(GrokHome())
 			return c.Email, "", ok
-		}, path, "login", "--device-auth")
+		}, nil, path, "login", "--device-auth")
 	}
 	home, err := newGrokHome()
 	if err != nil {
@@ -447,7 +447,7 @@ func startGrokSignIn(s *signInFlow) error {
 	err = runCLISignIn(s, "grok login", grokOwnEnv(os.Environ(), home), false, func() { removeGrokHome(home) }, func() (string, string, bool) {
 		user, err := addGrokLogin(home)
 		return user, "", err == nil
-	}, path, "login", "--device-auth")
+	}, nil, path, "login", "--device-auth")
 	if err != nil {
 		removeGrokHome(home)
 	}
@@ -465,8 +465,10 @@ func agentCommand(ctx context.Context, path string, args ...string) *exec.Cmd {
 // prints to the window, and finishes when the command does and identity
 // says who is signed in. using says whether the agent now uses that
 // account; failed, when there is one, undoes what a sign-in that did not
-// finish left behind.
-func runCLISignIn(s *signInFlow, what string, env []string, using bool, failed func(), identity func() (user, plan string, ok bool), path string, args ...string) error {
+// finish left behind. whole, when there is one, says a link has all it
+// needs: one that hasn't is the start of a link the CLI wrapped, and the
+// lines after it that are nothing but more of it are joined on.
+func runCLISignIn(s *signInFlow, what string, env []string, using bool, failed func(), identity func() (user, plan string, ok bool), whole func(link string) bool, path string, args ...string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := proc.CommandContext(ctx, path, args...)
 	cmd.Dir, _ = os.UserHomeDir()
@@ -485,20 +487,52 @@ func runCLISignIn(s *signInFlow, what string, env []string, using bool, failed f
 	s.stop = cancel
 	s.mu.Unlock()
 	got := make(chan string, 1)
+	var partial struct {
+		sync.Mutex
+		link string
+	}
 	go func() {
-		sc := bufio.NewScanner(out)
+		rd := bufio.NewReader(out)
 		sent := false
-		var tail []string
-		for sc.Scan() {
-			line := ansi.ReplaceAllString(sc.Text(), "")
-			if u := cursorLoginURL.FindString(line); u != "" && !sent {
+		link := ""
+		send := func() {
+			if !sent && link != "" {
 				sent = true
-				got <- u
+				got <- link
+			}
+		}
+		var tail []string
+		for {
+			raw, rerr := rd.ReadString('\n')
+			line := ansi.ReplaceAllString(strings.TrimRight(raw, "\r\n"), "")
+			switch {
+			case sent:
+			case link == "":
+				link = cursorLoginURL.FindString(line)
+			case linkRest.MatchString(strings.TrimSpace(line)) && (!whole(link) || queryRest.MatchString(strings.TrimSpace(line))):
+				// a whole link takes only more of its query, not "Waiting..." printed after it
+				link += strings.TrimSpace(line)
+			default:
+				send() // what came after it isn't more of it
+			}
+			// a whole link is handed on once what came with it is read,
+			// so the rest of one wrapped after its last param joins too
+			if whole == nil || whole(link) && rd.Buffered() == 0 {
+				send()
+			}
+			if !sent {
+				partial.Lock()
+				partial.link = link
+				partial.Unlock()
 			}
 			if strings.TrimSpace(line) != "" {
 				tail = append(tail, strings.TrimSpace(line))
 			}
+			if rerr != nil {
+				break
+			}
 		}
+		send()
 		if !sent {
 			close(got)
 		}
@@ -520,20 +554,39 @@ func runCLISignIn(s *signInFlow, what string, env []string, using bool, failed f
 		}
 		s.finish(SignInState{State: "failed", Error: msg})
 	}()
+	var u string
 	select {
-	case u, ok := <-got:
+	case l, ok := <-got:
 		if !ok {
 			return fmt.Errorf("%s gave no link to open", what)
 		}
-		s.mu.Lock()
-		s.st.URL = u
-		s.mu.Unlock()
-		return nil
-	case <-time.After(30 * time.Second):
-		cancel()
-		return fmt.Errorf("%s gave no link to open", what)
+		u = l
+	case <-time.After(linkWait):
+		// a link that never came whole is still the one there is
+		partial.Lock()
+		u = partial.link
+		partial.Unlock()
+		if u == "" {
+			cancel()
+			return fmt.Errorf("%s gave no link to open", what)
+		}
 	}
+	s.mu.Lock()
+	s.st.URL = u
+	s.mu.Unlock()
+	return nil
 }
+
+// linkWait is how long a login command has to print its link.
+var linkWait = 30 * time.Second
+
+// linkRest is a line that is nothing but more of a link: no spaces, only
+// what a URL holds.
+var linkRest = regexp.MustCompile(`^[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+$`)
+
+// queryRest is what may still follow a link that already has its challenge
+// and uuid: the rest of a value, or more params.
+var queryRest = regexp.MustCompile(`^[A-Za-z0-9\-_%&=]+$`)
 
 // GrokUser is who the grok with this home is signed in to.
 func GrokUser(home string) (string, bool) {

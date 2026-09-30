@@ -4,13 +4,16 @@ import (
 	"encoding/json"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // tooFewTokens reads a provider's floor on the reply's length from the 400
 // it sends when a request asks for less ("max_tokens must be greater than
 // 2"). Apps checking a model is up ask for a token or two, which most
-// providers answer and some turn away.
-var tooFewTokens = regexp.MustCompile(`(?i)max_(?:completion_|output_)?tokens.{0,60}?(greater than|more than|larger than|at least|>=|>)\s*(\d+)`)
+// providers answer and some turn away. A > may come JSON-escaped, as
+// \u003e: the error is read from the body magpie re-encoded for the agent,
+// or a vendor encodes its own that way (#260: "Expected a value >= 16").
+var tooFewTokens = regexp.MustCompile(`(?i)max_(?:completion_|output_)?tokens.{0,60}?(greater than|more than|larger than|at least|(?:>|\\u003e)=?)\s*(\d+)`)
 
 // tokenFloor is the least a provider said it takes, or 0 when the error
 // isn't about that.
@@ -23,8 +26,7 @@ func tokenFloor(msg []byte) int {
 	if err != nil || n < 0 || n > 1024 {
 		return 0
 	}
-	switch string(m[1]) {
-	case "at least", ">=":
+	if sign := string(m[1]); strings.EqualFold(sign, "at least") || strings.HasSuffix(sign, "=") {
 		return n
 	}
 	return n + 1

@@ -65,6 +65,31 @@ func TestCodexCatalogImages(t *testing.T) {
 	}
 }
 
+// A model magpie describes has Codex search its MCP tools rather than send
+// every one in each request (#258), with its prompt, context window, and
+// neither code mode nor Responses Lite.
+func TestCodexCatalogToolSearch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var got struct {
+		Models []map[string]any `json:"models"`
+	}
+	json.Unmarshal(Catalog([]catalog.Model{
+		{ID: "group/auto-gemini-3-8-flash", Name: "auto", Context: 996147, Efforts: []string{"low", "medium", "high"}, Images: true},
+	}), &got)
+	if len(got.Models) != 1 {
+		t.Fatalf("%v", got)
+	}
+	e := got.Models[0]
+	if e["supports_search_tool"] != true || e["base_instructions"] != Prompt || e["context_window"] != float64(996147) {
+		t.Errorf("entry: %v", e)
+	}
+	for _, off := range []string{"tool_mode", "use_responses_lite", "multi_agent_version", "model_messages"} {
+		if v, ok := e[off]; ok {
+			t.Errorf("%s = %v", off, v)
+		}
+	}
+}
+
 // Fast mode is offered for a ChatGPT account's GPT models, with Codex's own
 // tiers when it lists the model, and for no one else's.
 func TestCodexCatalogServiceTiers(t *testing.T) {

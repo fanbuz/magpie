@@ -13,10 +13,24 @@ import (
 
 	"github.com/tidwall/jsonc"
 
+	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/edit"
 )
 
-// Pi has no MCP of its own; two extensions give it one, each with its own
+// Pi 0.99 (2026-09-29) has MCP of its own, a built-in extension, builtin:mcp
+// (packages/coding-agent/src/extensions/mcp/config.ts, loadMcpConfig): it
+// reads "mcpServers" from <agent dir>/mcp.json — PI_CODING_AGENT_DIR's,
+// else ~/.pi/agent — and a trusted project's .pi/mcp.json, entries shaped
+// as other clients have them (core/mcp-servers.ts, validateMcpServerConfig):
+// command, args, env, cwd for a command; url, headers, oauth for
+// streamable HTTP; "type" optional (stdio, http, streamable-http; "sse"
+// refused: it has no SSE); exposure, toolExposure, enabled, timeout being
+// the user's. An installed extension that registers /mcp, as
+// pi-mcp-adapter does, replaces it, as does "-builtin:mcp" in
+// settings.json's extensions (docs/mcp.md, "Other MCP extensions"): then
+// the servers go where they did before 0.99.
+//
+// Before 0.99 Pi had none; two extensions give it one, each with its own
 // file (the same entries: command/args/env, url/headers, and the
 // transport each names differently, which magpie writes both of):
 //
@@ -40,6 +54,19 @@ type piPlugins struct {
 	adapter bool
 	major   int // pi-mcp-adapter's, 0 when not known
 	ext     bool
+	// noBuiltin: settings.json turns Pi's own MCP off (-builtin:mcp)
+	noBuiltin bool
+}
+
+// piNativeSince is the first Pi that reads MCP servers itself.
+const piNativeSince = "0.99.0"
+
+// piVersion is the version of the Pi on PATH, "" when not known.
+var piVersion = func(a *agent.Agent) string { return a.InstalledVersion() }
+
+// piNative says whether Pi at version v reads its mcp.json itself.
+func piNative(v string) bool {
+	return v != "" && !agent.Newer(piNativeSince, v)
 }
 
 // piGlobalRoots are the global node_modules folders where Pi before its
@@ -105,6 +132,11 @@ func piDetect(d string) piPlugins {
 		specs = append(specs, s)
 	}
 	specs = append(specs, settings.Extensions...)
+	for _, e := range settings.Extensions {
+		if strings.TrimSpace(e) == "-builtin:mcp" {
+			p.noBuiltin = true
+		}
+	}
 	version := func(dir string) string {
 		var pkg struct{ Name, Version string }
 		b, _ := os.ReadFile(filepath.Join(dir, "package.json"))
@@ -131,9 +163,11 @@ func piDetect(d string) piPlugins {
 			}
 		}
 	}
-	if exists(filepath.Join(d, "npm", "node_modules", "pi-mcp-extension")) {
+	if exists(filepath.Join(d, "npm", "node_modules", "pi-mcp-extension")) || exists(filepath.Join(d, "extensions", "pi-mcp-extension")) {
 		p.ext = true
 	}
+	// Pi loads what its extensions folder has without a settings entry
+	dirs = append(dirs, filepath.Join(d, "extensions", "pi-mcp-adapter"))
 	dirs = append(dirs, filepath.Join(d, "npm", "node_modules", "pi-mcp-adapter"))
 	git, _ := filepath.Glob(filepath.Join(d, "git", "*", "*", "pi-mcp-adapter"))
 	dirs = append(dirs, git...)
@@ -156,22 +190,51 @@ func piDetect(d string) piPlugins {
 	return p
 }
 
-// piMCP is the file Pi's MCP servers go in, h being the home and d Pi's
-// agent folder:
+// piMCP is the file Pi's MCP servers go in, and the extension Pi reads them
+// through ("" for its own), h being the home, d Pi's agent folder and
+// version the Pi on PATH's:
+//   - Pi 0.99 or later with no MCP extension installed and its own MCP on:
+//     mcp.json, as Pi has it. The servers mcp-adapter.json has, which no
+//     one reads now (magpie's for pi-mcp-adapter 3, or the user's), are
+//     moved into it, the file backed up; one mcp.json has differently, and
+//     the adapter's own settings, stay there, still found. An mcp.json
+//     written for pi-mcp-adapter before 3 is read by Pi as it is (the
+//     adapter's httpTransport ignored).
+//   - otherwise, as before 0.99 — pi-mcp-adapter, still installed, stands
+//     in for Pi's own MCP (piFiles).
+func piMCP(h, d, version string) (*mcpFile, string) {
+	p := piDetect(d)
+	if piNative(version) && !p.adapter && !p.ext && !p.noBuiltin {
+		native, adapter := filepath.Join(d, "mcp.json"), filepath.Join(d, "mcp-adapter.json")
+		piMove(adapter, native, true)
+		f := &mcpFile{Path: native, Format: fmtPiNative}
+		if exists(adapter) {
+			f.Extra = []string{adapter}
+		}
+		return f, ""
+	}
+	via := "pi-mcp-adapter"
+	if p.ext && !p.adapter {
+		via = "pi-mcp-extension"
+	}
+	return piFiles(h, d, p), via
+}
+
+// piFiles is the file an extension reads Pi's MCP servers from:
 //   - pi-mcp-adapter 3, or one whose version isn't known (a fresh install
 //     is 3), or mcp-adapter.json already there: mcp-adapter.json. The
 //     servers magpie or the user put in mcp.json are moved over, as the
-//     adapter asks, unless pi-mcp-extension reads that file;
+//     adapter asks, unless pi-mcp-extension reads that file or the
+//     adapter isn't found (mcp.json may then be Pi 0.99's own);
 //   - with pi-mcp-extension too, both files: each extension runs its own
 //     servers, and the adapter's warning stays while mcp.json has any,
 //     which is the extension's file;
 //   - pi-mcp-adapter before 3, or only pi-mcp-extension: mcp.json;
 //   - neither found: mcp.json if there is one (nothing says whose it is,
 //     so it isn't moved), mcp-adapter.json if not.
-func piMCP(h, d string) *mcpFile {
+func piFiles(h, d string, p piPlugins) *mcpFile {
 	adapter, old := filepath.Join(d, "mcp-adapter.json"), filepath.Join(d, "mcp.json")
 	extFile := filepath.Join(h, ".pi", "agent", "mcp.json")
-	p := piDetect(d)
 	v3 := exists(adapter) || p.major >= 3 || (p.adapter && p.major == 0)
 	switch {
 	case !v3 && !p.adapter && !p.ext && exists(old):
@@ -186,7 +249,11 @@ func piMCP(h, d string) *mcpFile {
 		f.Also = []string{extFile}
 	}
 	if !p.ext || old != extFile {
-		piMove(old, adapter)
+		// only for an adapter that's there: without it, mcp.json may be
+		// Pi 0.99's own, its version not known (not on PATH)
+		if p.adapter {
+			piMove(old, adapter, false)
+		}
 		if exists(old) {
 			f.Extra = []string{old}
 		}
@@ -203,16 +270,20 @@ var piKey = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // (the file backed up first). A server or setting the two have
 // differently stays in mcp.json for the user to merge, as does anything
 // the adapter never read; mcp.json goes once nothing is left in it.
-func piMove(from, to string) {
+//
+// serversOnly moves the other way, mcp-adapter.json's servers into the
+// mcp.json Pi 0.99 reads itself: only servers, never the whole file, the
+// adapter's settings, imports and claudePlugins staying where they are.
+func piMove(from, to string, serversOnly bool) {
 	raw, err := edit.Read(from)
 	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
 		return
 	}
 	var doc map[string]json.RawMessage
-	if json.Unmarshal(jsonc.ToJSON(raw), &doc) != nil || !piHasContent(doc) {
+	if json.Unmarshal(jsonc.ToJSON(raw), &doc) != nil || !piHasContent(doc, serversOnly) {
 		return
 	}
-	if !exists(to) {
+	if !serversOnly && !exists(to) {
 		os.Rename(from, to)
 		return
 	}
@@ -252,7 +323,7 @@ func piMove(from, to string) {
 			del = append(del, key+"."+n)
 		}
 	}
-	for _, key := range []string{"settings", "imports", "claudePlugins"} {
+	for _, key := range piSettings(serversOnly) {
 		v, ok := doc[key]
 		if !ok {
 			continue
@@ -264,13 +335,23 @@ func piMove(from, to string) {
 		}
 		del = append(del, key)
 	}
-	if len(del) == 0 || newBackups().keep("pi", from) != nil {
+	if len(del) == 0 {
 		return
 	}
-	if len(put) > 0 && edit.SetJSON(to, put...) != nil {
+	b := newBackups()
+	if b.keep("pi", from) != nil || b.keep("pi", to) != nil {
 		return
 	}
-	if edit.DelJSON(from, del...) != nil {
+	// both files, or neither
+	err = edit.Atomically(func() error {
+		if len(put) > 0 {
+			if err := edit.SetJSON(to, put...); err != nil {
+				return err
+			}
+		}
+		return edit.DelJSON(from, del...)
+	}, from, to)
+	if err != nil {
 		return
 	}
 	// nothing left but empty server lists: the file goes
@@ -289,15 +370,25 @@ func piMove(from, to string) {
 	}
 }
 
-// piHasContent is what makes pi-mcp-adapter warn of an mcp.json.
-func piHasContent(doc map[string]json.RawMessage) bool {
+// piSettings are pi-mcp-adapter's keys beside its servers, moved with them
+// unless only the servers are.
+func piSettings(serversOnly bool) []string {
+	if serversOnly {
+		return nil
+	}
+	return []string{"settings", "imports", "claudePlugins"}
+}
+
+// piHasContent is what makes pi-mcp-adapter warn of an mcp.json: with
+// serversOnly, any server.
+func piHasContent(doc map[string]json.RawMessage, serversOnly bool) bool {
 	for _, key := range []string{"mcpServers", "mcp-servers"} {
 		var m map[string]json.RawMessage
 		if json.Unmarshal(doc[key], &m) == nil && len(m) > 0 {
 			return true
 		}
 	}
-	for _, key := range []string{"settings", "imports", "claudePlugins"} {
+	for _, key := range piSettings(serversOnly) {
 		if _, ok := doc[key]; ok {
 			return true
 		}

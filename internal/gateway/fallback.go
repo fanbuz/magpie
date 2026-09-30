@@ -114,8 +114,14 @@ func perKey(p provider.Provider, model string, from provider.Protocol) []candida
 // after them, in the order they suit it.
 func perKeyOf(p provider.Provider, model string, from provider.Protocol) (out, aside, left []candidate) {
 	if p.Account != nil {
-		all := []candidate{{p: p, model: model, rest: p.ID}}
-		for _, q := range p.AlsoOn() {
+		also := p.AlsoOn()
+		var all []candidate
+		// the account the agent is signed in to, unless the user paused
+		// it for the others on (#263)
+		if len(also) == 0 || !p.OwnPaused() {
+			all = append(all, candidate{p: p, model: model, rest: p.ID})
+		}
+		for _, q := range also {
 			all = append(all, candidate{p: q, model: model, rest: p.ID + "@" + q.Account.User})
 		}
 		// an account whose plan lacks the model (a Free one behind a Plus)
@@ -380,6 +386,21 @@ func restLast(out []candidate, pl planned) ([]candidate, planned) {
 	return append(ready, resting...), pl
 }
 
+// spentAfter says whether every candidate in cs rests with its allowance
+// run out: none of them is likely to answer.
+func spentAfter(cs []candidate) bool {
+	for _, c := range cs {
+		r, ok := restOf(c.restKey())
+		if !ok && c.restID() != c.restKey() {
+			r, ok = restOf(c.restID())
+		}
+		if !ok || r.Why != failQuota && r.Why != failCredit {
+			return false
+		}
+	}
+	return len(cs) > 0
+}
+
 var restingUntil = struct {
 	sync.Mutex
 	m    map[string]time.Time
@@ -525,7 +546,7 @@ func (h *holdWriter) WriteHeader(code int) {
 func (h *holdWriter) pass() {
 	dst := h.w.Header()
 	for k, v := range h.header {
-		if k != resetsHeader { // magpie's own note, for restAfter
+		if k != resetsHeader && k != refusedHeader { // magpie's own notes, for restAfter and settle
 			dst[k] = v
 		}
 	}
@@ -639,10 +660,24 @@ func (h *holdWriter) errBody() []byte {
 	return h.held.Bytes()
 }
 
-// settle reads a reply held whole, once the try is over, for a refusal
-// with nothing said.
+// settle reads a reply held, once the try is over, for a refusal with
+// nothing said: a reply held whole, or an error status that is one.
 func (h *holdWriter) settle() {
-	if !h.whole || h.passing || h.failure != 0 || h.status >= 400 {
+	if h.passing || h.failure != 0 {
+		return
+	}
+	if h.status >= 400 {
+		// an error status saying the safety filter refused it: OpenAI's
+		// 400 bio_policy, which Codex was handed with the next account
+		// never asked (#248)
+		if msg := h.header.Get(refusedHeader); msg != "" {
+			h.failure, h.failMsg, h.refused = refusedStatus, msg, true
+		} else if msg, ok := policyRefusal(h.held.Bytes()); ok {
+			h.failure, h.failMsg, h.refused = refusedStatus, msg, true
+		}
+		return
+	}
+	if !h.whole {
 		return
 	}
 	if msg, ok := refusedReply(h.held.Bytes()); ok {
@@ -840,13 +875,19 @@ func streamEvent(ev []byte) (kind, status int, msg string) {
 		if len(v.Response.Error) > 0 && string(v.Response.Error) != "null" {
 			raw = v.Response.Error
 		}
-		if r, ok := filterReasons[errorCode(raw)]; ok {
-			return refusal(r)
+		if len(raw) == 0 || string(raw) == "null" {
+			// Responses' own error event: its code and message on it
+			if note, ok := policyRefusal(data); ok {
+				return eventRefusal, refusedStatus, note
+			}
+		}
+		if note, ok := policyRefusal(raw); ok {
+			return eventRefusal, refusedStatus, note
 		}
 		return errOf(raw)
 	case len(v.Error) > 0 && string(v.Error) != "null":
-		if r, ok := filterReasons[errorCode(v.Error)]; ok {
-			return refusal(r)
+		if note, ok := policyRefusal(v.Error); ok {
+			return eventRefusal, refusedStatus, note
 		}
 		return errOf(v.Error)
 	// what only frames a reply, before anything is said in it — held with
@@ -965,6 +1006,63 @@ func errorCode(raw json.RawMessage) string {
 		return c
 	}
 	return e.Type
+}
+
+// policyCode is an error code that names the vendor's usage policy:
+// OpenAI's bio_policy ("This content was flagged for possible biological
+// risk"), cyber_policy and the like (#248).
+var policyCode = regexp.MustCompile(`^[a-z]+_policy$`)
+
+// flaggedWords are how OpenAI's invalid_prompt says the prompt was held to
+// its usage policy, rather than malformed.
+var flaggedWords = regexp.MustCompile(`(?i)flagged|usage polic`)
+
+// policyRefusal tells whether an error — an error object, a body holding
+// one, or a stream's error event — is the vendor's safety filter refusing
+// the request: Azure's content_filter, OpenAI's content_policy_violation,
+// bio_policy and invalid_prompt flagged as against its usage policy. It is
+// not the request at fault, as another 400 is: another account or model
+// may answer it (#248).
+func policyRefusal(raw []byte) (string, bool) {
+	var e struct {
+		Code    any    `json:"code"`
+		Type    string `json:"type"`
+		Message string `json:"message"`
+		Error   *struct {
+			Code    any    `json:"code"`
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &e) != nil {
+		return "", false
+	}
+	code, typ, msg := e.Code, e.Type, e.Message
+	if e.Error != nil {
+		code, typ, msg = e.Error.Code, e.Error.Type, e.Error.Message
+	}
+	c, _ := code.(string)
+	if c == "" {
+		c = typ
+	}
+	note := func(reason string) (string, bool) {
+		if msg = strings.TrimSpace(msg); msg != "" {
+			if len(msg) > 300 {
+				msg = msg[:300] + "…"
+			}
+			return refusedNote(reason) + " — " + msg, true
+		}
+		return refusedNote(reason), true
+	}
+	switch r, ok := filterReasons[c]; {
+	case ok:
+		return note(r)
+	case policyCode.MatchString(c):
+		return note(c)
+	case c == "invalid_prompt" && flaggedWords.MatchString(msg):
+		return note(c)
+	}
+	return "", false
 }
 
 // refusedReply tells whether a whole reply, not streamed, is the vendor's

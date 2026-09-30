@@ -93,7 +93,7 @@ func kimi(home string) *Agent {
 		t, err := edit.GetTOMLTable(path, "models."+strconv.Quote(k))
 		return err == nil && t != nil
 	}
-	return &Agent{
+	return atomic(&Agent{
 		ID: "kimi", Name: "Kimi Code", Icon: "kimi", Aliases: []string{"kimi-code", "kimi-cli"},
 		UA:  []string{"kimicli"},
 		Bin: "kimi", Dir: dir, Path: path,
@@ -161,7 +161,7 @@ func kimi(home string) *Agent {
 				return append(kimiOwnOptions(path, cur["model"]), viaMagpie("kimi", magpieID+"/")...)
 			},
 		}},
-	}
+	}, path)
 }
 
 // kimiOwnOptions are the models of the user's own in Kimi's config: its

@@ -3,12 +3,14 @@
 package gui
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -94,12 +96,15 @@ func (h *host) HidePanel() { h.panel.Hide() }
 func (h *host) ShowMain(view string) {
 	h.panel.Hide()
 	if view != "" {
-		h.main.SetURL("/?view=" + view + h.query)
+		h.main.SetURL("/?view=" + url.QueryEscape(view) + h.query)
 	}
 	h.dock(settings.Load(), true)
 	h.main.Show()
 	h.main.Focus()
 }
+
+// MainShown says whether the window is up.
+func (h *host) MainShown() bool { return h.main != nil && h.main.IsVisible() }
 
 // Import opens the window on an import link, for the user to confirm.
 func (h *host) Import(link string) {
@@ -288,6 +293,9 @@ func Run(version string, showMain bool, link string) error {
 	}
 	// and no smaller than its page's least at the text size
 	minW, minH := windowMin(zoom, 0, 0)
+	// Windows' title bar in the page's colour from the first frame; the
+	// page keeps it so as its theme changes (TintTitleBar)
+	winOpts, winBg := windowChrome(cmp.Or(os.Getenv("MAGPIE_THEME"), settings.Load().Theme))
 	h.main = h.app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:      "main",
 		Title:     "magpie",
@@ -303,6 +311,8 @@ func Run(version string, showMain bool, link string) error {
 			// it, tabs included; the header marks what drags instead
 			TitleBar: application.MacTitleBarHiddenInset,
 		},
+		Windows:          winOpts,
+		BackgroundColour: winBg,
 	})
 	// A resize is kept once it settles; a maximised or full-screen window
 	// is the screen's size, not one the user gave it.
@@ -343,7 +353,8 @@ func Run(version string, showMain bool, link string) error {
 	menu.Add("Version " + version).SetEnabled(false)
 	restart := menu.Add("Restart to Update").SetHidden(true)
 	restart.OnClick(func(*application.Context) {
-		if restartToUpdate(false) {
+		// the window comes back if it was open; the tray alone if not
+		if restartToUpdate(false, h.MainShown(), "") {
 			h.app.Quit()
 		}
 	})
@@ -415,7 +426,7 @@ func Run(version string, showMain bool, link string) error {
 		h.whenReady(h.applyZoom)
 	}
 	if showMain {
-		h.whenReady(func() { h.ShowMain("") })
+		h.whenReady(func() { h.ShowMain(OpenView) })
 	}
 	if OpenPanel {
 		h.whenReady(func() { application.InvokeAsync(h.togglePanel) })
@@ -439,14 +450,15 @@ func Run(version string, showMain bool, link string) error {
 }
 
 // singleInstance makes a second launch hand over to this one, off the Mac.
-// The id covers the executable and the config dir, so a build elsewhere or
-// a sandboxed HOME runs on its own.
+// The id covers the config dir, so a sandboxed HOME runs on its own, but
+// not the executable: two copies of magpie on one config (one autostarted
+// from where it was first run, another from where it was put later) would
+// share the gateway's port and put two icons in the tray.
 func singleInstance(h *host) *application.SingleInstanceOptions {
 	if runtime.GOOS == "darwin" || !sessionBus() {
 		return nil
 	}
-	exe, _ := os.Executable()
-	sum := sha256.Sum256([]byte(exe + "\x00" + settings.Dir()))
+	sum := sha256.Sum256([]byte(settings.Dir()))
 	return &application.SingleInstanceOptions{
 		UniqueID: "ai.usemagpie.app.i" + hex.EncodeToString(sum[:6]),
 		OnSecondInstanceLaunch: func(d application.SecondInstanceData) {
@@ -460,6 +472,8 @@ func singleInstance(h *host) *application.SingleInstanceOptions {
 			case len(args) == 1 && args[0] == "tray":
 			case len(args) == 1 && args[0] == "panel":
 				h.whenReady(func() { application.InvokeAsync(h.togglePanel) })
+			case len(args) == 2 && (args[0] == "gui" || args[0] == "app"):
+				h.whenReady(func() { h.ShowMain(args[1]) })
 			default:
 				h.whenReady(func() { h.ShowMain("") })
 			}
@@ -534,6 +548,10 @@ func panelOptions(goos, theme string) application.WebviewWindowOptions {
 // does; a second `magpie panel` toggles it in the running one. Omarchy's bar
 // icon runs it (see omarchy.AddWidget).
 var OpenPanel bool
+
+// OpenView is the tab the window opens on, as `magpie gui settings` asks:
+// a restart to update comes back where it was asked for.
+var OpenView string
 
 // togglePanel opens the quick panel by the tray icon, or closes it.
 func (h *host) togglePanel() {

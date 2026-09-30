@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseDevinStatus(t *testing.T) {
@@ -340,5 +341,158 @@ Account:
 	}
 	if ls = devinLogins(); len(ls) != 1 || ls[0].User != "dev@example.com" {
 		t.Fatalf("after forget %+v", ls)
+	}
+}
+
+// devinSigned is the CLI's own report, as `devin auth status` prints it.
+const devinSigned = `printf 'Logged in (via Devin).\n\nUser:\n  Email:             dev@example.com\n\nAccount:\n  Tier:              Devin Pro\n'`
+
+// devinKeyRefused is what a real CLI prints for a token Devin's servers
+// refused, a revoked or expired one: it exits 0, the report still begins
+// `Logged in`, and there is no account in it.
+const devinKeyRefused = `printf '%s\n' 'Logged in (via Devin).' '' 'User / team info:' '  Failed to fetch from server: Authentication required: failed to get primary API key; try logging out and logging in again: failed to validate Devin token: Invalid token (trace ID: 5f0c1d2e)'`
+
+// devinUnreachable is the same report with Devin's servers unreachable,
+// which must not drop the account.
+const devinUnreachable = `printf '%s\n' 'Logged in (via Devin).' '' 'User / team info:' '  Failed to fetch from server: Connection failed: Connect HTTP error: connect: connection refused'`
+
+// fakeDevin points DevinExecutable at a fake CLI of this test's, and puts
+// the CLI and the identity back when it ends: an ask that couldn't tell now
+// leaves the last account served, so a test after this one must not find
+// either.
+func fakeDevin(t *testing.T, exe string) {
+	t.Helper()
+	old := DevinExecutable
+	DevinExecutable = func() string { return exe }
+	t.Cleanup(func() {
+		DevinExecutable = old
+		devinStatus.Lock()
+		devinStatus.user, devinStatus.plan, devinStatus.ok = "", "", false
+		devinStatus.Unlock()
+		forgetDevinStatus()
+	})
+}
+
+// a `devin auth status` that fails, runs out of time (it asks Devin's
+// servers) or prints something else couldn't tell, and the account stays as
+// it was, where it had dropped Devin from the Providers page and routing
+// (#154): only a CLI that says nobody is signed in, or keeps no
+// credentials.toml, is sure of nobody.
+func TestAskDevinStatus(t *testing.T) {
+	home := claudeHome(t)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
+	exe := filepath.Join(home, "devin")
+	fakeDevin(t, exe)
+
+	for _, c := range []struct {
+		name, script string
+		creds        bool // the CLI keeps a credentials.toml
+		user         string
+		sure         bool // the CLI is sure of nobody, not merely unable to tell
+	}{
+		{"signed in", devinSigned, true, "dev@example.com", true},
+		{"says nobody", `echo 'Not logged in.'`, false, "", true},
+		{"says nobody, a key left behind", `echo 'Not logged in. Please run auth login first.'`, true, "", true},
+		{"the key was refused", devinKeyRefused, true, "", true},
+		{"Devin's servers unreachable", devinUnreachable, true, "", false},
+		{"fails", `echo 'fetch failed' >&2; exit 1`, true, "", false},
+		{"fails, no key", `exit 1`, false, "", true},
+		{"prints something else", `echo 'Something went wrong'`, true, "", false},
+	} {
+		creds := DevinCredentialsPath()
+		if c.creds {
+			if err := os.MkdirAll(filepath.Dir(creds), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(creds, devinCredentials("devin-session-token$k", "", "", ""), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := os.Remove(creds); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(exe, []byte("#!/bin/sh\n"+c.script+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		u, _, ok, err := askDevinStatus()
+		if u != c.user || ok != (c.user != "") || (err == nil) != c.sure {
+			t.Errorf("%s: %q %v %v", c.name, u, ok, err)
+		}
+	}
+}
+
+// the identity magpie serves: an ask that fails keeps the account, and one
+// that says nobody (or keeps no key) drops it, on disk too
+func TestDevinStatusKeepsTheAccount(t *testing.T) {
+	home := claudeHome(t)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
+	exe := filepath.Join(home, "devin")
+	fakeDevin(t, exe)
+	creds := DevinCredentialsPath()
+	if err := os.MkdirAll(filepath.Dir(creds), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(creds, devinCredentials("devin-session-token$k", "", "", ""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// signed in once, then asked again behind what is served
+	ask := func(script string) {
+		t.Helper()
+		if err := os.WriteFile(exe, []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		devinStatus.Lock()
+		devinStatus.at = time.Now().Add(-2 * time.Minute)
+		done := devinStatus.refresh()
+		devinStatus.Unlock()
+		<-done
+	}
+
+	ask(devinSigned)
+	if u, p, ok := devinStatus.get(); !ok || u != "dev@example.com" || p != "Devin Pro" {
+		t.Fatalf("never signed in: %q %q %v", u, p, ok)
+	}
+	if k := readIdentities()["devin"]; !k.OK || k.User != "dev@example.com" {
+		t.Fatalf("signed in, not kept: %+v", k)
+	}
+
+	ask(`echo 'fetch failed' >&2; exit 1`)
+	if u, p, ok := devinStatus.get(); !ok || u != "dev@example.com" || p != "Devin Pro" {
+		t.Fatalf("a failed ask dropped the account: %q %q %v", u, p, ok)
+	}
+	if k := readIdentities()["devin"]; !k.OK || k.User != "dev@example.com" {
+		t.Fatalf("a failed ask was kept: %+v", k)
+	}
+
+	ask(`echo 'Not logged in.'`)
+	if _, _, ok := devinStatus.get(); ok {
+		t.Fatal("signed out, still served")
+	}
+	if k := readIdentities()["devin"]; k.OK {
+		t.Fatalf("signed out, still kept: %+v", k)
+	}
+
+	// a token Devin's servers refused is signed out too, kept on disk as
+	// such: magpie must not go on routing to a dead key
+	ask(devinSigned)
+	if _, _, ok := devinStatus.get(); !ok {
+		t.Fatal("signed in again, not served")
+	}
+	ask(devinKeyRefused)
+	if _, _, ok := devinStatus.get(); ok {
+		t.Fatal("a refused key, still served")
+	}
+	if k := readIdentities()["devin"]; k.OK {
+		t.Fatalf("a refused key, still kept: %+v", k)
+	}
+
+	// Devin's servers unreachable is not that: the account stays
+	ask(devinSigned)
+	if _, _, ok := devinStatus.get(); !ok {
+		t.Fatal("signed in again, not served")
+	}
+	ask(devinUnreachable)
+	if _, _, ok := devinStatus.get(); !ok {
+		t.Fatal("Devin's servers unreachable dropped the account")
 	}
 }

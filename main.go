@@ -143,6 +143,11 @@ func run(args []string) error {
 	case "web":
 		return webCmd(args[1:])
 	case "app", "gui":
+		// `magpie gui settings`: the window on that tab, as a restart to
+		// update from it comes back (update.RelaunchArgs)
+		if len(args) > 1 {
+			return runWindow(args[1])
+		}
 		return runGUI(true, "")
 	case "tray":
 		return runGUI(false, "")

@@ -109,7 +109,8 @@ func TestCodexSpacedProviderTable(t *testing.T) {
 }
 
 // Not signed in, Codex's OpenAI provider can't run, so magpie is a provider
-// of its own.
+// of its own; the base URL is magpie's too, for the threads started on the
+// built-in provider (#259).
 func TestCodexSignedOutUsesProvider(t *testing.T) {
 	home, read := codexHome(t, "", "")
 	cx := codex(home)
@@ -117,14 +118,14 @@ func TestCodexSignedOutUsesProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := read()
-	if strings.Contains(cfg, "openai_base_url") || !strings.Contains(cfg, `model_provider = "magpie"`) ||
+	if !strings.Contains(cfg, `openai_base_url = "`+codexGatewayURL()+`"`) || !strings.Contains(cfg, `model_provider = "magpie"`) ||
 		!strings.Contains(cfg, "[model_providers.magpie]") || !strings.Contains(cfg, "model_catalog_json") {
 		t.Fatalf("\n%s", cfg)
 	}
 	if err := cx.Fields[0].Set(""); err != nil {
 		t.Fatal(err)
 	}
-	if cfg = read(); strings.Contains(cfg, "model =") || strings.Contains(cfg, "model_provider =") ||
+	if cfg = read(); strings.Contains(cfg, "model =") || strings.Contains(cfg, "openai_base_url") || strings.Contains(cfg, "model_provider =") ||
 		strings.Contains(cfg, "model_catalog_json") || !strings.Contains(cfg, "[model_providers.magpie]") {
 		t.Fatalf("reset:\n%s", cfg)
 	}
@@ -142,7 +143,7 @@ func TestCodexUsedUpUsesProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := read()
-	if strings.Contains(cfg, "openai_base_url") || !strings.Contains(cfg, `model_provider = "magpie"`) ||
+	if !strings.Contains(cfg, "openai_base_url") || !strings.Contains(cfg, `model_provider = "magpie"`) ||
 		!strings.Contains(cfg, "[model_providers.magpie]") || !strings.Contains(cfg, `model = "fake/m1"`) {
 		t.Fatalf("\n%s", cfg)
 	}
@@ -268,7 +269,7 @@ func TestCodexLoginAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := read()
-	if strings.Contains(cfg, "openai_base_url") || !strings.Contains(cfg, `model_provider = "magpie"`) ||
+	if !strings.Contains(cfg, "openai_base_url") || !strings.Contains(cfg, `model_provider = "magpie"`) ||
 		!strings.Contains(cfg, "[model_providers.magpie]") || !strings.Contains(cfg, "model_catalog_json") {
 		t.Fatalf("api:\n%s", cfg)
 	}
@@ -284,7 +285,7 @@ func TestCodexLoginAPI(t *testing.T) {
 	if err := login.Set("api"); err != nil {
 		t.Fatal(err)
 	}
-	if cfg = read(); !strings.Contains(cfg, `model_provider = "magpie"`) || strings.Contains(cfg, "openai_base_url") {
+	if cfg = read(); !strings.Contains(cfg, `model_provider = "magpie"`) || strings.Count(cfg, "openai_base_url") != 1 {
 		t.Fatalf("api again:\n%s", cfg)
 	}
 	if err := cx.Fields[0].Set(""); err != nil {

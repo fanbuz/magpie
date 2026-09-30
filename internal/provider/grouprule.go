@@ -43,6 +43,11 @@ type Rule struct {
 	// the group's Classifier judges it — "writing or fixing tests",
 	// "a quick question". When the classifier can't say, it doesn't match.
 	Intent string `json:"intent,omitempty"`
+	// Compact: the agent is compacting its conversation — asking a model to
+	// summarize it so it can go on in less room (Claude Code's /compact,
+	// Codex's, OpenCode's, Pi's…) — which a cheaper, faster model can do
+	// in place of the one the conversation is on.
+	Compact bool `json:"compact,omitempty"`
 }
 
 // MaxIntent is how long an intent may be, in characters.
@@ -70,6 +75,9 @@ func (r Rule) Conditions() []string {
 	if r.Intent != "" {
 		out = append(out, fmt.Sprintf("intent %q", r.Intent))
 	}
+	if r.Compact {
+		out = append(out, "compacting")
+	}
 	return out
 }
 
@@ -96,7 +104,7 @@ func cleanRules(rules []Rule, members []string) ([]Rule, error) {
 		case len([]rune(r.Intent)) > MaxIntent:
 			return nil, fmt.Errorf("rule %d: an intent is at most %d characters", n, MaxIntent)
 		case len(r.Conditions()) == 0:
-			return nil, fmt.Errorf("rule %d: it needs a condition (tokens, images, effort, agents or intent)", n)
+			return nil, fmt.Errorf("rule %d: it needs a condition (tokens, images, effort, agents, intent or compacting)", n)
 		}
 		if len(r.Agents) == 0 {
 			r.Agents = nil
@@ -116,6 +124,8 @@ type RuleRequest struct {
 	// Intent is the one of the rules' intents the classifier said the
 	// user's message is; "" when none, or it wasn't asked.
 	Intent string
+	// Compact: the request is the agent compacting its conversation.
+	Compact bool
 }
 
 // Matches reports whether the request is one the rule is for.
@@ -133,6 +143,9 @@ func (r Rule) MatchesBesidesIntent(q RuleRequest) bool {
 		return false
 	}
 	if r.Images && !q.Images {
+		return false
+	}
+	if r.Compact && !q.Compact {
 		return false
 	}
 	switch r.Effort {
@@ -231,11 +244,11 @@ func ruledEntry(e *Entry, g Group, ms []Member, entries []Entry) {
 		if !ok {
 			continue
 		}
-		if r.Images && r.Tokens == 0 && r.Effort == "" && len(r.Agents) == 0 && r.Intent == "" && sees(x) && !e.Images &&
+		if r.Images && r.Tokens == 0 && r.Effort == "" && len(r.Agents) == 0 && r.Intent == "" && !r.Compact && sees(x) && !e.Images &&
 			!slices.ContainsFunc(g.Rules[:i], func(b Rule) bool { y, ok := of(b.Use); return !ok || !sees(y) }) {
 			e.Images, e.ImageInput = true, x.ImageInput
 		}
-		if r.Tokens == 0 || r.Images || r.Effort != "" || len(r.Agents) > 0 || r.Intent != "" || x.Context <= e.Context {
+		if r.Tokens == 0 || r.Images || r.Effort != "" || len(r.Agents) > 0 || r.Intent != "" || r.Compact || x.Context <= e.Context {
 			continue // only a rule of length alone takes every long request
 		}
 		// every request up to the rule's length must fit whoever may get

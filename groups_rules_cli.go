@@ -15,7 +15,7 @@ import (
 const ruleUsage = `usage:
   magpie group rule <group>               the group's rules
   magpie group rule add <group> use=<model> [tokens=<n>] [images] [effort=on|low|medium|high|xhigh|max] [agents=a,b…]
-                        [intent="<what the message asks for>"] [classifier=<model>] [at=<n>]
+                        [intent="<what the message asks for>"] [compact] [classifier=<model>] [at=<n>]
                                           a rule: a turn that matches it goes to <model>, one of the group's
                                           (or group/<id>, a group in it), first; a model in the group at an
                                           effort of its own is named with it (use=glm/glm-5.3-flash:high)
@@ -38,10 +38,15 @@ const ruleUsage = `usage:
            question"): as the turn begins, the group's classifier — any model magpie has, best a small
            fast one without reasoning, or another group of them to fail over — is asked which of the intents that may match the message is,
            once; if it fails or can't say, no intent matches. Its call shows in the usage as magpie's own
+  compact  the agent is compacting the conversation (Claude Code's /compact or auto-compact, Codex's,
+           OpenCode's, Pi's, Gemini CLI's, Qwen Code's, Kimi's): a cheaper, faster model can write the
+           summary. The request is as long as the conversation, so a model known to take less is passed
+           over; it is not the turn's model, and the requests after it go on as before
 
   e.g. magpie group rule add opus-anywhere use=openrouter/google/gemini-3-pro tokens=200k
        magpie group rule add opus-anywhere use=a/vision-model images
        magpie group rule add fast use=codex/gpt-5.6-sol:xhigh effort=high
+       magpie group rule add opus-anywhere use=deepseek/deepseek-v4-flash compact
        magpie group rule add opus-anywhere use=deepseek/deepseek-v4-flash intent="a quick question" classifier=groq/llama-3.1-8b-instant`
 
 // parseTokens reads 200000, 200k, 1.5m.

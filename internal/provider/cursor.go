@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -223,7 +224,20 @@ func startCursorSignIn(s *signInFlow) error {
 	return runCLISignIn(s, "cursor-agent login", append(os.Environ(), "NO_OPEN_BROWSER=1"), true, nil, func() (string, string, bool) {
 		forgetCursorStatus()
 		return askCursorIdentity()
-	}, path, "login")
+	}, cursorLinkWhole, path, "login")
+}
+
+// cursorLinkWhole says a link from `cursor-agent login` carries what
+// cursor.com/loginDeepControl signs in with: a link cut short where the
+// CLI broke its line (#261: "https://cursor.com/loginDeepControl?") gets
+// "This sign-in link is incomplete or has expired" from the page.
+func cursorLinkWhole(link string) bool {
+	u, err := url.Parse(link)
+	if err != nil {
+		return false
+	}
+	q := u.Query()
+	return q.Get("challenge") != "" && q.Get("uuid") != ""
 }
 
 // cursorVersionFallback is the CLI version said when no install names one.

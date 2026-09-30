@@ -86,6 +86,10 @@ var cliSpecs = map[string]cliSpec{
 	"crush":   {npm: []string{"@charmland/crush"}, brew: []string{"crush"}},
 	"cline":   {npm: []string{"cline"}},
 	"goose":   {brew: []string{"block-goose-cli"}},
+	// omo update, however it was installed: OmO's own updater, which moves
+	// the engine it pins (senpi) with it
+	"omo": {npm: []string{"omo-ai"},
+		self: func(bin, real string) []string { return []string{bin, "update"} }},
 }
 
 // updater is how an installed CLI is brought up to date.
@@ -511,6 +515,17 @@ func (a *Agent) CLI() (c CLI, ok bool) {
 	c.Latest = latestVersion(u)
 	c.Update = c.Version != "" && c.Latest != "" && Newer(c.Latest, c.Version)
 	return c, true
+}
+
+// InstalledVersion is what the agent's CLI on PATH says its version is: ""
+// for an agent without a CLI magpie knows, one not on PATH, or one that
+// didn't say. Asked once per binary, like CLI's; nothing is fetched.
+func (a *Agent) InstalledVersion() string {
+	bin, _ := a.cliBin()
+	if bin == "" {
+		return ""
+	}
+	return installedVersion(bin)
 }
 
 // CLIs is every detected agent's CLI, as far as it is known within wait;

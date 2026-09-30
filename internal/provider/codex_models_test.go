@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -50,19 +52,115 @@ func TestCodexModelsOfTheAccount(t *testing.T) {
 func TestCodexVersion(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeFile(t, filepath.Join(home, ".codex", "models_cache.json"), map[string]any{"client_version": "0.154.0"})
+	writeFile(t, filepath.Join(home, ".codex", "models_cache.json"), map[string]any{"client_version": "0.160.0"})
 	exe := filepath.Join(t.TempDir(), "codex")
-	if err := os.WriteFile(exe, []byte("#!/bin/sh\necho codex-cli 0.155.1\n"), 0o755); err != nil {
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\necho codex-cli 0.161.1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	old := codexExecutable
-	t.Cleanup(func() { codexExecutable = old; codexVersionCache.at = time.Time{} })
-	for _, c := range []struct{ exe, want string }{{exe, "0.155.1"}, {"", "0.154.0"}} {
+	t.Cleanup(func() { codexExecutable = old; codexVersionCache.at = time.Time{}; codexSeen = seenVersion{} })
+	codexSeen = seenVersion{}
+	for _, c := range []struct{ exe, want string }{{exe, "0.161.1"}, {"", "0.160.0"}} {
 		codexExecutable = func() string { return c.exe }
 		codexVersionCache.at = time.Time{}
 		if got := codexVersion(); got != c.want {
 			t.Errorf("with %q: %s, want %s", c.exe, got, c.want)
 		}
+	}
+	// Codex CLI's state under CODEX_HOME, when that is set
+	t.Setenv("CODEX_HOME", t.TempDir())
+	codexVersionCache.at = time.Time{}
+	if got := codexVersion(); got != codexClientVersion {
+		t.Errorf("CODEX_HOME with no cache: %s", got)
+	}
+	writeFile(t, filepath.Join(os.Getenv("CODEX_HOME"), "models_cache.json"), map[string]any{"client_version": "0.160.2"})
+	codexVersionCache.at = time.Time{}
+	if got := codexVersion(); got != "0.160.2" {
+		t.Errorf("CODEX_HOME's cache: %s", got)
+	}
+}
+
+// A Codex that came through the gateway newer than any magpie can find
+// counts at once, the cached lookup notwithstanding: the account's model
+// list is asked for as that Codex, and its turns say they are it. Only
+// Codex's requests count, and never an older version.
+func TestCodexVersionSeen(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CODEX_HOME", "")
+	old := codexExecutable
+	codexExecutable = func() string { return "" }
+	codexSeen = seenVersion{}
+	codexVersionCache.at = time.Time{}
+	t.Cleanup(func() { codexExecutable = old; codexVersionCache.at = time.Time{}; codexSeen = seenVersion{} })
+	if got := codexVersion(); got != codexClientVersion {
+		t.Fatalf("nothing seen: %s", got)
+	}
+	h := func(kv ...string) http.Header {
+		out := http.Header{}
+		for i := 0; i < len(kv); i += 2 {
+			out.Set(kv[i], kv[i+1])
+		}
+		return out
+	}
+	for _, c := range []struct {
+		h    http.Header
+		want string
+	}{
+		{h("User-Agent", "claude-cli/2.1.300 (external, cli)"), codexClientVersion},
+		{h("User-Agent", "Mozilla/5.0", "version", "9.9.9"), codexClientVersion},
+		{h("User-Agent", "codex_cli_rs/0.160.0 (Mac OS 26.6.0; arm64) ghostty/1.2.0"), "0.160.0"},
+		{h("User-Agent", "Codex Desktop/0.162.3 (Windows 10.0.26100; x86_64) unknown", "originator", "Codex Desktop"), "0.162.3"},
+		{h("User-Agent", "codex_cli_rs/0.150.0", "version", "0.150.0"), "0.162.3"},
+	} {
+		SawCodexClient(c.h)
+		if got := codexVersion(); got != c.want {
+			t.Fatalf("after %v: %s, want %s", c.h, got, c.want)
+		}
+	}
+
+	var asked, ua, ver string
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked, ua, ver = r.URL.Query().Get("client_version"), r.Header.Get("User-Agent"), r.Header.Get("version")
+		w.Write([]byte(`{"models":[{"slug":"gpt-6.1-sol","visibility":"list"}]}`))
+	}))
+	defer fake.Close()
+	was := CodexBase
+	CodexBase = fake.URL + "/backend-api/codex"
+	t.Cleanup(func() { CodexBase = was })
+	sign := codexSign(func(context.Context) (string, string, error) { return "tok", "acct-1", nil })
+	if _, err := codexModels(context.Background(), sign); err != nil {
+		t.Fatal(err)
+	}
+	if asked != "0.162.3" || !strings.HasPrefix(ua, "codex_cli_rs/0.162.3 (") || ver != "0.162.3" {
+		t.Fatalf("models asked as client_version %q, User-Agent %q, version %q", asked, ua, ver)
+	}
+}
+
+// Codex CLI installed where a desktop app's PATH doesn't reach — under an
+// nvm Node, or an npm prefix ~/.npmrc names — is found.
+func TestCodexExecutableOffPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix install locations")
+	}
+	for name, dir := range map[string]string{
+		"nvm":        ".nvm/versions/node/v22.3.0/bin",
+		"mise":       ".local/share/mise/installs/node/24.14.0/bin",
+		"npm prefix": "custom-npm/bin",
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("PATH", "/usr/bin:/bin")
+			os.WriteFile(filepath.Join(home, ".npmrc"), []byte("registry=https://registry.npmjs.org/\nprefix = ~/custom-npm\n"), 0o644)
+			exe := filepath.Join(home, dir, "codex")
+			os.MkdirAll(filepath.Dir(exe), 0o755)
+			if err := os.WriteFile(exe, []byte("#!/bin/sh\necho codex-cli 0.161.0\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if got := codexExecutable(); got != exe {
+				t.Fatalf("found %q, want %q", got, exe)
+			}
+		})
 	}
 }
 

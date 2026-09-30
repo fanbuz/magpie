@@ -506,7 +506,7 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			keepRetry(w.Header(), res.Header, b)
-			writeError(w, provider.Anthropic, res.StatusCode, c.p.Name+": "+provider.APIError(b, res.Status))
+			writeError(w, provider.Anthropic, res.StatusCode, c.p.Explain(c.p.Name+": "+provider.APIError(b, res.Status), res.StatusCode, b))
 			return
 		}
 		defer res.Body.Close()
@@ -896,10 +896,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	again := 0        // times the last one left has been tried again
 	resealed := false // the conversation's reasoning sealed by another account taken out
 	floored := false  // the reply's length raised to what the provider takes
+	var other *Try    // the first failure that wasn't an allowance run out
 	for i := 0; i < len(cands); i++ {
 		c := cands[i]
 		last := i == len(cands)-1
-		hw := newHoldWriter(w, !last || again < lastRetries)
+		// the last one's failure is held too when an earlier one failed,
+		// for its allowance running out to be told as that one's error
+		hw := newHoldWriter(w, !last || again < lastRetries || other != nil)
 		call.Provider, call.To, call.Usage = c.p.ID, "", Usage{}
 		where = c.p.Where()
 		began := time.Now()
@@ -1025,7 +1028,27 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 			continue
 		}
+		if wait, ok := passing(hw.code(), hw.header, again); ok && !last && again < lastRetries && hw.failed() && spentAfter(cands[i+1:]) {
+			// the others left are out of their allowance (Discord, waroy: a
+			// Codex account run out, Grok busy a moment): this one is the
+			// last that may answer, and is tried again as the last is
+			try.Fail, try.Again = failure(hw.code(), hw.errBody()), wait.Milliseconds()
+			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+			skipped = append(skipped, c.label()+": "+call.Error)
+			again++
+			select {
+			case <-time.After(wait):
+				i--
+				continue
+			case <-r.Context().Done():
+				call.Status, call.Error = 499, "the agent canceled the request"
+			}
+			break
+		}
 		if !last && hw.failed() {
+			if f := failure(hw.code(), hw.errBody()); other == nil && f != failQuota && f != failCredit {
+				other = &Try{Status: call.Status, Error: call.Error}
+			}
 			rest := s.restAfterMarked(c, hw.code(), hw.header, hw.errBody(), hw.sharedPool)
 			try.Fail, try.Rest = rest.Why, &rest
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
@@ -1052,14 +1075,29 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// request it shouldn't send again as it is, not handed an empty
 			// reply it would ask again for, paying for each
 			writeError(w, from, refusedStatus, call.Error)
+		} else if f := failure(call.Status, []byte(call.Error)); other != nil && !hw.passing && call.Status >= 400 && (f == failQuota || f == failCredit) {
+			// the last one left is out of its allowance, but one before it
+			// failed otherwise: the agent is told that one's error, not
+			// the allowance's — Codex, told its usage is exhausted, stops
+			// taking input though another member would answer next time
+			// (Discord, waroy)
+			try.Fail = f
+			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+			call.Status, call.Error = other.Status, other.Error
+			writeError(w, from, call.Status, call.Error)
+			break
 		} else {
 			hw.release()
 		}
 		model = c.model
 		if call.Status < 400 {
 			servedCandidate(c, call.Usage.Input+call.Usage.Output+call.Usage.CacheRead+call.Usage.CacheWrite)
-			answered(stuck, c, aff.Turn, call.Usage.CacheRead)
-			if hit != nil {
+			// a compaction a rule sent to a model of its own leaves the
+			// conversation, and the turn's size, where they were
+			if hit == nil || !hit.Compact {
+				answered(stuck, c, aff.Turn, call.Usage.CacheRead)
+			}
+			if hit != nil && !hit.Compact {
 				ruleAnswered(ruleAt, call.Usage)
 			}
 			for _, at := range nestedAt {
@@ -1170,6 +1208,15 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, from provider.P
 			return s.serveCommandCode(w, r, from, p, api, key, model, body, &call.Usage)
 		}
 	}
+	// Copilot's Auto (all a Student plan may pick) is asked which model it
+	// picks, as Copilot's clients do, and the request goes to that model on
+	// the APIs it is served on, with the session's token
+	if ctx, m, err := p.ResolveAuto(r.Context(), model); err != nil {
+		msg := p.Name + ": " + err.Error()
+		return writeError(w, from, 502, msg), msg
+	} else if m != model {
+		r, model = r.WithContext(ctx), m
+	}
 	// a backend that only streams gets a non-streaming request translated
 	// (the provider is always streamed on that path) rather than relayed
 	relay := slices.Contains(s.usable(p, model), from) && (p.Account == nil || !p.Account.Stream || streamOf(body))
@@ -1208,9 +1255,21 @@ func markOpenRouterSharedPool(w http.ResponseWriter) {
 // forward sends a request to the provider. On Anthropic's messages, a
 // provider that turns away betas it doesn't know by name (Bedrock's: 400
 // Unexpected value(s) `x` for the `anthropic-beta` header) is asked again
-// once without them, and they're left out for it from then on.
+// once without them, and they're left out for it from then on. An account's
+// 403 it can mend (Provider.Retry) is asked once more.
 func (s *Server) forward(ctx context.Context, p provider.Provider, to provider.Protocol, path string, body []byte, in http.Header) (*http.Response, error) {
 	res, err := s.forwardOnce(ctx, p, to, path, body, in)
+	if err == nil && res.StatusCode == http.StatusForbidden && p.Retries() {
+		// an account that can mend what the refusal names (a Factory org
+		// the server won't take) is asked once more
+		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+		res.Body.Close()
+		res.Body = io.NopCloser(bytes.NewReader(b))
+		if p.Retry(ctx, res.StatusCode, b) {
+			return s.forwardOnce(ctx, p, to, path, body, in)
+		}
+		return res, nil
+	}
 	if err != nil || to != provider.Anthropic || res.StatusCode != http.StatusBadRequest {
 		return res, err
 	}
@@ -1307,7 +1366,13 @@ func claudeCodeHeader(k string) bool {
 // but not this one.
 func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.Provider, proto provider.Protocol, model string, body []byte, u *Usage) (status int, msg string, done bool) {
 	body = rewriteModel(body, model)
+	searchFn := false // Codex's tool search sent as a function
 	switch proto {
+	case provider.Responses:
+		// only the ChatGPT backend runs Codex's tool search as Codex sends it
+		if p.Account == nil || p.Account.Agent != "codex" {
+			body, searchFn = searchAsFunction(body)
+		}
 	case provider.Chat:
 		body = developerAsSystem(body)
 		if strings.HasSuffix(p.Host(), "openai.com") || p.IsAzure() {
@@ -1329,6 +1394,10 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		}
 		if !anthropicModel.MatchString(model) {
 			body = thinkingOffUnlessAsked(body)
+			// Claude Code's auto mode classifier, on a vendor's model that
+			// may think whatever it is told (#250); a Claude model's request
+			// goes as it was sent, safeguards and all
+			body = autoModeClassifierBody(model, body)
 		}
 		if effortInOutputConfig.MatchString(model) {
 			body = withOutputEffort(body, p.Efforts(model))
@@ -1394,7 +1463,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	u.RequestID = requestID(res.Header)
 	if res.StatusCode >= 400 {
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
-		msg := p.Name + ": " + provider.APIError(b, res.Status)
+		msg := p.Explain(p.Name+": "+provider.APIError(b, res.Status), res.StatusCode, b)
 		if wrongEndpoint(res.StatusCode, b) {
 			s.markUnfit(p.ID, model, proto)
 			if len(s.usable(p, model)) > 0 {
@@ -1428,6 +1497,10 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	if proto == provider.Chat && sse {
 		tidy = &chatTidy{}
 	}
+	var search *searchTidy
+	if searchFn && sse {
+		search = &searchTidy{}
+	}
 	buf := make([]byte, 32<<10)
 	for {
 		n, err := rd.Read(buf)
@@ -1436,6 +1509,9 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			out := buf[:n]
 			if tidy != nil {
 				out = tidy.write(out)
+			}
+			if search != nil {
+				out = search.write(out)
 			}
 			if _, werr := w.Write(out); werr != nil {
 				return res.StatusCode, "", true
@@ -1450,6 +1526,9 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	}
 	if tidy != nil {
 		w.Write(tidy.flush())
+	}
+	if search != nil {
+		w.Write(search.flush())
 	}
 	return res.StatusCode, "", true
 }
@@ -1676,6 +1755,11 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 	if err != nil {
 		return writeError(w, from, 400, err.Error()), err.Error()
 	}
+	if from == provider.Anthropic {
+		// Claude Code's auto mode classifier, on a model that reasons
+		// whatever it is told (#250)
+		fitAutoModeClassifier(p, model, request)
+	}
 	if request.WebSearch && !searching(r.Context()) {
 		// an API on which the provider searches by itself comes first;
 		// without one, its model is given magpie's search
@@ -1699,7 +1783,7 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 	u.RequestID = requestID(res.Header)
 	if res.StatusCode >= 400 {
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
-		msg := p.Name + ": " + provider.APIError(b, res.Status)
+		msg := p.Explain(p.Name+": "+provider.APIError(b, res.Status), res.StatusCode, b)
 		if p.Preset == "openrouter" && openRouterSharedPool(b) {
 			markOpenRouterSharedPool(w)
 		}
@@ -2255,7 +2339,9 @@ func withoutFields(body []byte, fields ...string) []byte {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false) // a vendor's <, > and & as it wrote them (#260)
+	enc.Encode(v)
 }
 
 // writeError answers in the client's own error shape.

@@ -40,8 +40,9 @@ func bareModel(m string) string {
 }
 
 // Swapped reports whether served is another model than sent: not the same
-// name, however dated, pinned or prefixed.
+// name, however dated, pinned or prefixed. A vendor's "auto" (Copilot's,
+// Cursor's) asked it to pick, so whichever answers wasn't swapped in.
 func Swapped(sent, served string) bool {
 	a, b := bareModel(sent), bareModel(served)
-	return a != "" && b != "" && a != b
+	return a != "" && b != "" && a != b && a != "auto"
 }

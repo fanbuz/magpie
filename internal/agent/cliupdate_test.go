@@ -37,6 +37,32 @@ func TestNewerVersions(t *testing.T) {
 	}
 }
 
+// InstalledVersion asks the CLI on PATH itself (the library tells Pi 0.99's
+// own MCP by it), again once the binary changes, and "" when there is none.
+func TestInstalledVersion(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a shell script for pi")
+	}
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
+	a := &Agent{ID: "pi", Bin: "pi"}
+	if v := a.InstalledVersion(); v != "" {
+		t.Errorf("none on PATH: %q", v)
+	}
+	p := filepath.Join(bin, "pi")
+	for _, c := range []struct{ out, want string }{{"0.98.2", "0.98.2"}, {"pi 0.99.0\n", "0.99.0"}} {
+		if err := os.WriteFile(p, []byte("#!/bin/sh\necho '"+c.out+"'\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if v := a.InstalledVersion(); v != c.want {
+			t.Errorf("%q: %q", c.out, v)
+		}
+	}
+	if v := (&Agent{ID: "unknown-cli", Bin: "pi"}).InstalledVersion(); v != "" {
+		t.Errorf("a CLI magpie doesn't know: %q", v)
+	}
+}
+
 func TestParseCLIVersion(t *testing.T) {
 	for out, want := range map[string]string{
 		"2.1.284 (Claude Code)\n": "2.1.284",

@@ -1,7 +1,7 @@
 package provider
 
 // A rule as it is typed: use=<model> tokens=200k images effort=high
-// agents=a,b intent="…" — by magpie group rule and the TUI's routing page.
+// agents=a,b intent="…" compact — by magpie group rule and the TUI's routing page.
 
 import (
 	"fmt"
@@ -58,6 +58,15 @@ func ParseRule(g Group, words []string) (r Rule, at int, classifier string, err 
 			default:
 				return r, 0, "", fmt.Errorf("images takes no value (or yes/no), not %q", v)
 			}
+		case "compact", "compacting", "compaction":
+			switch strings.ToLower(v) {
+			case "", "yes", "true", "on", "1":
+				r.Compact = true
+			case "no", "false", "off", "0":
+				r.Compact = false
+			default:
+				return r, 0, "", fmt.Errorf("compact takes no value (or yes/no), not %q", v)
+			}
 		case "effort", "reasoning", "thinking":
 			if !hasV {
 				v = "on"
@@ -81,7 +90,7 @@ func ParseRule(g Group, words []string) (r Rule, at int, classifier string, err 
 			}
 			at = n
 		default:
-			return r, 0, "", fmt.Errorf(UnknownRuleWord+"%q (use, tokens, images, effort, agents, intent, classifier, at)", w)
+			return r, 0, "", fmt.Errorf(UnknownRuleWord+"%q (use, tokens, images, effort, agents, intent, compact, classifier, at)", w)
 		}
 	}
 	if r.Use == "" {
@@ -170,6 +179,9 @@ func (r Rule) Line() string {
 	}
 	if r.Intent != "" {
 		out = append(out, `intent="`+strings.ReplaceAll(r.Intent, `"`, "")+`"`)
+	}
+	if r.Compact {
+		out = append(out, "compact")
 	}
 	return strings.Join(out, " ")
 }

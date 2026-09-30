@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -20,9 +21,12 @@ type rItem struct {
 	CallID    string          `json:"call_id,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Namespace string          `json:"namespace,omitempty"`
-	Arguments string          `json:"arguments,omitempty"`
+	Arguments rArgs           `json:"arguments,omitempty"`
 	Output    json.RawMessage `json:"output,omitempty"`
 	Status    string          `json:"status,omitempty"`
+	// tool_search_output: the tools Codex's search found, which the model
+	// may call from then on
+	Tools []rTool `json:"tools,omitempty"`
 	// reasoning
 	Summary          []rText `json:"summary,omitempty"`
 	EncryptedContent string  `json:"encrypted_content,omitempty"`
@@ -33,6 +37,20 @@ type rItem struct {
 			URL string `json:"url"`
 		} `json:"sources"`
 	} `json:"action,omitempty"`
+}
+
+// rArgs is a call's arguments: a JSON string on a function_call, an object
+// on Codex's tool_search_call.
+type rArgs string
+
+func (a *rArgs) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		*a = rArgs(s)
+	} else if string(b) != "null" {
+		*a = rArgs(b)
+	}
+	return nil
 }
 
 type rText struct {
@@ -46,6 +64,38 @@ type rTool struct {
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Tools       []rTool         `json:"tools,omitempty"` // a namespace's
+	Execution   string          `json:"execution,omitempty"`
+}
+
+// toolSearch is Codex's tool search. With it Codex names its MCP tools (the
+// ChatGPT apps' among them) and its sub-agent tools only in the search's
+// description, and hands the model the ones it searched for in a
+// tool_search_output, instead of every schema on every request (#258).
+// Codex runs the search itself ("execution": "client"): a model magpie
+// translates for is offered it as the function it is, and its call goes
+// back to Codex as the tool_search_call Codex runs.
+const toolSearch = "tool_search"
+
+// searchFound is what a model reads of a tool search's result: the tools it
+// may call now, by the names it is offered them under.
+func searchFound(tools []rTool) string {
+	var names []string
+	for _, t := range tools {
+		switch t.Type {
+		case "function":
+			names = append(names, t.Name)
+		case "namespace":
+			for _, nt := range t.Tools {
+				if nt.Type == "function" {
+					names = append(names, flatName(t.Name, nt.Name))
+				}
+			}
+		}
+	}
+	if len(names) == 0 {
+		return "No tools matched the search."
+	}
+	return "These tools are now available to call: " + strings.Join(names, ", ")
 }
 
 // flatName is the name a namespaced tool is offered to a model under, which
@@ -92,6 +142,7 @@ func parseResponses(body []byte) (*Request, error) {
 		r.Thinking = true
 		r.ThinkOff = strings.EqualFold(strings.TrimSpace(q.Reasoning.Effort), "none")
 	}
+	var found []rTool // what Codex's tool searches found
 	var s string
 	if json.Unmarshal(q.Input, &s) == nil {
 		r.Messages = append(r.Messages, Message{Role: "user", Parts: []Part{{Kind: Text, Text: s}}})
@@ -130,7 +181,12 @@ func parseResponses(body []byte) (*Request, error) {
 				if it.Namespace != "" {
 					name = flatName(it.Namespace, it.Name)
 				}
-				r.Messages = append(r.Messages, Message{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: it.CallID, Name: name, Args: parseArgs(it.Arguments)}}})
+				r.Messages = append(r.Messages, Message{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: it.CallID, Name: name, Args: parseArgs(string(it.Arguments))}}})
+			case it.Type == "tool_search_call":
+				r.Messages = append(r.Messages, Message{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: it.CallID, Name: toolSearch, Args: parseArgs(string(it.Arguments))}}})
+			case it.Type == "tool_search_output":
+				found = append(found, it.Tools...)
+				r.Messages = append(r.Messages, Message{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: it.CallID, Text: searchFound(it.Tools)}}})
 			case it.Type == "function_call_output":
 				out, images := toolOutput(it.Output)
 				r.Messages = append(r.Messages, Message{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: it.CallID, Text: out, Images: images}}})
@@ -146,13 +202,29 @@ func parseResponses(body []byte) (*Request, error) {
 		}
 	}
 	r.Messages = mergeTurns(r.Messages)
-	for _, t := range q.Tools {
+	sent := len(q.Tools)
+	offer := func(i int, t Tool, ns nsTool) {
+		// a tool searched for twice, or sent as well, is offered once
+		if i >= sent && slices.ContainsFunc(r.Tools, func(o Tool) bool { return o.Name == t.Name }) {
+			return
+		}
+		if ns != (nsTool{}) {
+			if r.Namespaced == nil {
+				r.Namespaced = map[string]nsTool{}
+			}
+			r.Namespaced[t.Name] = ns
+		}
+		r.Tools = append(r.Tools, t)
+	}
+	// the tools Codex's searches found are offered after those it sent, as
+	// Codex does not send them again
+	for i, t := range append(q.Tools, found...) {
 		if strings.HasPrefix(t.Type, "web_search") {
 			r.WebSearch = true
 		}
 		switch t.Type {
 		case "function":
-			r.Tools = append(r.Tools, Tool{Name: t.Name, Description: t.Description, Schema: t.Parameters})
+			offer(i, Tool{Name: t.Name, Description: t.Description, Schema: t.Parameters}, nsTool{})
 		case "namespace":
 			// offered flat, as few models know namespaces; a call is given
 			// its namespace back on the way out
@@ -161,11 +233,11 @@ func parseResponses(body []byte) (*Request, error) {
 					continue
 				}
 				flat := flatName(t.Name, nt.Name)
-				if r.Namespaced == nil {
-					r.Namespaced = map[string]nsTool{}
-				}
-				r.Namespaced[flat] = nsTool{Namespace: t.Name, Name: nt.Name}
-				r.Tools = append(r.Tools, Tool{Name: flat, Description: nt.Description, Schema: nt.Parameters})
+				offer(i, Tool{Name: flat, Description: nt.Description, Schema: nt.Parameters}, nsTool{Namespace: t.Name, Name: nt.Name})
+			}
+		case toolSearch:
+			if t.Execution == "client" {
+				offer(i, Tool{Name: toolSearch, Description: t.Description, Schema: t.Parameters}, nsTool{Search: true})
 			}
 		}
 	}
@@ -464,7 +536,7 @@ func (d *responsesDecoder) decode(data string, emit func(Event)) error {
 		emit(Event{Kind: KToolArgs, Text: ev.Delta})
 	case "response.output_item.done":
 		if ev.Item.Type == "function_call" && !d.argsSeen && ev.Item.Arguments != "" {
-			emit(Event{Kind: KToolArgs, Text: ev.Item.Arguments})
+			emit(Event{Kind: KToolArgs, Text: string(ev.Item.Arguments)})
 		}
 		if a := ev.Item.Action; ev.Item.Type == "web_search_call" && a != nil && a.Query != "" {
 			var hits []Hit
@@ -530,7 +602,12 @@ type responsesEncoder struct {
 // a namespaced tool by its name and namespace, not the flat name the model
 // used.
 func callTo(item map[string]any, name string, named map[string]nsTool) map[string]any {
-	if q, ok := named[name]; ok {
+	if q := named[name]; q.Search {
+		// Codex runs its tool search itself, from the item it knows it by
+		args, _ := item["arguments"].(string)
+		delete(item, "name")
+		item["type"], item["execution"], item["arguments"] = "tool_search_call", "client", parseArgs(args)
+	} else if q, ok := named[name]; ok {
 		item["name"], item["namespace"] = q.Name, q.Namespace
 		// Nothing magpie serves seals arguments. Codex reads a namespaced call
 		// without this list as sealed: spawn_agent's message in MultiAgentV2
@@ -604,7 +681,9 @@ func (e *responsesEncoder) closeItem() {
 			args = "{}"
 		}
 		p := e.col.last(ToolCall)
-		e.send("response.function_call_arguments.done", callTo(map[string]any{"item_id": e.itemID, "output_index": e.item, "call_id": p.ID, "arguments": args}, p.Name, e.named))
+		if !e.named[p.Name].Search {
+			e.send("response.function_call_arguments.done", callTo(map[string]any{"item_id": e.itemID, "output_index": e.item, "call_id": p.ID, "arguments": args}, p.Name, e.named))
+		}
 		item = callTo(map[string]any{"id": e.itemID, "type": "function_call", "status": "completed", "call_id": p.ID, "arguments": args}, p.Name, e.named)
 	}
 	e.send("response.output_item.done", map[string]any{"output_index": e.item, "item": item})

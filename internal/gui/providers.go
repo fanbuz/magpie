@@ -480,6 +480,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			ClearBalanceToken bool `json:"clearBalanceToken"`
 			// From is the id the provider had: another is a rename
 			From string `json:"from"`
+			// CopyOf, with New, is the provider the new one is a copy of
+			// (#268): its key and what else the form doesn't carry are
+			// taken from it when left out
+			CopyOf string `json:"copyOf"`
 			// Model and ModelName, for name: the name the user gives one
 			// of its models, "" for its own again
 			Model     string `json:"model"`
@@ -539,7 +543,11 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				if req.Proxy != nil {
 					in.Proxy = *req.Proxy
 				}
-				id, err := provider.Add(in)
+				add := provider.Add
+				if req.CopyOf != "" {
+					add = func(p provider.Provider) (string, error) { return provider.AddCopy(p, req.CopyOf) }
+				}
+				id, err := add(in)
 				if err != nil {
 					fail(rw, err)
 					return

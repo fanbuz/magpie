@@ -562,7 +562,10 @@ function cliTag(a) {
 function paintCLIButton(b, c, busy) {
   b.classList.toggle("busy", busy);
   b.setAttribute("aria-busy", String(busy));
-  b.replaceChildren(svg(busy ? CLI_SPIN : CLI_UP, 11, 1.8), el("span", "", busy ? t("Updating…") : t("Update to {v}", { v: c.latest })));
+  const text = busy ? t("Updating…") : t("Update to {v}", { v: c.latest });
+  // named even where a tight row shows only the arrow
+  b.setAttribute("aria-label", text);
+  b.replaceChildren(svg(busy ? CLI_SPIN : CLI_UP, 11, 1.8), el("span", "", text));
 }
 
 // paintCLI draws an agent's CLI again where it is, the row left as it is
@@ -962,6 +965,32 @@ if (mode === "panel") {
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => tintPanel(450));
 }
 
+// tintTitleBar paints Windows' own title bar the window's page colour, dark
+// or light as the page is, so the bar and the page are one surface as on the
+// Mac, not a grey strip above it (light over a dark page). wait lets a change
+// of theme finish fading first: the colour read is where it ends.
+function tintTitleBar(wait = 0) {
+  if (mode !== "window" || web || !document.documentElement.classList.contains("win")) return;
+  clearTimeout(tintTitleBar.t);
+  tintTitleBar.t = setTimeout(async () => {
+    const c = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
+    c.fillStyle = "#fff";
+    c.fillRect(0, 0, 1, 1);
+    c.fillStyle = getComputedStyle(document.body).backgroundColor;
+    c.fillRect(0, 0, 1, 1);
+    const [r, g, b] = c.getImageData(0, 0, 1, 1).data;
+    const rgba = [r, g, b, 255].join(",");
+    if (rgba === tintTitleBar.last) return;
+    tintTitleBar.last = rgba;
+    // the bar's own text and buttons light on a dark page, dark on a light one
+    const dark = 0.2126 * r + 0.7152 * g + 0.0722 * b < 128;
+    try { await api("window/titlebar?c=" + rgba + "&dark=" + (dark ? 1 : 0), {}); } catch { tintTitleBar.last = null; }
+  }, wait);
+}
+if (mode === "window") {
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => tintTitleBar(460));
+}
+
 // extra is room about to be taken (or given back), e.g. by agents unrolling;
 // glide moves the panel's edge there over time instead of at once.
 // The panel is as tall as its tallest tab, not the one showing, so it keeps
@@ -998,6 +1027,7 @@ async function load() {
     // the library may have drawn itself before the saved language was known
     if (applyPrefs(state.settings, state.fx) && view === "library") window.loadLibrary?.();
     tintPanel();
+    tintTitleBar();
     renderAgents();
     loadCLIs(); // after the rows, never holding them up
     if (mode === "panel") { renderPanelQuota(); loadQuotas(); }
@@ -1012,6 +1042,12 @@ async function load() {
     status(e.message, "err");
   }
   renderUpdateBadge();
+}
+
+// installFrom is what a restart to update tells the app: the window's tab,
+// for the new version to open its window there (Windows, Linux).
+function installFrom() {
+  return mode === "window" ? { view } : {};
 }
 
 // renderUpdateBadge shows the header's Update pill once a newer magpie is
@@ -1034,7 +1070,7 @@ async function renderUpdateBadge() {
     label.textContent = t("Restarting…");
     // an answer means it didn't: the password prompt dismissed, the swap
     // failed, or a newer version is out and downloading first
-    const a = await api("update/install", {}).catch(() => ({}));
+    const a = await api("update/install", installFrom()).catch(() => ({}));
     if (!a) return backAsNew(u.current);
     if (a) {
       if (["checking", "downloading"].includes(a.state)) b.dataset.pulling = "1";
@@ -3035,6 +3071,25 @@ function slide(box, key) {
 
 const PROTOS = [["chat", "OpenAI", "Chat Completions — most agents"], ["responses", "Responses", "OpenAI Responses — what Codex speaks"], ["anthropic", "Anthropic", "Anthropic Messages — what Claude Code speaks"], ["decide", "Jev", "Jev's decision API (TypeSafe's, or a gateway's) — what a routing group asks as a turn begins"]];
 
+// draftOf is a saved provider as its editor's form holds it.
+function draftOf(p) {
+  return { id: p.id, name: p.name, preset: p.preset, chat: p.chat, responses: p.responses, anthropic: p.anthropic, catalog: p.catalog, key: "", api: p.chat ? "openai" : p.anthropic ? "anthropic" : p.responses ? "responses" : "openai", chosen: p.models.filter((m) => m.on).map((m) => m.id), extra: [], headers: headerRows(p.headers), icon: p.icon || "", fallback: [...(p.fallback || [])], unlisted: !!p.unlisted, balanceURL: p.balanceURL || "", balancePath: p.balancePath || "", modelsURL: p.modelsURL || "", contexts: contextsText(p.contexts), keysUrl: p.keysUrl || "", ...proxyDraft(p) };
+}
+
+// duplicateProvider opens the Add form on a copy of p (#268): its URLs,
+// headers, models, balance and proxy, under a name of its own. The key is
+// p's unless another is pasted: the Add takes it from p, with its other
+// keys (copyOf). A signed-in account has no copy.
+function duplicateProvider(p) {
+  const name = t("{name} copy", { name: p.name });
+  adding = true;
+  editing = p.preset && providers.presets.some((x) => x.id === p.preset) ? { preset: p.preset } : { custom: true };
+  const d = draftOf(p);
+  draft = { ...d, id: slug(name), name, chosen: [], extra: d.chosen, copyOf: p.id };
+  if (p.zhipuTeam) draft.zhipuTeam = { org: p.zhipuTeam.org || "", project: p.zhipuTeam.project || "" };
+  renderProviders();
+}
+
 // renderEditor: an existing provider (p), a new preset (presetID), or custom.
 function renderEditor(p, presetID) {
   // its own icons, not the page's kept ones, which the rows after it take back
@@ -3049,7 +3104,7 @@ function drawEditor(p, presetID) {
   // more provider of it, under a name and id of its own
   const another = isNew && !!pr?.added;
   draft = draft || (p
-    ? { id: p.id, name: p.name, preset: p.preset, chat: p.chat, responses: p.responses, anthropic: p.anthropic, catalog: p.catalog, key: "", api: p.chat ? "openai" : p.anthropic ? "anthropic" : p.responses ? "responses" : "openai", chosen: p.models.filter((m) => m.on).map((m) => m.id), extra: [], headers: headerRows(p.headers), icon: p.icon || "", fallback: [...(p.fallback || [])], unlisted: !!p.unlisted, balanceURL: p.balanceURL || "", balancePath: p.balancePath || "", modelsURL: p.modelsURL || "", contexts: contextsText(p.contexts), keysUrl: p.keysUrl || "", ...proxyDraft(p) }
+    ? draftOf(p)
     : pr
       ? { id: pr.id, name: pr.name, preset: pr.id, key: "", chosen: [], extra: [], headers: [] }
       : { id: "", name: "", preset: "", chat: "", responses: "", anthropic: "", catalog: "", key: "", api: "openai", chosen: [], extra: [], headers: [], icon: "" });
@@ -3058,7 +3113,8 @@ function drawEditor(p, presetID) {
 
   {
     const h = el("div", "ehead");
-    h.append(icon(p?.icon || pr?.icon || "generic"), el("b", "", p ? p.name : pr ? pr.name : t("Custom provider")));
+    const copyOf = draft.copyOf && providers.providers.find((x) => x.id === draft.copyOf);
+    h.append(icon(p?.icon || (copyOf && draft.icon) || pr?.icon || "generic"), el("b", "", p ? p.name : copyOf ? t("Copy of {name}", { name: copyOf.name }) : pr ? pr.name : t("Custom provider")));
     if (pr?.note) h.append(el("span", "note", t(pr.note)));
     h.append(el("span", "grow"));
     const site = pr?.website || p?.website || (p?.host ? "https://" + p.host : "");
@@ -3240,7 +3296,8 @@ function drawEditor(p, presetID) {
     ed.append(...field(t("Endpoint"), endpoint, pr.endpointHint ? t(pr.endpointHint) : ""));
   }
 
-  const key = input(draft.key || "", p?.key.set ? t("{masked} · paste a new key to replace it", { masked: p.key.masked }) : t(pr?.noKey || p?.key.optional ? "optional for local servers" : "paste an API key"), "password");
+  const copied = !p && draft.copyOf && providers.providers.find((x) => x.id === draft.copyOf);
+  const key = input(draft.key || "", p?.key.set ? t("{masked} · paste a new key to replace it", { masked: p.key.masked }) : copied?.key.set ? t("{masked} · {name}'s key, or paste another", { masked: copied.key.masked, name: copied.name }) : t(pr?.noKey || p?.key.optional ? "optional for local servers" : "paste an API key"), "password");
   key.oninput = () => { draft.key = key.value; };
   key.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter" && isNew) save(); else if (e.key === "Escape") cancelEdit(); };
   const side = el("div", "side");
@@ -3428,7 +3485,7 @@ function drawEditor(p, presetID) {
     const bal = input(draft.balanceURL, "https://…/api/usage/token", "url");
     bal.classList.add("bal-url");
     bal.oninput = () => { draft.balanceURL = bal.value; };
-    inner.append(...field(t("Balance URL"), bal, t("Where the vendor tells what is left on the key, asked with it like a chat request; shown on the Usage page")));
+    inner.append(...field(t("Balance URL"), bal, t("Where the vendor tells what is left on the key, asked with it like a chat request; {key} in it or in a header is each key's own, for a vendor that takes the key in the URL (…?key={key}); shown on the Usage page")));
     const balPath = input(draft.balancePath, "data.balance");
     balPath.classList.add("bal-path");
     balPath.oninput = () => { draft.balancePath = balPath.value; };
@@ -3477,6 +3534,12 @@ function drawEditor(p, presetID) {
     more.onclick = () => { adding = true; editing = { preset: pr.id }; draft = null; renderProviders(); };
     bar.append(more);
   }
+  if (p) {
+    const dup = el("button", "text", t("Duplicate"));
+    dup.title = t("A new provider with {name}'s URLs, key, headers, models and balance settings, to change before adding", { name: p.name });
+    dup.onclick = () => duplicateProvider(p);
+    bar.append(dup);
+  }
   bar.append(el("span", "grow"));
   const cancel = el("button", "text", t("Cancel"));
   cancel.onclick = cancelEdit;
@@ -3484,6 +3547,7 @@ function drawEditor(p, presetID) {
   const save = () => {
     // new: an Add never replaces a provider that has the id already
     const body = { id: p ? slug(draft.id) || p.id : draft.id, from: p?.id, name: draft.name, preset: draft.preset, key: draft.key || "", chat: draft.chat, responses: draft.responses, anthropic: draft.anthropic, catalog: draft.catalog, models: p ? chosenIds() : draft.extra, headers: headersOf(draft.headers), new: isNew };
+    if (isNew && draft.copyOf) body.copyOf = draft.copyOf;
     if (decides) body.decide = (draft.decide || "").trim();
     if (custom) { body.icon = draft.icon || "generic"; body.balanceURL = (draft.balanceURL || "").trim(); body.balancePath = (draft.balancePath || "").trim(); body.modelsURL = (draft.modelsURL || "").trim(); }
     if (p) { body.fallback = draft.fallback; body.unlisted = draft.unlisted; }
@@ -4254,7 +4318,10 @@ const SUBS = [
   // the same plan sold abroad, WorkBuddy AI (workbuddy.ai / codebuddy.ai), its accounts its own
   { agent: "workbuddy-ai", get name() { return t("WorkBuddy AI (international)"); }, icon: "workbuddy-color", plans: "Free · Pro", own: true },
   // a commandcode.ai plan, signed in as its CLI does; the CLI's own key is read too
-  { agent: "commandcode-plan", name: "Command Code", icon: "commandcode", plans: "Pro · GOAT · Max · Ultra", own: true },
+  // a Go plan is asked at the CLI's private /alpha/generate, which Command Code
+  // said on X may get an account banned when used from other tools
+  { agent: "commandcode-plan", name: "Command Code", icon: "commandcode", plans: "Go · Pro · GOAT · Max · Ultra", own: true, risk: true,
+    riskNote: "A Go plan account is used through Command Code's private interface, which Command Code may treat as a breach of its terms and ban the account for. Pro, Max and the other plans use its Provider API. Use a Go account you can afford to lose." },
   { agent: "qoder", name: "Qoder", icon: "qoder", plans: "Pro", own: true, risk: true,
     riskNote: "Qoder has no public API for this; magpie signs requests as its desktop client would, which Qoder may treat as third-party use and act on. Use an account you can afford to lose." },
   // the devin CLI's own account is read; more are signed in beside it, each in a data folder of magpie's
@@ -4577,14 +4644,21 @@ function renderAccounts(a) {
   const list = el("div", "accts");
   let ls = a.logins?.length ? [...a.logins] : [{ user: a.user, plan: a.plan, active: true, on: true }];
   ls.sort((x, y) => (y.active ? 1 : 0) - (x.active ? 1 : 0));
-  const several = ls.filter((l) => l.active || l.on).length > 1;
+  const several = ls.filter((l) => (l.active && !l.paused) || l.on).length > 1;
+  // the account Claude Code or Codex is signed in to can be paused while
+  // another is on: the gateway passes over it, the agent staying signed in
+  // to it (#263)
+  const pausable = (a.agent === "claude" || a.agent === "codex") && ls.some((l) => !l.active && l.on);
   const quota = loginUsageOf(a.agent);
   for (const l of ls) {
-    const on = l.active || l.on;
+    const on = !l.paused && (l.active || l.on);
     const row = el("div", "acc" + (on ? " in-use" : " off") + (l.user === justAdded ? " new" : ""));
     const dot = el("button", "dot tick");
     if (on) dot.append(svg(CHECK, 10, 2.2));
-    if (l.active) {
+    if (l.active && (pausable || l.paused)) {
+      dot.title = l.paused ? t("Resume: the gateway uses this account first again") : t("Pause: the gateway uses the other accounts, {agent} stays signed in to this one", { agent: a.agentName });
+      dot.onclick = () => accountAction("login/" + (l.paused ? "on" : "off"), { agent: a.agent, user: l.user });
+    } else if (l.active) {
       dot.title = sub?.own ? t("The gateway uses this account first") : t("{agent} is signed in to this account", { agent: a.agentName });
       dot.classList.add("fixed");
     } else {
@@ -4593,7 +4667,7 @@ function renderAccounts(a) {
     }
     row.append(dot, el("span", "n", l.user), el("span", "plan", accountPlan({ agent: a.agent, plan: l.plan })), el("span", "grow"));
     if (l.active) {
-      row.append(el("span", "using", several ? t("First") : t("In use")));
+      row.append(el("span", "using", l.paused ? t("Paused") : several ? t("First") : t("In use")));
       if (a.agent === "qoder" || l.own) {
         const forget = el("button", "text quiet", t("Remove"));
         if (l.own) forget.title = forgetOwnTitle(a);
@@ -8203,7 +8277,7 @@ function applyPrefs(s, rate) {
         applyPrefs.t = setTimeout(() => root.classList.remove("theming"), 450);
       }
       if (want) root.dataset.theme = want; else delete root.dataset.theme;
-      if (applyPrefs.ready) tintPanel(450);
+      if (applyPrefs.ready) { tintPanel(450); tintTitleBar(460); }
     }
   }
   applyPrefs.ready = true;
@@ -8907,7 +8981,9 @@ function renderRedactRules(s, row) {
   }
   row(t("Masking rules"), d.err || t("Secrets magpie doesn't know, such as a gateway's own keys: what they start with, or a regular expression. Masked while Mask secrets is on"),
     kind, by, match, add);
+  // its words above in full, the fields on a line of their own under them
   const head = $("#redactList").lastElementChild;
+  head.classList.add("rule-row");
   head.querySelector(".val").classList.add("rule-add");
   if (d.err) head.querySelector(".sub").classList.add("err");
   // and the rules under it, each by the name its placeholders have
@@ -9036,7 +9112,7 @@ async function renderUpdate(r, u) {
       sub.textContent = t("{v} is downloaded", { v: u.latest }) + (u.error ? " · " + u.error : "");
       // back with an answer only when it didn't restart
       btn(t("Restart to update"), async () => {
-        const a = await api("update/install", {}).catch(() => ({ state: "error" }));
+        const a = await api("update/install", installFrom()).catch(() => ({ state: "error" }));
         if (a) return renderUpdate(r, a.current ? a : undefined);
         sub.textContent = t("Restarting…");
         backAsNew(u.current);

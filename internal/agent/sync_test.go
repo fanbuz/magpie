@@ -29,6 +29,8 @@ func syncHome(t *testing.T) string {
 	t.Setenv("MIMOCODE_HOME", "")
 	t.Setenv("HANA_HOME", "")
 	t.Setenv("DSH_HOME", "")
+	t.Setenv("OMO_CODING_AGENT_DIR", "")
+	t.Setenv("SENPI_CODING_AGENT_DIR", "")
 	noKeychain(t)
 	os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755)
 	os.WriteFile(catalog.CachePath(), []byte(`{"zai":{"models":{"glm-4.6":{"id":"glm-4.6","name":"GLM-4.6","limit":{"context":204800}}}}}`), 0o644)

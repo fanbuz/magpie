@@ -165,8 +165,15 @@ func TestDshEffort(t *testing.T) {
 	if err := f.Set("max"); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.Set("low"); err == nil {
-		t.Fatal("took low")
+	// llm-deepseek takes low as well (#269), and nothing between
+	if err := f.Set("low"); err != nil || f.Get() != "low" {
+		t.Fatalf("low: %v, effort %q\n%s", err, f.Get(), readFile(patch))
+	}
+	if err := f.Set("medium"); err == nil {
+		t.Fatal("took medium")
+	}
+	if err := f.Set("max"); err != nil {
+		t.Fatal(err)
 	}
 	// kept when the model changes and when the catalog is synced
 	if err := a.Field("model").Set("magpie/deepseek/flash"); err != nil {

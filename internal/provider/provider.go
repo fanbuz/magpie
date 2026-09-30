@@ -370,6 +370,10 @@ func Save(p Provider) error {
 // second key of a vendor, or one key for another workspace, is a provider of
 // its own rather than one replacing the first. It answers the id saved.
 func Add(p Provider) (string, error) {
+	return add(p, true)
+}
+
+func add(p Provider, once bool) (string, error) {
 	p.ID = strings.ToLower(strings.TrimSpace(p.ID))
 	if p.ID == "" {
 		p.ID = Slug(p.Name)
@@ -380,14 +384,53 @@ func Add(p Provider) (string, error) {
 		p.ID = hostID(p)
 	}
 	// the same key on the same host with the same headers is the one
-	// already here, not another: adding it twice would only split its usage
+	// already here, not another: adding it twice would only split its usage.
+	// A copy the user asked for is taken (AddCopy).
 	for _, h := range All() {
-		if h.Account == nil && sameProvider(h, normalize(p)) {
+		if once && h.Account == nil && sameProvider(h, normalize(p)) {
 			return "", fmt.Errorf("%s is already added with that key (%s); magpie provider key %s <key> changes its key", h.Name, h.ID, h.ID)
 		}
 	}
 	p.ID, p.Name = freeID(p.ID), freeName(p.Name)
 	return p.ID, Save(p)
+}
+
+// AddCopy adds p, a copy the user made of the provider from (#268), beside
+// it: what the form doesn't carry — the keys, the balance token, how
+// requests spread over the keys, where they fall back to — is from's where
+// p leaves it out. The same key on the same host is taken, the copy being
+// asked for (another model list, another endpoint). A signed-in account is
+// never copied: its sign-in is the agent's.
+func AddCopy(p Provider, from string) (string, error) {
+	src, err := Find(from)
+	if err != nil {
+		return "", err
+	}
+	if src.Account != nil {
+		return "", fmt.Errorf("%s is a signed-in account, which can't be copied", src.Name)
+	}
+	if p.Key == "" {
+		p.Key, p.KeyName, p.KeyProtocol = src.Key, src.KeyName, src.KeyProtocol
+		p.Keys = slices.Clone(src.Keys)
+		p.Routing, p.Affinity = src.Routing, src.Affinity
+	}
+	if p.BalanceToken == "" {
+		p.BalanceToken = src.BalanceToken
+	}
+	if p.ZhipuTeam == nil {
+		p.ZhipuTeam = src.ZhipuTeam
+	}
+	if p.Fallback == nil {
+		p.Fallback = slices.Clone(src.Fallback)
+	}
+	p.Unlisted = p.Unlisted || src.Unlisted
+	if p.Website == "" {
+		p.Website = src.Website
+	}
+	if p.KeysURL == "" {
+		p.KeysURL = src.KeysURL
+	}
+	return add(p, false)
 }
 
 // hostID is an id for a provider from the host it is on: api.relay.com is

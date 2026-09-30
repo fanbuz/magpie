@@ -94,7 +94,7 @@ func (c computer) use(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(string(c), ".claude"))
 	t.Setenv("CODEX_HOME", filepath.Join(string(c), ".codex"))
 	t.Setenv("PATH", "")
-	for _, v := range []string{"DSH_HOME", "PI_CODING_AGENT_DIR", "COPILOT_HOME", "CLINE_DIR", "GROK_HOME", "HERMES_HOME", "HANA_HOME", "APPDATA", "LOCALAPPDATA"} {
+	for _, v := range []string{"DSH_HOME", "PI_CODING_AGENT_DIR", "OMO_CODING_AGENT_DIR", "SENPI_CODING_AGENT_DIR", "COPILOT_HOME", "CLINE_DIR", "GROK_HOME", "HERMES_HOME", "HANA_HOME", "APPDATA", "LOCALAPPDATA"} {
 		t.Setenv(v, "")
 	}
 }

@@ -40,7 +40,11 @@ func codexSign(token func(context.Context) (tok, accountID string, err error)) f
 		}
 		req.Header.Set("OpenAI-Beta", "responses=experimental")
 		req.Header.Set("originator", "codex_cli_rs")
-		req.Header.Set("User-Agent", codexUserAgent())
+		// the version and the User-Agent name one Codex, never older than
+		// the client whose request this is (its version header, relayed)
+		ver := newerVersion(codexVersion(), req.Header.Get("version"))
+		req.Header.Set("version", ver)
+		req.Header.Set("User-Agent", codexUserAgent(ver))
 		if body == nil {
 			return nil
 		}
@@ -65,10 +69,9 @@ var codexUA struct {
 	os string
 }
 
-// codexUserAgent is the User-Agent Codex CLI sends, of the version magpie
-// asks the model list with:
+// codexUserAgent is the User-Agent Codex CLI of version v sends:
 // "codex_cli_rs/0.155.1 (Mac OS 26.6.0; arm64) Apple_Terminal/455".
-func codexUserAgent() string {
+func codexUserAgent(v string) string {
 	codexUA.Do(func() { codexUA.os = codexOS() })
 	arch := map[string]string{"arm64": "arm64", "amd64": "x86_64"}[runtime.GOARCH]
 	if arch == "" {
@@ -78,7 +81,7 @@ func codexUserAgent() string {
 	if term == "" {
 		term = "xterm-256color"
 	}
-	return "codex_cli_rs/" + codexVersion() + " (" + codexUA.os + "; " + arch + ") " + term
+	return "codex_cli_rs/" + v + " (" + codexUA.os + "; " + arch + ") " + term
 }
 
 var versionRE = regexp.MustCompile(`\d+(\.\d+)+`)

@@ -98,7 +98,7 @@ func grok(home string) *Agent {
 		}
 		return catalog.Efforts(magpieModels("grok"), ref)
 	}
-	return &Agent{
+	return atomic(&Agent{
 		ID: "grok", Name: "Grok Build", Icon: "xai", Aliases: []string{"grok-build", "grok-cli"},
 		UA:  []string{"grok-shell", "grok-pager", "xai-grok-build"}, // grok-pager: its terminal front end
 		Dir: dir, Path: path,
@@ -210,7 +210,7 @@ func grok(home string) *Agent {
 				},
 			},
 		},
-	}
+	}, path)
 }
 
 // grokOwnOptions are the models Grok Build offers its signed-in account, as

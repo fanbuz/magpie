@@ -115,7 +115,7 @@
     <p>Keys live in <code>~/.config/magpie/providers.json</code>, readable by you alone. magpie never reads keys from your shell environment: what you add is what it uses.</p>
 
     <h2 id="agents"><a class="anchor" href="#agents">2 · Pick a model for each agent</a></h2>
-    <p>The <span class="ui">Agents</span> tab has a row for each agent installed or configured on this machine. magpie knows Claude Code, Codex, Gemini CLI, OpenCode, MiMo Code, Pi, Goose, Cursor, Copilot CLI, Crush, DeepSeek Harness, Command Code, omp, Devin, Hermes Agent, Grok Build, ZCode, OpenHanako and Alma.</p>
+    <p>The <span class="ui">Agents</span> tab has a row for each agent installed or configured on this machine. magpie knows Claude Code, Codex, Gemini CLI, OpenCode, MiMo Code, Pi, Goose, Cursor, Copilot CLI, Crush, DeepSeek Harness, Command Code, omp, OmO, Devin, Hermes Agent, Grok Build, ZCode, OpenHanako and Alma.</p>
 
     <figure class="figure">
       <img class="for-light" src="/img/agents-light.png" width="2080" height="1058" loading="lazy" alt="The Agents tab: one row per agent with the model it uses, and saved profiles at the bottom">
@@ -168,12 +168,13 @@
       <tr><td>Off <code>off</code></td><td>Every request is routed afresh.</td></tr>
     </table></div>
     <h3 id="rules">Rules · a turn to a chosen model</h3>
-    <p>A group’s <span class="ui">Rules</span> send a turn to one of its models when the turn is of a kind you name: long (<code>tokens ≥ N</code>), carrying an image, asking for reasoning (on, or at least a level), from certain agents, or asking for something you describe (an <em>intent</em>). They are looked at top first when you send a message; the first that matches puts its model first, with the group’s others behind it if it fails. A turn no rule matches is routed as the group always routes, and keeps to where it was.</p>
+    <p>A group’s <span class="ui">Rules</span> send a turn to one of its models when the turn is of a kind you name: long (<code>tokens ≥ N</code>), carrying an image, asking for reasoning (on, or at least a level), from certain agents, asking for something you describe (an <em>intent</em>), or the agent compacting its context. They are looked at top first when you send a message; the first that matches puts its model first, with the group’s others behind it if it fails. A turn no rule matches is routed as the group always routes, and keeps to where it was.</p>
     <ul>
       <li>A rule decides as a turn begins, and the turn stays on that model while the agent sends tool results back, so what the vendor cached isn’t lost halfway. The one exception: a turn that grows past its model’s context moves to a member that takes it.</li>
       <li>Tokens are estimated from the request’s size, or what the vendor counted for the conversation’s last request, whichever is more. Leave some margin: a rule at 150k for a 200k model, not 199k.</li>
       <li>A subagent is a conversation of its own, so a rule can send it elsewhere while its agent keeps where it is.</li>
       <li>An intent is a few words for what the user asks for — “writing or fixing tests”, “a quick question”. As a turn begins, the group’s classifier — any model magpie has; a small, fast one without reasoning is best — is asked once which of the intents that could match the user’s message is. Only the message is sent, not the conversation. If it fails, is slow (8 s) or can’t say, no intent matches and the turn goes by the other rules. It isn’t asked when a rule without an intent would decide anyway, and the same message isn’t asked about twice. Its calls show in Usage as magpie’s own. Exactly what it is asked, how its answer is used and what happens when it fails: <a href="/docs/intent">Intent routing</a>.</li>
+      <li><span class="ui">compacting</span> matches an agent compacting its conversation — Claude Code’s <code>/compact</code> and auto-compact, Codex, OpenCode, Pi, Gemini CLI, Qwen Code, Kimi Code — so a cheaper, faster model writes the summary while the conversation stays on its own. A compaction is decided on its own: the turn it happens in, and its cache, stay where they were. When the conversation is longer than the rule’s model takes, the next rule that matches, or the group’s order, decides instead.</li>
       <li>The Routing tab says which rule sent each turn where, and what the classifier said.</li>
     </ul>
     <h3 id="nested">Groups in groups</h3>
@@ -197,6 +198,7 @@ magpie group add <span class="s">"Opus anywhere"</span> models=claude/claude-opu
 magpie group set opus-anywhere models+=openrouter/anthropic/claude-opus-5.5
 magpie group rule add opus-anywhere use=openrouter/anthropic/claude-opus-5.5 tokens=150k  <span class="c"># long turns to it first</span>
 magpie group rule add opus-anywhere use=copilot/claude-opus-5.5 intent=<span class="s">"a quick question"</span> classifier=groq/llama-3.1-8b-instant
+magpie group rule add opus-anywhere use=deepseek/deepseek-v4-flash compact  <span class="c"># /compact summaries to a cheap model</span>
 magpie group set coder models+=group/opus-anywhere  <span class="c"># a group in a group</span>
 magpie group rule opus-anywhere      <span class="c"># its rules; rule rm|mv &lt;n&gt;, rule classifier &lt;group&gt; &lt;model&gt;</span>
 magpie group rm opus-anywhere        <span class="c"># one magpie found is hidden; magpie group restore &lt;id&gt;</span>

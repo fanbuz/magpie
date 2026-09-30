@@ -391,10 +391,12 @@ func (r *subscriptionRun) ended(req *Request, said, stop string, ok bool) {
 	case stop != "stop":
 		r.abort()
 		return
-	case len(req.Tools) == 0 && len(req.Messages) < 2:
+	case len(req.Tools) == 0 && !hasReply(req.Messages):
 		// a one-off ask — an agent's title or topic, the router's
-		// classifier — has no next turn: kept, it would be a Claude Code
-		// process idle for idleLongest, several at once
+		// classifier, Claude Code's auto mode classifier with its
+		// transcript in several user messages (#250) — has no next turn:
+		// kept, it would be a Claude Code process idle for idleLongest,
+		// several at once, pushing out the conversations' own
 		r.abort()
 		return
 	}
@@ -1204,6 +1206,12 @@ func (s *Server) serveClaudeSubscription(w http.ResponseWriter, r *http.Request,
 			return run, events, nil
 		}
 		s.subscription.retire(owner, req.Messages)
+		if req.Effort == "" && autoModeClassifier(req) {
+			// Claude Code's auto mode classifier asks a verdict of a few
+			// words within a minute; a Claude Code run at its default
+			// effort can think past that (#250)
+			req.Effort = "low"
+		}
 		token, _, err := p.Account.Token(ctx)
 		if err != nil {
 			return nil, nil, err

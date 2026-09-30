@@ -73,6 +73,7 @@ and there is a terminal version (`magpie tui`) and a plain CLI.
 | OpenCode     | `~/.config/opencode/opencode.json(c)` | model, small |
 | MiMo Code    | `~/.config/mimocode/mimocode.json(c)` | model, small |
 | Pi           | `~/.pi/agent/settings.json`       | model           |
+| OmO (omo-ai) | `~/.omo/agent/settings.json` (+ `models.json`; `$OMO_CODING_AGENT_DIR`, `$SENPI_CODING_AGENT_DIR`) | model |
 | Goose        | `~/.config/goose/config.yaml`     | model           |
 | Cursor CLI   | `~/.cursor/cli-config.json`       | model           |
 | Copilot CLI  | `~/.copilot/settings.json`        | model           |
@@ -94,7 +95,7 @@ and there is a terminal version (`magpie tui`) and a plain CLI.
 | OpenHanako   | `~/.hanako/provider-catalog.json` + `agents/<id>/config.yaml` (`$HANA_HOME`; its local API while it runs) | model (the primary agent's; magpie's models as a provider) |
 | Alma         | Alma's local API (`localhost:23001`, while Alma runs) | model (Alma's default; magpie's models as a provider) |
 
-Provider-scoped agents (OpenCode, MiMo Code, Pi, Goose, Crush, omp, Hermes Agent) take `provider/model`.
+Provider-scoped agents (OpenCode, MiMo Code, Pi, OmO, Goose, Crush, omp, Hermes Agent) take `provider/model`.
 Only agents that are installed or configured are shown.
 
 ## Providers and the gateway

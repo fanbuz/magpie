@@ -49,6 +49,11 @@ type RuleHit struct {
 	// Pick: the reasoning the group's decision model picked for the turn,
 	// which its requests ask their model for (provider.EffortAuto)
 	Pick string `json:"pick,omitempty"`
+	// Compact: the request is the agent compacting its conversation, looked
+	// at on its own; Small, the members of rules it matched that take less
+	// than it is long, passed over
+	Compact bool     `json:"compact,omitempty"`
+	Small   []string `json:"small,omitempty"`
 	// Bare: the group has no rules, only its effort picked
 	Bare bool `json:"bare,omitempty"`
 }
@@ -153,6 +158,26 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 	}()
 	if hit.Effort == "" && q.Thinking {
 		hit.Effort = "on"
+	}
+	if slices.ContainsFunc(g.Rules, func(r provider.Rule) bool { return r.Compact }) && compacting(req) {
+		// the agent summarizing its conversation: the first rule it matches,
+		// on its own — not the turn's decision, so the requests after it go
+		// on as the turn would. The request is as long as the conversation:
+		// a model known to take less would only refuse it, and is passed over.
+		q.Compact, hit.Compact = true, true
+		ctx := memberContexts(ms)
+		for i, r := range g.Rules {
+			if !r.Matches(q) {
+				continue
+			}
+			if c := ctx[r.Use]; c > 0 && c < q.Tokens {
+				hit.Small = append(hit.Small, r.Use)
+				continue
+			}
+			hit.N, hit.Use, hit.When = i+1, r.Use, r.Conditions()
+			break
+		}
+		return hit
 	}
 	if within {
 		// the same turn: what was decided as it began, while the group

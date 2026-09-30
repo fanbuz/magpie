@@ -81,6 +81,17 @@ func Entries(ms []catalog.Model, after int) []any {
 		Modalities []string `json:"input_modalities"`
 		Context    *int     `json:"context_window,omitempty"`
 		Tiers      []tier   `json:"service_tiers"`
+		// Without the search, Codex puts every MCP tool's schema (a
+		// ChatGPT sign-in's apps' among them) in every request, 190K
+		// tokens before the first word (#258); with it, they are named in
+		// tool_search's description and handed over when searched for,
+		// as Codex does for its own models. Magpie serves the search to
+		// any model as a function (gateway/toolsearch.go). Code mode and
+		// Responses Lite stay off: the one has the model write JavaScript
+		// against Codex's tools, the other moves the tools and
+		// instructions into the input, neither for a model not trained on
+		// them.
+		SearchTool bool `json:"supports_search_tool"`
 	}
 	own := CacheEntries()
 	var entries []any
@@ -94,7 +105,7 @@ func Entries(ms []catalog.Model, after int) []any {
 			Instructions: Prompt, Efforts: []level{},
 			Shell: "unified_exec", Visibility: "list", InAPI: true, Priority: after + i + 1,
 			ApplyPatch: "freeform", Tools: []string{}, Modalities: []string{"text"},
-			Tiers: []tier{},
+			Tiers: []tier{}, SearchTool: true,
 		}
 		// Fast mode: a ChatGPT account's GPT model Codex has no entry for,
 		// or a group one is in, gets the tier Codex's own catalog gives its

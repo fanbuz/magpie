@@ -56,6 +56,9 @@ type Windows interface {
 	// keeps up with the panel's size; false when it can't, for the page to
 	// go on painting it itself.
 	TintPanel(rgba [4]uint8, ms int) bool
+	// TintTitleBar paints the window's title bar the page's colour, where
+	// the system draws one (Windows); false where there is none to paint.
+	TintTitleBar(rgba [4]uint8, dark bool) bool
 	// SetTextSize zooms the window's and the panel's pages to percent
 	// (settings.TextSizes), the panel's size with them.
 	SetTextSize(percent int)
@@ -616,6 +619,11 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			}
 		case "tint":
 			if c, ms, ok := parseTint(r.URL.Query()); ok && w.TintPanel(c, ms) {
+				writeJSON(rw, map[string]bool{"ok": true})
+				return
+			}
+		case "titlebar":
+			if c, _, ok := parseTint(r.URL.Query()); ok && w.TintTitleBar(c, r.URL.Query().Get("dark") == "1") {
 				writeJSON(rw, map[string]bool{"ok": true})
 				return
 			}

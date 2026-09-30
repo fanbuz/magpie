@@ -61,10 +61,20 @@ type factoryCreds struct {
 	Access    string `json:"accessToken"`
 	Refresh   string `json:"refreshToken"`
 	ExpiresAt int64  `json:"expiresAt"` // unix ms, from the token's exp
-	Org       string `json:"orgId,omitempty"`
-	Email     string `json:"email,omitempty"`
-	UserID    string `json:"userId,omitempty"`
-	Region    string `json:"region,omitempty"` // "eu" for an org served from Factory's EU region
+	// Org is the WorkOS organization (org_…) the token was put in, kept
+	// for the record: it is never sent to Factory's API.
+	Org string `json:"orgId,omitempty"`
+	// Active is droid's active_organization_id: Factory's own id for the
+	// org, as /api/cli/whoami answers it, sent as X-Factory-Org-Id. droid
+	// asks whoami as soon as it holds a token and keeps its orgId, so its
+	// requests carry it; an account with none asks before it sends.
+	Active string `json:"activeOrganizationId,omitempty"`
+	Email  string `json:"email,omitempty"`
+	UserID string `json:"userId,omitempty"`
+	Region string `json:"region,omitempty"` // "eu" for an org served from Factory's EU region
+	// Prem is whoami's premBaseHostV2: an org Factory serves from a host
+	// of its own, where droid sends its model requests instead.
+	Prem string `json:"premBaseHost,omitempty"`
 }
 
 // base is the Factory API the account's org is served from.
@@ -73,6 +83,19 @@ func (c factoryCreds) base() string {
 		return factoryAPIEU
 	}
 	return factoryAPI
+}
+
+// llmBase is where the account's model requests go: the org's own host
+// when whoami named one, else its region's API.
+func (c factoryCreds) llmBase() string {
+	if c.Prem != "" {
+		p := strings.TrimRight(c.Prem, "/")
+		if !strings.Contains(p, "://") {
+			p = "https://" + p
+		}
+		return p
+	}
+	return c.base()
 }
 
 type factoryLogin struct {
@@ -189,8 +212,9 @@ func factoryAuthenticate(ctx context.Context, form url.Values) (factoryTokens, e
 	return t, nil
 }
 
-// factoryRenew trades a refresh token for a new pair, in org when one is
-// named (droid's way of picking the org a token is for).
+// factoryRenew trades a refresh token for a new pair, in the WorkOS org
+// when one is named (droid's way of putting a token that names no org in
+// one); droid's routine refresh names none, and WorkOS keeps the org.
 func factoryRenew(ctx context.Context, refresh, org string) (factoryTokens, error) {
 	form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {factoryClientID}}
 	if org != "" {
@@ -269,18 +293,18 @@ func factoryFresh(ctx context.Context, user string) (factoryCreds, error) {
 		return factoryCreds{}, errors.New("Factory: unreadable sign-in")
 	}
 	if c.ExpiresAt > 0 && time.Now().UnixMilli() < c.ExpiresAt-factoryRefreshLead.Milliseconds() {
-		return c, nil
+		return factoryOrgOf(ctx, l.User, c), nil
 	}
 	if c.Refresh == "" {
-		return c, nil // nothing to renew it with; let the request try what there is
+		return factoryOrgOf(ctx, l.User, c), nil // nothing to renew it with; let the request try what there is
 	}
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
-	t, err := factoryRenew(rctx, c.Refresh, c.Org)
+	t, err := factoryRenew(rctx, c.Refresh, "")
 	cancel()
 	if err != nil {
 		// a hiccup while the token still runs: go on with it
 		if !factoryRefused(err) && c.ExpiresAt > 0 && time.Now().UnixMilli() < c.ExpiresAt {
-			return c, nil
+			return factoryOrgOf(ctx, l.User, c), nil
 		}
 		return factoryCreds{}, factoryLapse(l.User, err)
 	}
@@ -288,7 +312,94 @@ func factoryFresh(ctx context.Context, user string) (factoryCreds, error) {
 	if t.Refresh != "" {
 		c.Refresh = t.Refresh
 	}
+	// droid asks whoami again for each new token, keeping the org it names
+	factoryReconcile(ctx, &c)
+	factoryAsked.Store(strings.ToLower(l.User), time.Now())
 	return c, factoryEdit(l.User, c, true)
+}
+
+// factoryAsked is when each account last asked whoami for its org, so an
+// account whoami can't answer doesn't ask before every request.
+var factoryAsked sync.Map
+
+// factoryAskAgain is how long an account whose whoami failed waits before
+// asking again.
+const factoryAskAgain = 10 * time.Minute
+
+// factoryOrgOf fills in an account's active org when it has none: droid
+// asks whoami as soon as it holds a token (its auth's Do → Ar) and sends the
+// orgId it answers as X-Factory-Org-Id on every request after; Factory
+// answered one with none "Forbidden" (#242). Logins kept before magpie
+// asked have none. Called under factoryMu.
+func factoryOrgOf(ctx context.Context, user string, c factoryCreds) factoryCreds {
+	if c.Active != "" {
+		return c
+	}
+	key := strings.ToLower(user)
+	if at, ok := factoryAsked.Load(key); ok && time.Since(at.(time.Time)) < factoryAskAgain {
+		return c
+	}
+	factoryAsked.Store(key, time.Now())
+	if factoryReconcile(ctx, &c) {
+		_ = factoryEdit(user, c, false)
+	}
+	return c
+}
+
+// factoryWho is what /api/cli/whoami tells of an account.
+type factoryWho struct {
+	UserID string `json:"userId"`
+	OrgID  string `json:"orgId"`
+	Email  string `json:"email"`
+	Region string `json:"region"`
+	Prem   string `json:"premBaseHostV2"`
+}
+
+// factoryWhoami asks Factory whose the token is with the headers droid's
+// whoami (ZA) sends: the token, X-Factory-Whoami-Extended, and the active
+// org when there is one — nothing else.
+func factoryWhoami(ctx context.Context, c factoryCreds) (factoryWho, error) {
+	var who factoryWho
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base()+"/api/cli/whoami", nil)
+	if err != nil {
+		return who, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Access)
+	req.Header.Set("X-Factory-Whoami-Extended", "true")
+	if c.Active != "" {
+		req.Header.Set("X-Factory-Org-Id", c.Active)
+	}
+	res, err := factoryClient.Do(req)
+	if err != nil {
+		return who, err
+	}
+	defer res.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if res.StatusCode != http.StatusOK {
+		return who, &factoryStatus{res.StatusCode, "Factory: " + APIError(b, res.Status)}
+	}
+	return who, json.Unmarshal(b, &who)
+}
+
+// factoryReconcile asks whoami, as droid does for each token it holds, and
+// keeps the org, region and host it names: true when any changed. An active
+// org whoami refuses is left off and whoami asked again without it.
+func factoryReconcile(ctx context.Context, c *factoryCreds) bool {
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	who, err := factoryWhoami(wctx, *c)
+	var st *factoryStatus
+	if c.Active != "" && errors.As(err, &st) && st.Code == http.StatusForbidden {
+		without := *c
+		without.Active = ""
+		who, err = factoryWhoami(wctx, without)
+	}
+	if err != nil || who.OrgID == "" {
+		return false
+	}
+	before := *c
+	c.Active, c.Region, c.Prem = who.OrgID, who.Region, who.Prem
+	return *c != before
 }
 
 // ---- Factory's API ----------------------------------------------------------
@@ -299,9 +410,105 @@ func factoryHeaders(h http.Header, c factoryCreds) {
 	h.Set("X-Factory-Client", "cli")
 	h.Set("X-Client-Version", factoryVersion)
 	h.Set("User-Agent", "factory-cli/"+factoryVersion)
-	if c.Org != "" {
-		h.Set("X-Factory-Org-Id", c.Org)
+	if c.Active != "" {
+		h.Set("X-Factory-Org-Id", c.Active)
 	}
+}
+
+// factoryOrgRefused is Factory's 403 for an X-Factory-Org-Id the user can't
+// reach: "Requested active organization is not accessible by this user".
+func factoryOrgRefused(status int, body []byte) bool {
+	return status == http.StatusForbidden && strings.Contains(strings.ToLower(string(body)), "active organization is not accessible")
+}
+
+// factoryMendOrg answers Factory refusing an account's request. An active
+// org it can't reach is left off and whoami asked again without it (droid's
+// org picker retries "without the active-org header" so), keeping the org it
+// then names or none; with no header sent, the token is put in the first org
+// /api/cli/org lists, as droid does for a token with none. Any other 403 to
+// an account that sent no org asks whoami for one, as droid would have
+// before its first request. True when there was something to change and the
+// request is worth resending.
+func factoryMendOrg(ctx context.Context, user string, status int, body []byte) bool {
+	if status != http.StatusForbidden {
+		return false
+	}
+	refused := factoryOrgRefused(status, body)
+	factoryMu.Lock()
+	defer factoryMu.Unlock()
+	l, ok := factoryLookup(user)
+	if !ok {
+		return false
+	}
+	c, valid := factorySaved(l)
+	if !valid {
+		return false
+	}
+	if c.Active != "" {
+		if !refused {
+			return false // the org was sent: the refusal is about something else
+		}
+		was := c.Active
+		c.Active = ""
+		if factoryReconcile(ctx, &c) && c.Active == was {
+			c.Active = "" // whoami names the org refused: send none
+		}
+		factoryAsked.Store(strings.ToLower(l.User), time.Now())
+		return factoryEdit(l.User, c, false) == nil
+	}
+	if !refused {
+		// no org was sent: ask whoami for the one droid would have sent
+		factoryAsked.Store(strings.ToLower(l.User), time.Now())
+		return factoryReconcile(ctx, &c) && c.Active != "" && factoryEdit(l.User, c, false) == nil
+	}
+	if c.Refresh == "" {
+		return false
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	defer cancel()
+	org, err := factoryFirstOrg(rctx, c)
+	if err != nil || org == "" {
+		return false
+	}
+	t, err := factoryRenew(rctx, c.Refresh, org)
+	if err != nil {
+		return false
+	}
+	c.Access, c.ExpiresAt, c.Org = t.Access, factoryExpiry(t.Access), org
+	if t.Refresh != "" {
+		c.Refresh = t.Refresh
+	}
+	return factoryEdit(l.User, c, true) == nil
+}
+
+// factoryExplain is what the user can do about a 403 Factory still answers
+// once magpie has sent what droid sends: whether Factory lets the account
+// use the model is Factory's to say (an org's model policy, a plan without
+// it), so droid itself is the test.
+func factoryExplain(status int, body []byte) string {
+	if status != http.StatusForbidden {
+		return ""
+	}
+	if factoryOrgRefused(status, body) {
+		return "the Factory account's organization changed; remove the account in magpie and sign in to it again"
+	}
+	return "Factory refused this account the request; check that `droid`, signed in to the same account and organization, can use this model (an organization's model policy or the plan may not allow it), and if it can, remove the Factory account in magpie and sign in to it again"
+}
+
+// factoryFirstOrg is the first WorkOS org /api/cli/org says the account is
+// in, "" for none. droid asks it with the bearer token alone.
+func factoryFirstOrg(ctx context.Context, c factoryCreds) (string, error) {
+	var orgs struct {
+		IDs []string `json:"workosOrgIds"`
+	}
+	c.Active = ""
+	if err := factoryGet(ctx, c, "/api/cli/org", nil, &orgs); err != nil {
+		return "", err
+	}
+	if len(orgs.IDs) == 0 {
+		return "", nil
+	}
+	return orgs.IDs[0], nil
 }
 
 // factoryGet reads a JSON answer from Factory's API.
@@ -423,8 +630,9 @@ func factoryProvider(a factoryLogin) Provider {
 		if err != nil {
 			return err
 		}
-		// an EU org is served from Factory's EU region: the request goes there
-		if base := c.base(); base != factoryAPI && strings.HasPrefix(req.URL.String(), factoryAPI) {
+		// an EU org is served from Factory's EU region, an on-prem one from
+		// its own host (whoami's premBaseHostV2): the request goes there
+		if base := c.llmBase(); base != factoryAPI && strings.HasPrefix(req.URL.String(), factoryAPI) {
 			if u, err := url.Parse(base + strings.TrimPrefix(req.URL.String(), factoryAPI)); err == nil {
 				req.URL, req.Host = u, u.Host
 			}
@@ -444,8 +652,17 @@ func factoryProvider(a factoryLogin) Provider {
 		if upstream == "openai" {
 			req.Header.Set("OpenAI-Platform", "org-bHuLtG1fGmYk5YaOihAAXFBw")
 		}
+		if strings.Contains(req.URL.Path, "/llm/a/") {
+			// droid's Anthropic client is made with the key "placeholder",
+			// which Anthropic's SDK sends beside the bearer token
+			req.Header.Set("X-Api-Key", "placeholder")
+		}
 		return nil
 	}
+	acct.retry = func(ctx context.Context, status int, body []byte) bool {
+		return factoryMendOrg(ctx, user, status, body)
+	}
+	acct.explain = factoryExplain
 	acct.models = factoryCatalog
 	acct.fetch = func(ctx context.Context) ([]catalog.Model, error) {
 		ms := factoryCatalog()

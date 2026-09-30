@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +22,7 @@ type fakeWBCheckin struct {
 	checked   bool
 	claimCode int
 	down      bool // the network: every request fails
+	broken    bool // every request is answered with a 500
 	statuses  int
 	claims    int
 }
@@ -33,6 +35,10 @@ func (f *fakeWBCheckin) serve(t *testing.T) *httptest.Server {
 			hj, _ := w.(http.Hijacker)
 			c, _, _ := hj.Hijack()
 			c.Close()
+			return
+		}
+		if f.broken {
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		if r.Header.Get("Authorization") != "Bearer wb-access" || r.Header.Get("X-User-Id") != "u1" ||
@@ -190,18 +196,18 @@ func TestWorkBuddyCheckinRefused(t *testing.T) {
 	}
 }
 
-// No answer (the network) is tried again later that day, not before
-// wbCheckinRetry.
+// An answer that isn't one of the event's (a 500, a refused token) is
+// tried again later that day, not before wbCheckinRetry.
 func TestWorkBuddyCheckinRetriesAfterFailure(t *testing.T) {
-	f := &fakeWBCheckin{active: true, down: true}
+	f := &fakeWBCheckin{active: true, broken: true}
 	srv := f.serve(t)
 	now := time.Date(2026, 3, 1, 2, 0, 0, 0, time.UTC)
 	c := wbCheckinFixture(t, srv, &now)
-	if rs := c.checkinNow(context.Background(), false); len(rs) != 1 || rs[0].Outcome != CheckinFailed || rs[0].Checked() {
-		t.Fatalf("down: %+v", rs)
+	if rs := c.checkinNow(context.Background(), false); len(rs) != 1 || rs[0].Outcome != CheckinFailed || rs[0].Checked() || rs[0].Offline {
+		t.Fatalf("broken: %+v", rs)
 	}
 	f.mu.Lock()
-	f.down = false
+	f.broken = false
 	f.mu.Unlock()
 	now = now.Add(10 * time.Minute)
 	if rs := c.checkinNow(context.Background(), false); rs[0].Outcome != CheckinFailed || rs[0].Asked {
@@ -213,6 +219,53 @@ func TestWorkBuddyCheckinRetriesAfterFailure(t *testing.T) {
 	}
 	if _, cl := f.counts(); cl != 1 {
 		t.Fatalf("claims %d", cl)
+	}
+}
+
+// A check-in that never reached WorkBuddy — the machine just woke and its
+// network isn't back, "no such host" (#265) — is tried again a minute
+// later, not half an hour, by the loop as well; while it still doesn't,
+// the wait doubles up to wbCheckinRetry.
+func TestWorkBuddyCheckinOfflineRetriesSoon(t *testing.T) {
+	f := &fakeWBCheckin{active: true, down: true}
+	srv := f.serve(t)
+	now := time.Date(2026, 3, 1, 0, 37, 52, 0, time.UTC)
+	c := wbCheckinFixture(t, srv, &now)
+	ctx := context.Background()
+	var l wbCheckinLoop
+	// the loop's first look, the moment the machine wakes
+	if rs := l.tick(ctx, c); len(rs) != 1 || rs[0].Outcome != CheckinFailed || !rs[0].Offline || !rs[0].Asked {
+		t.Fatalf("woken: %+v", rs)
+	}
+	// a minute on, the loop's minute tick, the network back
+	f.mu.Lock()
+	f.down = false
+	f.mu.Unlock()
+	now = now.Add(time.Minute)
+	if rs := l.tick(ctx, c); len(rs) != 1 || rs[0].Outcome != CheckinClaimed || !rs[0].Asked {
+		t.Fatalf("a minute on: %+v", rs)
+	}
+	if _, cl := f.counts(); cl != 1 {
+		t.Fatalf("claims %d", cl)
+	}
+
+	// down all along: tried at 0, 1, 3, 7, 15, 31, then every 30 minutes
+	f = &fakeWBCheckin{active: true, down: true}
+	srv = f.serve(t)
+	now = time.Date(2026, 3, 1, 2, 0, 0, 0, time.UTC)
+	c = wbCheckinFixture(t, srv, &now)
+	l = wbCheckinLoop{}
+	var tried []int
+	for m := 0; m <= 91; m++ {
+		for _, r := range l.tick(ctx, c) {
+			if r.Asked {
+				tried = append(tried, m)
+			}
+		}
+		now = now.Add(time.Minute)
+	}
+	if want := []int{0, 1, 3, 7, 15, 31, 61, 91}; !slices.Equal(tried, want) {
+		t.Fatalf("tried at %v, want %v", tried, want)
 	}
 }
 

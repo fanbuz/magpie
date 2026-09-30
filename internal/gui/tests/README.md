@@ -38,6 +38,12 @@ a title, memories, a turn on Luna Reserve, a kind it does not know yet): each
 has a grey tag by its model in the Requests list, in English and Chinese, the
 model keeping its room first, and the request's story says what it was.
 
+`routing-effort-row.test.cjs` lists live requests sent at high reasoning, one
+under way, one with two tries, in Chromium and WebKit, English and Chinese, at
+1440, 1000 and 480px: in every row the "· high" is shown whole and no run of
+text is drawn over another (#273: in two columns of ~470px it sat on the time
+taken).
+
 `routing-served.test.cjs` lists a request whose vendor's reply names another
 model than the one asked for (gpt-6-sol served as gpt-6-luna), one answered
 under the model's dated name and ones naming none: only the first is marked

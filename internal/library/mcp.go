@@ -108,6 +108,8 @@ const (
 	fmtDesktop
 	fmtZCode
 	fmtDsh
+	// fmtPiNative is the mcp.json Pi 0.99 reads itself (pimcp.go)
+	fmtPiNative
 )
 
 // mcpFile is the file an agent keeps its user-wide MCP servers in.
@@ -147,7 +149,7 @@ func (f *mcpFile) supports(s *Server) error {
 	if f.Format == fmtDesktop && s.Remote() {
 		return errNoRemote
 	}
-	if s.Transport == "sse" && (f.Format == fmtCodex || f.Format == fmtGoose || f.Format == fmtDsh) {
+	if s.Transport == "sse" && (f.Format == fmtCodex || f.Format == fmtGoose || f.Format == fmtDsh || f.Format == fmtPiNative) {
 		return errNoSSE
 	}
 	if f.Format == fmtDsh && s.Name != "" && !dshServerName.MatchString(s.Name) {
@@ -161,7 +163,7 @@ func (f *mcpFile) supports(s *Server) error {
 var errNoRemote = errors.New("no-remote")
 
 // errNoSSE is what the page says of an agent that can't reach a server
-// over SSE (Codex, Goose, DeepSeek Harness).
+// over SSE (Codex, Goose, DeepSeek Harness, Pi's own MCP).
 var errNoSSE = errors.New("no-sse")
 
 // ordered is a JSON object that keeps its keys in the order given, so an
@@ -307,6 +309,16 @@ func (f *mcpFile) encode(s *Server) ordered {
 			add("args", list(s.Args))
 			optional("env", s.Env)
 		}
+	case fmtPiNative:
+		// "type" is optional: a url is streamable HTTP, a command stdio
+		if s.Remote() {
+			add("url", s.URL)
+			optional("headers", s.Headers)
+		} else {
+			add("command", s.Command)
+			add("args", list(s.Args))
+			optional("env", s.Env)
+		}
 	case fmtCodex:
 		if s.Remote() {
 			add("url", s.URL)
@@ -413,10 +425,12 @@ func (f *mcpFile) decode(name string, m map[string]any) (*Server, bool) {
 		case "streamable-http":
 			remote("http", str(m, "url"), m["headers"])
 		}
-	case fmtPi:
+	case fmtPi, fmtPiNative:
+		// an entry moved from mcp-adapter.json keeps its httpTransport, so
+		// an SSE server still reads as one, which Pi's own can't reach
 		if u := str(m, "url"); u != "" {
 			t := "http"
-			if str(m, "transport") == "sse" || str(m, "httpTransport") == "sse" {
+			if str(m, "type") == "sse" || str(m, "transport") == "sse" || str(m, "httpTransport") == "sse" {
 				t = "sse"
 			}
 			remote(t, u, m["headers"])
@@ -487,7 +501,7 @@ func (f *mcpFile) read() (map[string]*Server, error) {
 			out[name] = s
 		}
 	}
-	if f.Format == fmtPi && err == nil {
+	if (f.Format == fmtPi || f.Format == fmtPiNative) && err == nil {
 		// Pi's other files, the one magpie writes first winning a name
 		for _, p := range append(slices.Clone(f.Also), f.Extra...) {
 			more, _ := (&mcpFile{Path: p, Format: f.Format}).read()
@@ -542,6 +556,9 @@ var owned = map[mcpFormat][]string{
 	fmtCodex:    {"url", "http_headers", "command", "args", "env"},
 	fmtDesktop:  {"url", "headers", "command", "args", "env"},
 	fmtPi:       {"transport", "httpTransport", "url", "headers", "command", "args", "env"},
+	// the adapter's transport keys too, dropped when magpie writes the
+	// entry again
+	fmtPiNative: {"type", "transport", "httpTransport", "url", "headers", "command", "args", "env"},
 	fmtZCode:    {"type", "url", "headers", "command", "args", "env"},
 	fmtDsh:      {"serverName", "transport", "url", "headers", "command", "args", "env"},
 }
@@ -587,16 +604,19 @@ func (f *mcpFile) put(s *Server, old map[string]any) error {
 		}
 		return nil
 	}
-	for _, a := range f.also() {
-		es, err := a.entries()
-		if err != nil {
-			return err
+	// Pi's files, all of them or none
+	return edit.Atomically(func() error {
+		for _, a := range f.also() {
+			es, err := a.entries()
+			if err != nil {
+				return err
+			}
+			if err := a.put(s, es[s.Name]); err != nil {
+				return err
+			}
 		}
-		if err := a.put(s, es[s.Name]); err != nil {
-			return err
-		}
-	}
-	return edit.SetJSON(f.Path, edit.KV{Path: f.key() + "." + s.Name, Value: o})
+		return edit.SetJSON(f.Path, edit.KV{Path: f.key() + "." + s.Name, Value: o})
+	}, f.files()...)
 }
 
 // del takes the server by that name out of the file.
@@ -614,12 +634,14 @@ func (f *mcpFile) del(name string) error {
 	case fmtGoose:
 		return edit.DelYAML(f.Path, "extensions."+name)
 	}
-	for _, a := range f.also() {
-		if err := a.del(name); err != nil {
-			return err
+	return edit.Atomically(func() error {
+		for _, a := range f.also() {
+			if err := a.del(name); err != nil {
+				return err
+			}
 		}
-	}
-	return edit.DelJSON(f.Path, f.key()+"."+name)
+		return edit.DelJSON(f.Path, f.key()+"."+name)
+	}, f.files()...)
 }
 
 // ---- Codex's TOML ---------------------------------------------------------
@@ -628,26 +650,31 @@ func (f *mcpFile) del(name string) error {
 // or only those under it, which putCodex writes inline instead.
 // Include child array tables (such as env_vars), which would otherwise
 // implicitly recreate the removed server.
+// Each is one edit of the file: a step that fails puts it back as it was.
 func delCodex(path, name string, self bool) error {
-	table := "mcp_servers." + name
-	if err := edit.SetTOMLTables(path, []string{table + "."}, nil); err != nil {
-		return err
-	}
-	if !self {
-		return nil
-	}
-	return edit.DelTOMLTable(path, table)
+	return edit.Atomically(func() error {
+		table := "mcp_servers." + name
+		if err := edit.SetTOMLTables(path, []string{table + "."}, nil); err != nil {
+			return err
+		}
+		if !self {
+			return nil
+		}
+		return edit.DelTOMLTable(path, table)
+	}, path)
 }
 
 func putCodex(path, name string, o ordered) error {
-	if err := delCodex(path, name, false); err != nil {
-		return err
-	}
-	var kvs []edit.KV
-	for _, e := range o {
-		kvs = append(kvs, edit.KV{Path: tomlKey(e.k), Value: edit.Raw(tomlValue(e.v))})
-	}
-	return edit.SetTOMLTable(path, "mcp_servers."+name, kvs...)
+	return edit.Atomically(func() error {
+		if err := delCodex(path, name, false); err != nil {
+			return err
+		}
+		var kvs []edit.KV
+		for _, e := range o {
+			kvs = append(kvs, edit.KV{Path: tomlKey(e.k), Value: edit.Raw(tomlValue(e.v))})
+		}
+		return edit.SetTOMLTable(path, "mcp_servers."+name, kvs...)
+	}, path)
 }
 
 func tomlString(s string) string {

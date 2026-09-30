@@ -97,10 +97,10 @@ func targetOf(a *agent.Agent) *Target {
 			d = filepath.Join(h, ".pi", "agent")
 		}
 		t.Instructions = filepath.Join(d, "AGENTS.md")
-		// Pi has no MCP of its own: its extensions for it (pi-mcp-adapter,
-		// pi-mcp-extension) each read their own file (pimcp.go)
-		t.MCP = piMCP(h, d)
-		t.MCPVia = "pi-mcp-adapter"
+		// Pi 0.99 reads MCP servers itself, from its mcp.json; before it,
+		// and while an MCP extension replaces its own (pi-mcp-adapter,
+		// pi-mcp-extension), each extension reads its own file (pimcp.go)
+		t.MCP, t.MCPVia = piMCP(h, d, piVersion(a))
 		t.Skills = filepath.Join(d, "skills")
 	case "dsh":
 		// DeepSeek Harness reads $DSH_HOME/AGENTS.md and $DSH_HOME/skills;
@@ -114,6 +114,15 @@ func targetOf(a *agent.Agent) *Target {
 	case "omp":
 		d := filepath.Join(h, ".omp", "agent")
 		t.Instructions = filepath.Join(d, "AGENTS.md")
+		t.Skills = filepath.Join(d, "skills")
+	case "omo":
+		// OmO's engine (senpi, a fork of Pi) reads its agent folder's
+		// AGENTS.md, skills and mcp.json — mcpServers in the shape Pi 0.99's
+		// own has (command/args/env, url/headers), any other key refusing
+		// the whole file (docs/mcp.md, config-schema.js)
+		d := a.Dir
+		t.Instructions = filepath.Join(d, "AGENTS.md")
+		t.MCP = &mcpFile{Path: filepath.Join(d, "mcp.json"), Format: fmtPiNative}
 		t.Skills = filepath.Join(d, "skills")
 	case "goose":
 		t.Instructions = filepath.Join(filepath.Dir(a.Path), ".goosehints")

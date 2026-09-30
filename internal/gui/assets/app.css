@@ -322,8 +322,17 @@ body.window .ag-handle { width: 28px; height: 28px; }
 .ag-fix.busy svg { animation: spin .8s linear infinite; }
 /* the agent's CLI on its name's line (#202): its version faint, and a quiet
    pill that updates it when a newer one is out — the row keeps its height */
-body.window .row.agent .who { display: flex; align-items: center; gap: 7px; }
-body.window .row.agent .who .name { flex: 0 1 auto; }
+body.window .row.agent .who { display: flex; align-items: center; gap: 7px; container-type: inline-size; }
+/* the name is the last to give way: where the row is tight the update
+   pill keeps only its arrow, then the version goes, and only then is the
+   name cut (it was "C." beside a full pill at the window's first width) */
+body.window .row.agent .who .name { flex: 0 0 auto; max-width: 100%; }
+body.window .row.agent .who .ag-cli { flex: 0 1 auto; overflow: hidden; }
+@container (max-width: 250px) {
+  body.window .row.agent .ag-up { padding: 0 6px; }
+  body.window .row.agent .ag-up > span { display: none; }
+}
+@container (max-width: 150px) { body.window .row.agent .ag-ver { display: none; } }
 .ag-cli { display: inline-flex; align-items: center; gap: 6px; flex: none; min-width: 0; }
 .ag-cli:empty { display: none; }
 .ag-ver { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: default; }
@@ -1698,10 +1707,15 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .proxy-segs input.proxy:focus, input.words:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 .proxy-segs input.proxy::placeholder, input.words::placeholder { color: var(--faint); }
 input.words { width: 240px; max-width: 100%; }
-/* the masking rules' add row: a name, prefix or regex, the match, Add */
-.prefs .val.rule-add { gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-input.words.rule-kind { width: 92px; }
-input.words.rule-match { width: 180px; }
+/* the masking rules' add row: its words in full, then on a line of their
+   own a name, prefix or regex, the match taking the room left, Add */
+.row.pref.rule-row { flex-wrap: wrap; row-gap: 8px; }
+.row.pref.rule-row .who { flex: 1 1 100%; }
+.row.pref.rule-row .sub { white-space: normal; }
+.prefs .val.rule-add { flex: 1 1 100%; max-width: none; margin-left: 0; gap: 6px; }
+input.words.rule-kind { flex: none; width: 110px; }
+input.words.rule-match { flex: 1 1 auto; width: auto; min-width: 0; }
+.prefs .val.rule-add .segs { margin-left: 0; }
 .row.pref .sub.err { color: var(--red); white-space: normal; }
 .warm-at { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: none; }
 .warm-at input.at { width: auto; height: 27px; padding: 0 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit; font-size: 12.5px; font-variant-numeric: tabular-nums; outline: none; transition: border-color .12s, box-shadow .12s; }

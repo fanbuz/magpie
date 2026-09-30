@@ -104,21 +104,23 @@ func TestTOMLWritesRejectDefinitionConflicts(t *testing.T) {
 	}
 }
 
-func TestTOMLTopRejectsBrokenMultilineEdits(t *testing.T) {
+// A top-level value over several lines is replaced or removed as a whole.
+func TestTOMLTopMultilineEdits(t *testing.T) {
 	const input = "value = [\n1,\n2\n]\n\n[a]\nkeep = true\n"
 	for _, tc := range []struct {
-		name string
-		edit func(string) error
+		name, want string
+		edit       func(string) error
 	}{
-		{"replace", func(p string) error { return SetTOMLTop(p, KV{Path: "value", Value: "new"}) }},
-		{"delete", func(p string) error { return DelTOMLTop(p, "value") }},
+		{"replace", "value = \"new\"\n\n[a]\nkeep = true\n", func(p string) error { return SetTOMLTop(p, KV{Path: "value", Value: "new"}) }},
+		{"delete", "\n[a]\nkeep = true\n", func(p string) error { return DelTOMLTop(p, "value") }},
+		{"add", "value = [\n1,\n2\n]\nother = \"x\"\n\n[a]\nkeep = true\n", func(p string) error { return SetTOMLTop(p, KV{Path: "other", Value: "x"}) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := tmpFile(t, "config.toml", input)
-			if err := tc.edit(p); err == nil {
-				t.Fatal("expected the incomplete multiline edit to be rejected")
+			if err := tc.edit(p); err != nil {
+				t.Fatal(err)
 			}
-			assertTOMLContent(t, p, input)
+			assertTOMLContent(t, p, tc.want)
 		})
 	}
 }

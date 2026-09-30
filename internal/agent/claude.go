@@ -42,11 +42,16 @@ const claudeEffortEnv = "CLAUDE_CODE_EFFORT_LEVEL"
 
 func tierEnv(tier string) string { return "ANTHROPIC_DEFAULT_" + strings.ToUpper(tier) + "_MODEL" }
 
-func claude(home string) *Agent {
-	path := filepath.Join(home, ".claude", "settings.json")
+func claude(home string) *Agent { return claudeIn(here(home)) }
+
+// claudeIn is Claude Code as it lives at a place: this machine's home, or
+// a WSL distro's (see wsl.go), its settings.json naming the gateway as it
+// reaches it from there.
+func claudeIn(at place) *Agent {
+	path := filepath.Join(at.home, ".claude", "settings.json")
 	env := func(k string) string { v, _ := edit.GetJSON(path, "env."+k); return v }
 	model := jsonGet(path, "model")
-	routed := func() bool { return env("ANTHROPIC_BASE_URL") == gateway.URL() }
+	routed := func() bool { return env("ANTHROPIC_BASE_URL") == at.gw() }
 
 	// the value shown: the catalog ref while routed, else Claude's own model.
 	get := func() string {
@@ -65,15 +70,15 @@ func claude(home string) *Agent {
 			for _, k := range claudeEnv {
 				keys = append(keys, "env."+k)
 			}
-			forget("claude.model", "claude.base_url", "claude.auth_token")
+			forget(at.key("claude.model"), at.key("claude.base_url"), at.key("claude.auth_token"))
 			return edit.DelJSON(path, keys...)
 		}
 		if isMagpie(v) {
 			if !routed() {
 				stash(map[string]string{
-					"claude.model":      model(),
-					"claude.base_url":   env("ANTHROPIC_BASE_URL"),
-					"claude.auth_token": env("ANTHROPIC_AUTH_TOKEN"),
+					at.key("claude.model"):      model(),
+					at.key("claude.base_url"):   env("ANTHROPIC_BASE_URL"),
+					at.key("claude.auth_token"): env("ANTHROPIC_AUTH_TOKEN"),
 				})
 			}
 			// tiers that followed the old model follow the new one; the
@@ -95,12 +100,12 @@ func claude(home string) *Agent {
 			if err := edit.DelJSON(path, keys...); err != nil {
 				return err
 			}
-			unstash("claude.model")
+			unstash(at.key("claude.model"))
 			var back []edit.KV
-			if u := unstash("claude.base_url"); u != "" {
+			if u := unstash(at.key("claude.base_url")); u != "" {
 				back = append(back, edit.KV{Path: "env.ANTHROPIC_BASE_URL", Value: u})
 			}
-			if t := unstash("claude.auth_token"); t != "" {
+			if t := unstash(at.key("claude.auth_token")); t != "" {
 				back = append(back, edit.KV{Path: "env.ANTHROPIC_AUTH_TOKEN", Value: t})
 			}
 			if len(back) > 0 {
@@ -116,7 +121,7 @@ func claude(home string) *Agent {
 	// model and each tier on the model given.
 	writeTiers = func(main string, tiers map[string]string) error {
 		kvs := []edit.KV{
-			{Path: "env.ANTHROPIC_BASE_URL", Value: gateway.URL()},
+			{Path: "env.ANTHROPIC_BASE_URL", Value: at.gw()},
 			{Path: "env.ANTHROPIC_AUTH_TOKEN", Value: gateway.Token},
 			{Path: "env.ANTHROPIC_MODEL", Value: main},
 			{Path: "env.ANTHROPIC_SMALL_FAST_MODEL", Value: tiers["haiku"]},
@@ -143,20 +148,11 @@ func claude(home string) *Agent {
 		Get: get,
 		Set: set,
 		Options: func(map[string]string) []Option {
-			var own []Option
-			for _, m := range catalog.Provider("anthropic") {
-				if strings.HasPrefix(m.ID, "claude") {
-					own = append(own, Option{Value: m.ID, Note: m.Name, Icon: "claude-color"})
-				}
-			}
 			name := "Claude Code"
 			if u := env("ANTHROPIC_BASE_URL"); u != "" && !routed() {
 				name += " · " + hostOf(u)
 			}
-			// Only the catalog's models; Claude Code's own short aliases are
-			// not something any API lists, and a compiled-in copy would just
-			// go stale.
-			return append(group(name, own), claudeViaMagpie()...)
+			return append(group(name, claudeOwn()), claudeViaMagpie()...)
 		},
 	}, {
 		// the effort Claude Code starts with, as its /effort saves it;
@@ -236,17 +232,34 @@ func claude(home string) *Agent {
 				return ""
 			}
 			// an administrator's settings win over the user's
-			if u, _ := edit.GetJSON(claudeManaged(), "env.ANTHROPIC_BASE_URL"); u != "" && u != gateway.URL() {
-				return "Claude Code's managed settings (" + claudeManaged() + ") set ANTHROPIC_BASE_URL to " + u + ", which wins over magpie's"
+			managed := claudeManaged()
+			if at.sys != nil {
+				managed = at.sys("/etc/claude-code/managed-settings.json")
+			}
+			if u, _ := edit.GetJSON(managed, "env.ANTHROPIC_BASE_URL"); u != "" && u != at.gw() {
+				return "Claude Code's managed settings (" + at.native(managed) + ") set ANTHROPIC_BASE_URL to " + u + ", which wins over magpie's"
 			}
 			return wiringOff("Claude Code", path, func(k string) (string, bool) { return edit.GetJSON(path, "env."+k) },
-				"ANTHROPIC_BASE_URL", gateway.URL(), "ANTHROPIC_AUTH_TOKEN", gateway.Token)
+				"ANTHROPIC_BASE_URL", at.gw(), "ANTHROPIC_AUTH_TOKEN", gateway.Token)
 		},
 		// every prompt typed into Claude Code goes into history.jsonl
 		LastUsed: func() time.Time {
 			return lastJSONLTime(filepath.Join(filepath.Dir(path), "history.jsonl"), "timestamp", "display")
 		},
 	}
+}
+
+// claudeOwn is Anthropic's models as Claude Code takes them: only the
+// catalog's; Claude Code's own short aliases are not something any API
+// lists, and a compiled-in copy would just go stale.
+func claudeOwn() []Option {
+	var own []Option
+	for _, m := range catalog.Provider("anthropic") {
+		if strings.HasPrefix(m.ID, "claude") {
+			own = append(own, Option{Value: m.ID, Note: m.Name, Icon: "claude-color"})
+		}
+	}
+	return own
 }
 
 // claudeViaMagpie is what magpie serves Claude Code, a model with a window
@@ -291,12 +304,20 @@ func StandIn(agent, model string) string {
 	if err != nil {
 		return ""
 	}
-	return claudeStandIn(filepath.Join(home, ".claude", "settings.json"), model)
+	if m := claudeStandIn(filepath.Join(home, ".claude", "settings.json"), model); m != "" || runtime.GOOS != "windows" {
+		return m
+	}
+	// a Claude Code in WSL is known by the same User-Agent
+	return wslClaudeStandIn(model)
 }
 
-func claudeStandIn(path, model string) string {
+func claudeStandIn(path, model string) string { return claudeStandInAt(path, model, gateway.URL()) }
+
+// claudeStandInAt is claudeStandIn for a Claude Code that reaches the
+// gateway at gw.
+func claudeStandInAt(path, model, gw string) string {
 	env := func(k string) string { v, _ := edit.GetJSON(path, "env."+k); return v }
-	if env("ANTHROPIC_BASE_URL") != gateway.URL() {
+	if env("ANTHROPIC_BASE_URL") != gw {
 		return ""
 	}
 	m := strings.ToLower(model)

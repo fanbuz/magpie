@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -54,13 +55,27 @@ func SetLoginOn(agent, user string, on bool) error {
 	}
 	loginsMu.Lock()
 	defer loginsMu.Unlock()
+	ls := readLogins()
 	if live, ok := liveLogin(agent); ok && strings.EqualFold(live.User, user) {
+		// the account the agent is signed in to stays so: off, it is
+		// paused, passed over while another is on (#263) — the user's
+		// own ChatGPT sign-in kept for Codex's remote control, a shared
+		// Pro account doing the work
+		if !on && !slices.ContainsFunc(ls, func(l savedLogin) bool { return l.Agent == agent && l.On && !strings.EqualFold(l.User, user) }) {
+			return fmt.Errorf("%s is the only %s account in use; turn another on first to pause it", user, agent)
+		}
+		for i := range ls {
+			if ls[i].Agent == agent && strings.EqualFold(ls[i].User, user) {
+				ls[i].Paused = !on
+				return writeLogins(ls)
+			}
+		}
 		if on {
 			return nil
 		}
-		return fmt.Errorf("%s is signed in to %s; make another account first to stop using it", agent, user)
+		live.Paused, live.Seen = true, time.Now().UTC().Truncate(time.Second)
+		return writeLogins(append(ls, live))
 	}
-	ls := readLogins()
 	for i := range ls {
 		if ls[i].Agent == agent && strings.EqualFold(ls[i].User, user) {
 			ls[i].On = on
@@ -68,6 +83,36 @@ func SetLoginOn(agent, user string, on bool) error {
 		}
 	}
 	return fmt.Errorf("no saved %s account %q", agent, user)
+}
+
+// pausedOwn says the account user, the one the agent is signed in to, is
+// paused and another of the agent's accounts is on to take its place; the
+// last other one off, it is used again.
+func pausedOwn(ls []savedLogin, agent, user string) bool {
+	paused, others := false, false
+	for _, l := range ls {
+		if l.Agent != agent {
+			continue
+		}
+		if strings.EqualFold(l.User, user) {
+			paused = l.Paused
+		} else {
+			others = others || l.On
+		}
+	}
+	return paused && others
+}
+
+// OwnPaused says the provider is the account a Claude Code or Codex agent
+// is signed in to, paused while another of its accounts is on (#263): the
+// gateway passes over it, the agent staying signed in to it.
+func (p Provider) OwnPaused() bool {
+	if p.Account == nil || p.Account.token != nil || !slices.Contains(loginAgents, p.Account.Agent) {
+		return false
+	}
+	loginsMu.Lock()
+	defer loginsMu.Unlock()
+	return pausedOwn(readLogins(), p.Account.Agent, p.Account.User)
 }
 
 // AlsoOn is a signed-in agent's other accounts that are on, each as a

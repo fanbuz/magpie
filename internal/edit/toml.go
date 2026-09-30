@@ -195,29 +195,132 @@ func DelTOMLTable(path, name string) error {
 	return writeTOML(path, out)
 }
 
-// DelTOMLTop removes top-level (pre-table) keys.
+// GetTOMLTop reads a top-level (pre-table) key from a TOML file. A string is
+// decoded; any other value is its text as written, without a trailing
+// comment, an array or inline table over several lines included. A file
+// TOML's parser refuses is read line by line, as well as that goes.
+func GetTOMLTop(path, key string) (string, bool) {
+	doc, err := tomlFileOf(path)
+	if err != nil {
+		return getTOMLTopLines(path, key)
+	}
+	for _, kv := range doc.root.keys {
+		if kv.name == key {
+			if kv.scalar {
+				return kv.value, true
+			}
+			return kv.text, true
+		}
+	}
+	return "", false
+}
+
+// getTOMLTopLines is GetTOMLTop for a file that isn't valid TOML: the first
+// line that looks like `key = value` before one that looks like a header.
+func getTOMLTopLines(path, key string) (string, bool) {
+	raw, err := Read(path)
+	if err != nil || raw == nil {
+		return "", false
+	}
+	for _, line := range splitLines(string(raw)) {
+		if tomlTable.MatchString(line) {
+			break
+		}
+		if m := tomlKV.FindStringSubmatch(line); m != nil && strings.Trim(m[1], `"`) == key {
+			return tomlValue(m[2]), true
+		}
+	}
+	return "", false
+}
+
+// SetTOMLTop sets top-level keys in a TOML file, as strings. An existing key
+// is replaced as a whole, its value's every line with it; new keys go right
+// after the last existing top-level key's value, or first in the file when
+// there is none. Every key is located in the file as it was read, so the
+// edit is one write that either happens entirely or not at all.
+func SetTOMLTop(path string, kvs ...KV) error {
+	raw, err := Read(path)
+	if err != nil {
+		return err
+	}
+	lines := splitLines(string(raw))
+	doc, err := parseTOMLFile(lines)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	type span struct {
+		to   int
+		line string
+	}
+	replace := map[int]span{}
+	var added []string
+	addedAt := map[string]int{}
+	at := 0
+	if n := len(doc.root.keys); n > 0 {
+		at = doc.root.keys[n-1].to
+	}
+	for _, kv := range kvs {
+		line := kv.Path + " = " + strconv.Quote(toString(kv.Value))
+		found := false
+		for _, k := range doc.root.keys {
+			if k.name == kv.Path {
+				replace[k.from] = span{k.to, line}
+				found = true
+				break
+			}
+		}
+		switch i, ok := addedAt[kv.Path]; {
+		case found:
+		case ok:
+			added[i] = line
+		default:
+			addedAt[kv.Path] = len(added)
+			added = append(added, line)
+		}
+	}
+	out := make([]string, 0, len(lines)+len(added))
+	for i := 0; i < len(lines); {
+		if i == at {
+			out = append(out, added...)
+			added = nil
+		}
+		if r, ok := replace[i]; ok {
+			out = append(out, r.line)
+			i = r.to
+			continue
+		}
+		out = append(out, lines[i])
+		i++
+	}
+	out = append(out, added...)
+	return writeTOML(path, out)
+}
+
+// DelTOMLTop removes top-level (pre-table) keys, each with every line of its
+// value.
 func DelTOMLTop(path string, keys ...string) error {
 	raw, err := Read(path)
 	if err != nil || raw == nil {
 		return err
+	}
+	lines := splitLines(string(raw))
+	doc, err := parseTOMLFile(lines)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
 	}
 	drop := map[string]bool{}
 	for _, k := range keys {
 		drop[k] = true
 	}
 	var out []string
-	header := true
-	for _, line := range splitLines(string(raw)) {
-		if header && tomlTable.MatchString(line) {
-			header = false
+	at := 0
+	for _, kv := range doc.root.keys {
+		if drop[kv.name] {
+			out = append(out, lines[at:kv.from]...)
+			at = kv.to
 		}
-		if header {
-			if m := tomlKV.FindStringSubmatch(line); m != nil && drop[strings.Trim(m[1], `"`)] {
-				continue
-			}
-		}
-		out = append(out, line)
 	}
+	out = append(out, lines[at:]...)
 	return writeTOML(path, out)
 }
 
@@ -233,6 +336,7 @@ type tomlKeySpan struct {
 	from, to       int // to is -1 until the next expression or EOF bounds the value.
 	column         int // 1-based start of the key.
 	name, value    string
+	text           string // The value as written, from prefix to suffix.
 	prefix, suffix string // Original text before and after the complete value.
 	comment        int    // Column of a trailing comment, or -1 when absent.
 	scalar         bool
@@ -269,31 +373,56 @@ func tomlTableNamed(tables []tomlTableSpan, name string) (tomlTableSpan, bool) {
 // changes: an agent's config can be large (Codex's lists every project it
 // was trusted in) and is read field by field. Missing files are (nil, nil).
 func tomlTablesOf(path string) ([]tomlTableSpan, error) {
-	tables, err := filememo.Read("toml tables", path, func(b []byte) ([]tomlTableSpan, error) {
-		tables, err := parseTOMLTables(splitLines(string(b)))
+	doc, err := tomlFileOf(path)
+	return doc.tables, err
+}
+
+// tomlFileOf is parseTOMLFile of a file, kept as tomlTablesOf says. A missing
+// file is an empty document and no error.
+func tomlFileOf(path string) (tomlFile, error) {
+	doc, err := filememo.Read("toml file", path, func(b []byte) (tomlFile, error) {
+		doc, err := parseTOMLFile(splitLines(string(b)))
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
+			return tomlFile{}, fmt.Errorf("%s: %w", path, err)
 		}
-		return tables, nil
+		return doc, nil
 	})
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		return tomlFile{}, nil
 	}
-	return tables, err
+	return doc, err
 }
 
 // parseTOMLTables finds both ordinary and array-table blocks in one parser pass.
 // Only top-level expressions delimit edits, so lines inside multiline values
 // cannot be mistaken for keys, comments, or table headers.
 func parseTOMLTables(lines []string) ([]tomlTableSpan, error) {
+	doc, err := parseTOMLFile(lines)
+	return doc.tables, err
+}
+
+// tomlFile is a file's top-level (pre-table) keys, as the unnamed table root
+// spanning [0, first header), and its table blocks in file order.
+type tomlFile struct {
+	root   tomlTableSpan
+	tables []tomlTableSpan
+}
+
+// parseTOMLFile is parseTOMLTables with the top-level keys too, located the
+// same way: a key's range covers its whole value, however many lines it takes.
+func parseTOMLFile(lines []string) (tomlFile, error) {
 	p := unstable.Parser{KeepComments: true}
 	p.Reset([]byte(strings.Join(lines, "\n")))
+	root := tomlTableSpan{to: len(lines)}
 	var tables []tomlTableSpan
-	finishKey := func(to int) error {
+	current := func() *tomlTableSpan {
 		if len(tables) == 0 {
-			return nil
+			return &root
 		}
-		table := &tables[len(tables)-1]
+		return &tables[len(tables)-1]
+	}
+	finishKey := func(to int) error {
+		table := current()
 		if len(table.keys) == 0 {
 			return nil
 		}
@@ -319,6 +448,8 @@ func parseTOMLTables(lines []string) ([]tomlTableSpan, error) {
 		// the value. Keep all whitespace between the closing value and comment.
 		end = len(strings.TrimRight(last[:end], " \t\r"))
 		kv.suffix = last[end:]
+		text := strings.Join(lines[kv.from:kv.to], "\n")
+		kv.text = text[len(kv.prefix) : len(text)-len(kv.suffix)]
 		return nil
 	}
 	for p.NextExpression() {
@@ -342,23 +473,18 @@ func parseTOMLTables(lines []string) ([]tomlTableSpan, error) {
 		shape := p.Shape(keyRange)
 		i := shape.Start.Line - 1
 		if err := finishKey(i); err != nil {
-			return nil, err
+			return tomlFile{}, err
 		}
 		switch expr.Kind {
 		case unstable.Table, unstable.ArrayTable:
-			if len(tables) > 0 {
-				tables[len(tables)-1].to = i
-			}
+			current().to = i
 			tables = append(tables, tomlTableSpan{
 				from: i, to: len(lines), name: strings.Join(rawParts, "."),
 				column: shape.Start.Column,
 				array:  expr.Kind == unstable.ArrayTable,
 			})
 		case unstable.KeyValue:
-			if len(tables) == 0 {
-				continue
-			}
-			table := &tables[len(tables)-1]
+			table := current()
 			value := expr.Value()
 			// Start after the parsed key, which may itself contain '='.
 			_, valueText, _ := strings.Cut(lines[i][shape.End.Column-1:], "=")
@@ -376,12 +502,12 @@ func parseTOMLTables(lines []string) ([]tomlTableSpan, error) {
 		}
 	}
 	if err := p.Error(); err != nil {
-		return nil, tomlParseError(&p, err)
+		return tomlFile{}, tomlParseError(&p, err)
 	}
 	if err := finishKey(len(lines)); err != nil {
-		return nil, err
+		return tomlFile{}, err
 	}
-	return tables, nil
+	return tomlFile{root: root, tables: tables}, nil
 }
 
 func tomlParseError(p *unstable.Parser, err error) error {

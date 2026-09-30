@@ -38,6 +38,9 @@ type Login struct {
 	// Own is the agent's own sign-in, which magpie only reads: removed, it
 	// is hidden rather than deleted (side_logins.go).
 	Own bool `json:"own,omitempty"`
+	// Paused is the account the agent is signed in to, passed over by the
+	// gateway while another is on (savedLogin.Paused).
+	Paused bool `json:"paused,omitempty"`
 }
 
 type savedLogin struct {
@@ -70,6 +73,10 @@ type savedLogin struct {
 	// of the sign-in it was (side_logins.go): it is listed and tried no
 	// more until the agent signs in anew. The agent's files stay as they are.
 	Hidden string `json:"hidden,omitempty"`
+	// Paused is set on the account the agent is signed in to when the user
+	// paused it in magpie (#263): the gateway passes over it while another
+	// of the agent's accounts is on, the agent staying signed in to it.
+	Paused bool `json:"paused,omitempty"`
 }
 
 var (
@@ -138,6 +145,7 @@ func upsertLogin(ls []savedLogin, l savedLogin) []savedLogin {
 	for i := range ls {
 		if sameLogin(ls[i], l) {
 			l.On = l.On || ls[i].On
+			l.Paused = l.Paused || ls[i].Paused
 			ls[i] = l
 			return ls
 		}
@@ -175,6 +183,7 @@ func dedupeLogins(ls []savedLogin) []savedLogin {
 			keep = l
 		}
 		keep.On = previous.On || l.On
+		keep.Paused = previous.Paused || l.Paused
 		keep.First = previous.First || l.First
 		out[found] = keep
 	}
@@ -514,12 +523,14 @@ func Logins(agent string) []Login {
 		}
 	}
 	var out []Login
-	for _, l := range readLogins() {
+	ls := readLogins()
+	for _, l := range ls {
 		if (agent != "" && l.Agent != agent) || sideAgent(l.Agent) {
 			continue
 		}
 		using := strings.EqualFold(active[l.Agent], l.User)
-		lg := Login{Agent: l.Agent, User: l.User, Plan: l.Plan, Seen: l.Seen, Active: using, On: using || l.On}
+		lg := Login{Agent: l.Agent, User: l.User, Plan: l.Plan, Seen: l.Seen, Active: using, On: using || l.On,
+			Paused: using && pausedOwn(ls, l.Agent, l.User)}
 		if !using {
 			lg.Lapsed = l.Lapsed
 		}
@@ -600,7 +611,7 @@ func switchSavedLogin(agent, user string) (from string, _ error) {
 		ls = upsertLogin(ls, live)
 		for i := range ls {
 			if ls[i].Agent == agent && strings.EqualFold(ls[i].User, live.User) {
-				ls[i].On = want.On
+				ls[i].On, ls[i].Paused = want.On, false
 			}
 		}
 		if err := writeLogins(ls); err != nil {

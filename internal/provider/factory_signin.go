@@ -96,9 +96,12 @@ func factoryDevice(ctx context.Context, v any) error {
 	return json.Unmarshal(b, v)
 }
 
-// factorySignedInWith keeps the account WorkOS just signed in: its token put
-// in its org, as droid does when the sign-in names none, and where Factory
-// serves that org from.
+// factorySignedInWith keeps the account WorkOS just signed in, as droid
+// does: a token that names no org (the JWT's external_org_id or org_id) is
+// put in the first org /api/cli/org lists, and whoami, asked without an org
+// header, gives Factory's own id for the org the token is in (the active
+// organization droid then sends as X-Factory-Org-Id) and where Factory
+// serves it from. droid carries on without either when they fail.
 func factorySignedInWith(ctx context.Context, t factoryTokens) (string, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
@@ -108,36 +111,27 @@ func factorySignedInWith(ctx context.Context, t factoryTokens) (string, error) {
 	c.Org = firstNonEmpty(c.Org, claimString(claims, "org_id"))
 	c.Email = firstNonEmpty(c.Email, claimString(claims, "email"))
 	c.UserID = firstNonEmpty(c.UserID, claimString(claims, "sub"))
-	if c.Org == "" {
-		var orgs struct {
-			IDs []string `json:"workosOrgIds"`
-		}
-		if err := factoryGet(ctx, c, "/api/cli/org", nil, &orgs); err != nil {
-			return "", err
-		}
-		if len(orgs.IDs) == 0 {
-			return "", errors.New("this account belongs to no Factory organization; finish setting it up at app.factory.ai")
-		}
-		r, err := factoryRenew(ctx, c.Refresh, orgs.IDs[0])
-		if err != nil {
-			return "", err
-		}
-		c.Access, c.ExpiresAt, c.Org = r.Access, factoryExpiry(r.Access), orgs.IDs[0]
-		if r.Refresh != "" {
-			c.Refresh = r.Refresh
+	if c.Org == "" && claimString(claims, "external_org_id") == "" {
+		if org, err := factoryFirstOrg(ctx, c); err == nil && org != "" {
+			r, err := factoryRenew(ctx, c.Refresh, org)
+			if err != nil {
+				return "", err
+			}
+			c.Access, c.ExpiresAt, c.Org = r.Access, factoryExpiry(r.Access), org
+			if r.Refresh != "" {
+				c.Refresh = r.Refresh
+			}
 		}
 	}
-	var who struct {
-		UserID string `json:"userId"`
-		Email  string `json:"email"`
-		Region string `json:"region"`
-	}
-	if err := factoryGet(ctx, c, "/api/cli/whoami", map[string]string{"X-Factory-Whoami-Extended": "true"}, &who); err != nil {
+	who, err := factoryWhoami(ctx, c)
+	if err != nil && firstNonEmpty(c.Email, c.UserID) == "" {
 		return "", err
 	}
-	c.Region = who.Region
-	c.Email = firstNonEmpty(c.Email, who.Email)
-	c.UserID = firstNonEmpty(c.UserID, who.UserID)
+	if err == nil {
+		c.Active, c.Region, c.Prem = who.OrgID, who.Region, who.Prem
+		c.Email = firstNonEmpty(c.Email, who.Email)
+		c.UserID = firstNonEmpty(c.UserID, who.UserID)
+	}
 	user := firstNonEmpty(c.Email, c.UserID)
 	if user == "" {
 		return "", errors.New("signed in, but Factory didn't say whose account it is; try again")

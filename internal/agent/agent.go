@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/provider"
 )
@@ -274,4 +275,22 @@ func (a *Agent) Spell(key, v string) (string, error) {
 		return "", fmt.Errorf("%s isn't a model in magpie's catalog (magpie models lists them)", ref)
 	}
 	return v, nil
+}
+
+// atomic makes each of an agent's field sets, and its Sync, one edit of the
+// files at paths: one that fails part way puts them all back as they were,
+// rather than leaving, say, Codex's config.toml with magpie's provider table
+// written but its model not (#253).
+func atomic(a *Agent, paths ...string) *Agent {
+	for i := range a.Fields {
+		if set := a.Fields[i].Set; set != nil {
+			a.Fields[i].Set = func(v string) error {
+				return edit.Atomically(func() error { return set(v) }, paths...)
+			}
+		}
+	}
+	if sync := a.Sync; sync != nil {
+		a.Sync = func() error { return edit.Atomically(sync, paths...) }
+	}
+	return a
 }

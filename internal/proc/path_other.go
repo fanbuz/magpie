@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -19,27 +20,76 @@ import (
 // exist; the login shell's own PATH is asked for in the background and
 // added after, since a slow profile mustn't hold the window up.
 func UserPath() {
-	home, _ := os.UserHomeDir()
-	var known []string
-	for _, d := range []string{".local/bin", ".npm-global/bin", ".npm/bin", ".bun/bin", ".volta/bin", ".asdf/shims", ".local/share/mise/shims", ".cargo/bin", ".deno/bin", "Library/pnpm"} {
-		known = append(known, filepath.Join(home, d))
-	}
-	if nvm, _ := filepath.Glob(filepath.Join(home, ".nvm/versions/node/*/bin")); len(nvm) > 0 {
-		known = append(known, nvm[len(nvm)-1])
-	}
-	known = append(known, "/opt/homebrew/bin", "/usr/local/bin")
-	var have []string
-	for _, d := range known {
-		if st, err := os.Stat(d); err == nil && st.IsDir() {
-			have = append(have, d)
-		}
-	}
-	addPath(have)
+	addPath(userDirs(false))
 	go func() {
 		if p := shellPath(); p != "" {
 			addPath(filepath.SplitList(p))
 		}
 	}()
+}
+
+// UserBinDirs are the folders a user's command-line tools are installed in
+// that exist here — npm's prefixes, each Node version of nvm, fnm and mise,
+// bun, volta, pnpm, asdf, the standalone installers' ~/.local/bin,
+// Homebrew — for finding one PATH doesn't reach.
+func UserBinDirs() []string { return userDirs(true) }
+
+func userDirs(everyNode bool) []string {
+	home, _ := os.UserHomeDir()
+	var known []string
+	for _, d := range []string{".local/bin", ".npm-global/bin", ".npm/bin", ".bun/bin", ".volta/bin", ".asdf/shims", ".local/share/mise/shims", ".cargo/bin", ".deno/bin", "Library/pnpm"} {
+		known = append(known, filepath.Join(home, d))
+	}
+	nodes := func(pattern string) {
+		vs, _ := filepath.Glob(filepath.Join(home, pattern))
+		if len(vs) == 0 {
+			return
+		}
+		if !everyNode {
+			known = append(known, vs[len(vs)-1])
+			return
+		}
+		slices.Reverse(vs)
+		known = append(known, vs...)
+	}
+	nodes(".nvm/versions/node/*/bin")
+	if everyNode {
+		known = append(known, filepath.Join(home, ".local/share/pnpm"), npmPrefix(home))
+		nodes(".local/share/mise/installs/node/*/bin")
+		nodes(".local/share/fnm/node-versions/*/installation/bin")
+		nodes("Library/Application Support/fnm/node-versions/*/installation/bin")
+	}
+	known = append(known, "/opt/homebrew/bin", "/usr/local/bin")
+	var have []string
+	for _, d := range known {
+		if st, err := os.Stat(d); d != "" && err == nil && st.IsDir() {
+			have = append(have, d)
+		}
+	}
+	return have
+}
+
+// npmPrefix is the bin folder of the npm prefix ~/.npmrc names, "" when it
+// names none.
+func npmPrefix(home string) string {
+	b, err := os.ReadFile(filepath.Join(home, ".npmrc"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(k) != "prefix" {
+			continue
+		}
+		v = strings.Trim(strings.TrimSpace(v), `"'`)
+		if strings.HasPrefix(v, "~/") {
+			v = filepath.Join(home, v[2:])
+		}
+		if filepath.IsAbs(v) {
+			return filepath.Join(v, "bin")
+		}
+	}
+	return ""
 }
 
 // shellPath asks the user's login shell for its PATH; "" when it can't say

@@ -61,7 +61,9 @@ body.window .lib-head { top: -2px; margin: -2px -16px 0; padding: 8px 16px 4px; 
 .lib-list .row { min-height: 50px; padding: 7px 10px 7px 12px; gap: 11px; }
 .lib-row.click { cursor: default; transition: background .14s var(--ease); }
 .lib-row.click:hover { background: var(--card-2); }
-.lib-row .who { flex: 1 1 auto; min-width: 0; }
+/* a long name, link or description breaks anywhere rather than pushing
+   the row wider than the list (#257) */
+.lib-row .who { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 /* a server's or skill's picture sits level with the top of its name */
 .lib-row > .lib-logo, .lib-row > .lib-glyph { align-self: flex-start; margin-top: 1px; }
 .lib-row .name.mono, .lib-pick .name.mono { font: 500 12.5px var(--code); }
@@ -74,6 +76,11 @@ body.window .lib-head { top: -2px; margin: -2px -16px 0; padding: 8px 16px 4px; 
 .lib-skill.missing .name { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
 .lib-skill.missing .sub { color: var(--amber); }
 .lib-src { display: flex; align-items: center; gap: 5px; margin-top: 3px; font-size: 11px; color: var(--faint); min-width: 0; }
+/* "linked from" stays whole, one line, and the path beside it gives way:
+   CJK can break after any character, so the label shrank to a column of
+   them and the row, a fixed height in a long list, lost its name (#257) */
+.lib-src > span { flex: none; white-space: nowrap; }
+.lib-src > .lib-path, .lib-src > .lib-srclink { flex: 0 1 auto; min-width: 0; }
 .lib-srclink { font: 11px var(--code); color: var(--muted); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lib-srclink:hover { color: var(--fg); text-decoration: underline; text-underline-offset: 2px; }
 
@@ -123,6 +130,16 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .lib-acts { display: flex; gap: 6px; flex-wrap: wrap; }
 .lib-warn { font-size: 12px; line-height: 1.5; color: var(--fg); background: var(--amber-soft); border-radius: 8px; padding: 8px 10px; }
 .lib-warn .lib-path { display: inline; }
+/* what the last change couldn't write: for which agent, and why */
+.lib-problems { flex: none; margin: 8px 0 6px; padding: 9px 12px 10px; border-radius: 10px; background: var(--amber-soft); color: var(--fg); font-size: 12px; line-height: 1.45; min-width: 0; overflow-wrap: anywhere; }
+.lib-problems-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lib-problems-head b { font-weight: 600; min-width: 0; }
+.lib-problems-head .action { flex: none; }
+.lib-problems-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+.lib-problems ul { list-style: none; margin: 6px 0 0; padding: 0 0 0 15px; display: grid; gap: 4px; }
+.lib-problems li { min-width: 0; }
+.lib-problems-sep { color: var(--muted); }
+.lib-problems-err { display: block; color: var(--fg-2); font: 11px var(--code); margin-top: 1px; }
 
 /* agents a server or skill is given to: an icon each, lit when it has it */
 .lib-agents { display: flex; flex-wrap: wrap; gap: 3px; flex: none; justify-content: flex-end; max-width: 50%; }

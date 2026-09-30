@@ -147,6 +147,33 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.match(await page.locator(`${row("codex")} .ag-up`).getAttribute("title"), /通过 codex update 更新/);
     });
 
+    await t.test("a tight row cuts the pill and the version before the name", async () => {
+      const page = await open("zh", []);
+      const look = () => page.evaluate((r) => {
+        const q = (s) => document.querySelector(r + " " + s);
+        const shown = (e) => !!e && e.getBoundingClientRect().width > 0 && getComputedStyle(e).display !== "none";
+        const name = q(".name"), up = q(".ag-up"), words = q(".ag-up > span");
+        return { cut: name.scrollWidth > name.clientWidth + 1, up: shown(up), words: shown(words), ver: shown(q(".ag-ver")), label: up?.getAttribute("aria-label") };
+      }, row("codex"));
+      // wide: everything
+      assert.deepEqual(await look(), { cut: false, up: true, words: true, ver: true, label: "更新到 0.159.0" });
+      // the window at its first width, or a little less: the arrow alone
+      // (the name was "C." here)
+      await page.setViewportSize({ width: 620, height: 520 });
+      await page.waitForTimeout(100);
+      const tight = await look();
+      assert.equal(tight.cut, false, "the name was cut before the pill");
+      assert.equal(tight.up, true);
+      assert.equal(tight.words, false, "the pill kept its words in a tight row");
+      assert.equal(tight.label, "更新到 0.159.0");
+      // tighter still: the version goes too, the name last
+      await page.setViewportSize({ width: 540, height: 520 });
+      await page.waitForTimeout(100);
+      const tighter = await look();
+      assert.equal(tighter.cut, false, "the name was cut before the version");
+      assert.equal(tighter.ver, false);
+    });
+
     assert.deepEqual(errors, []);
   });
 }

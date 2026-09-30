@@ -4,7 +4,8 @@ package provider
 // it: DeepSeek, Kimi, OpenRouter, SiliconFlow, StepFun, Command Code and AiHubMix are known by their hosts
 // (AiHubMix tells the whole account's to its access token, BalanceToken);
 // any other provider can name an endpoint and where the amount sits in its
-// reply (BalanceURL, BalancePath), the way a relay's own usage query does.
+// reply (BalanceURL, BalancePath), the way a relay's own usage query does,
+// with {key} where it wants the key in the URL (withBalanceKey).
 
 import (
 	"context"
@@ -593,7 +594,7 @@ func Balance(ctx context.Context, p Provider) (amount string, ok bool, err error
 	if src.token != "" && p.BalanceURL != "" && balanceURLPath(p.BalanceURL) == newAPIKeyUsage {
 		return "", true, errKeyUsageWithToken(p.BalanceURL)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, withBalanceKey(src.url, p.Key, true), nil)
 	if err != nil {
 		return "", true, err
 	}
@@ -602,7 +603,7 @@ func Balance(ctx context.Context, p Provider) (amount string, ok bool, err error
 		// where a new-api relay's New-Api-User goes
 		if p.BalanceURL != "" {
 			for k, v := range p.Headers {
-				req.Header.Set(k, v)
+				req.Header.Set(k, withBalanceKey(v, p.Key, false))
 			}
 		}
 		req.Header.Set("Authorization", balanceAuthorization(src.token))
@@ -611,12 +612,16 @@ func Balance(ctx context.Context, p Provider) (amount string, ok bool, err error
 			req.Header.Set(k, v)
 		}
 		for k, v := range p.Headers {
-			req.Header.Set(k, v)
+			req.Header.Set(k, withBalanceKey(v, p.Key, false))
 		}
 	}
 	req.Header.Set("Accept", "application/json")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if k := url.QueryEscape(p.Key); k != "" && strings.Contains(err.Error(), k) {
+			// the URL in the error has the key in it: not shown on a card
+			return "", true, errors.New(strings.ReplaceAll(err.Error(), k, Mask(p.Key)))
+		}
 		return "", true, err
 	}
 	defer res.Body.Close()
@@ -643,6 +648,24 @@ func Balance(ctx context.Context, p Provider) (amount string, ok bool, err error
 	}
 	amount, err = src.read(b)
 	return amount, true, err
+}
+
+// balanceKeyNames are what a Balance URL or a header's value names the
+// key by, for a vendor that wants it somewhere of its own, in the query
+// most often (…/balance?key={key}): each key the provider has on is put in
+// its own ask, so each card tells that key's balance.
+var balanceKeyNames = []string{"{key}", "{apiKey}", "{api_key}"}
+
+// withBalanceKey is s with the key in place of its names, escaped for a
+// URL's query when inURL.
+func withBalanceKey(s, key string, inURL bool) string {
+	if inURL {
+		key = url.QueryEscape(key)
+	}
+	for _, n := range balanceKeyNames {
+		s = strings.ReplaceAll(s, n, key)
+	}
+	return s
 }
 
 var keyBalanceCache struct {

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -134,6 +135,55 @@ func TestCodexOwnModelOneAccountRelayed(t *testing.T) {
 	}
 }
 
+// The account Codex is signed in to, paused in magpie while another is on
+// (#263: the user's own Plus kept for Codex's remote control, a shared Pro
+// doing the work): no request goes to it, Codex staying signed in to it,
+// until it is resumed or the other is turned off.
+func TestCodexPausedOwnAccountPassedOver(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	var tried, models []string
+	usedUp(t, &tried, &models)
+	if err := provider.SetLoginOn("codex", "me@example.com", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range provider.Logins("codex") {
+		if l.User == "me@example.com" && (!l.Active || !l.Paused) {
+			t.Fatalf("own account %+v", l)
+		}
+	}
+	code, body := codexPost(t, `{"model":"gpt-5.5","stream":true,"input":"ping"}`)
+	if code != 200 || strings.Join(tried, ",") != "acct-2" {
+		t.Fatalf("%d %s tried %v", code, body, tried)
+	}
+	// the other off: the paused one is all there is, and is used
+	if err := provider.SetLoginOn("codex", "spare@example.com", false); err != nil {
+		t.Fatal(err)
+	}
+	tried = nil
+	codexPost(t, `{"model":"gpt-5.5","stream":true,"input":"ping"}`)
+	if strings.Join(tried, ",") != "acct-1" {
+		t.Fatalf("with the other off, tried %v", tried)
+	}
+	if err := provider.SetLoginOn("codex", "me@example.com", false); err == nil {
+		t.Fatal("the only account in use paused")
+	}
+	// back on beside it, and resumed: it is first again
+	if err := provider.SetLoginOn("codex", "spare@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.SetLoginOn("codex", "me@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	restingUntil.Lock()
+	restingUntil.m = map[string]time.Time{}
+	restingUntil.Unlock()
+	tried = nil
+	codexPost(t, `{"model":"gpt-5.5","stream":true,"input":"ping"}`)
+	if len(tried) == 0 || tried[0] != "acct-1" {
+		t.Fatalf("resumed, tried %v", tried)
+	}
+}
+
 func TestResetsIn(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	for body, want := range map[string]time.Duration{
@@ -248,4 +298,71 @@ func TestCallKind(t *testing.T) {
 			t.Errorf("codexHeader(%q) = %v", k, !want)
 		}
 	}
+}
+
+// The ChatGPT backend serves a model only to a Codex that knows it: a turn
+// signed by the pool says it comes from a Codex CLI at least as new as the
+// one that sent it, in the User-Agent and the version header alike, so a
+// model Codex CLI reaches on its own isn't refused through magpie
+// (Discord: "The 'gpt-6.1-sol' model is not supported when using Codex
+// with a ChatGPT account"). 0.161.0 is newer than any installed here or
+// magpie's own fallback, so only the client's own version can pass.
+func TestCodexPoolSaysTheClientsVersion(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	var uas, vers []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		ua := r.Header.Get("User-Agent")
+		uas, vers = append(uas, ua), append(vers, r.Header.Get("version"))
+		v, _, _ := strings.Cut(strings.TrimPrefix(ua, "codex_cli_rs/"), " ")
+		if modelOf(b) == "gpt-6.1-sol" && (!strings.HasPrefix(ua, "codex_cli_rs/") || older(v, "0.161.0")) {
+			w.WriteHeader(400)
+			io.WriteString(w, `{"detail":"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."}`)
+			return
+		}
+		io.WriteString(w, sse(
+			`data: {"type":"response.created","response":{"id":"r1","model":"gpt-6.1-sol"}}`,
+			`data: {"type":"response.output_text.delta","delta":"pong"}`,
+			`data: {"type":"response.completed","response":{"id":"r1","usage":{"input_tokens":7,"output_tokens":1}}}`))
+	}))
+	t.Cleanup(up.Close)
+	was := provider.CodexBase
+	provider.CodexBase = up.URL + "/backend-api/codex"
+	t.Cleanup(func() { provider.CodexBase = was })
+
+	s := New()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", CodexPath+"/responses", strings.NewReader(`{"model":"gpt-6.1-sol","stream":true,"input":"ping"}`))
+	req.Header.Set("Authorization", "Bearer chatgpt-token")
+	req.Header.Set("chatgpt-account-id", "acct-1")
+	req.Header.Set("originator", "codex_cli_rs")
+	req.Header.Set("User-Agent", "codex_cli_rs/0.161.0 (Mac OS 26.6.0; arm64) ghostty/1.2.0")
+	req.Header.Set("version", "0.161.0")
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "pong") {
+		t.Fatalf("status %d: %s (User-Agent %q, version %q)", rec.Code, rec.Body.String(), uas, vers)
+	}
+	for i := range uas {
+		if !strings.HasPrefix(uas[i], "codex_cli_rs/0.161.0 (") || vers[i] != "0.161.0" {
+			t.Errorf("request %d: User-Agent %q, version %q", i, uas[i], vers[i])
+		}
+	}
+}
+
+// older reports whether version a is before b ("0.159.0" before "0.161.0").
+func older(a, b string) bool {
+	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < 3; i++ {
+		var x, y int
+		if i < len(pa) {
+			x, _ = strconv.Atoi(pa[i])
+		}
+		if i < len(pb) {
+			y, _ = strconv.Atoi(pb[i])
+		}
+		if x != y {
+			return x < y
+		}
+	}
+	return false
 }

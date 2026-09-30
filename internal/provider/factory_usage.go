@@ -9,6 +9,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -103,7 +104,15 @@ func factoryLoginQuota(ctx context.Context, l Login) SubscriptionQuota {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	var lim factoryLimits
-	if err := factoryGet(ctx, c, "/api/billing/limits", nil, &lim); err != nil {
+	err = factoryGet(ctx, c, "/api/billing/limits", nil, &lim)
+	var st *factoryStatus
+	if errors.As(err, &st) && factoryMendOrg(ctx, l.User, st.Code, []byte(st.Msg)) {
+		// the org it named was put right: ask once more
+		if c, err = factoryFresh(ctx, l.User); err == nil {
+			err = factoryGet(ctx, c, "/api/billing/limits", nil, &lim)
+		}
+	}
+	if err != nil {
 		q.Error = err.Error()
 		return q
 	}

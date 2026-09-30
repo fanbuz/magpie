@@ -312,3 +312,54 @@ func TestNewAPIUserRefusal(t *testing.T) {
 		}
 	}
 }
+
+// A vendor that takes the key in the Balance URL's query, or in a header of
+// its own, is asked with each key in its place, so every key's card tells
+// its own balance, not the one a key pasted into the URL has (#266).
+func TestBalanceURLNamesTheKey(t *testing.T) {
+	isolate(t)
+	h := t.TempDir()
+	t.Setenv("HOME", h)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(h, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(h, ".cache"))
+	t.Setenv("PATH", h)
+	for _, v := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME"} {
+		t.Setenv(v, "")
+	}
+	keyBalanceCache.data = nil
+	t.Cleanup(func() { keyBalanceCache.data = nil })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Key") != r.URL.Query().Get("apikey") {
+			t.Errorf("header %q, query %q", r.Header.Get("X-Key"), r.URL.Query().Get("apikey"))
+		}
+		switch r.URL.Query().Get("apikey") {
+		case "sk-one":
+			w.Write([]byte(`{"balance":3}`))
+		case "sk-two+/=":
+			w.Write([]byte(`{"balance":7}`))
+		default:
+			http.Error(w, `{"message":"no such key"}`, http.StatusUnauthorized)
+		}
+	}))
+	defer srv.Close()
+	if err := Save(Provider{ID: "relay", Name: "Relay", Chat: srv.URL + "/v1", Key: "sk-one", KeyName: "main",
+		Keys:       []KeyAccount{{Name: "spare", Key: "sk-two+/="}},
+		Headers:    map[string]string{"X-Key": "{apiKey}"},
+		BalanceURL: srv.URL + "/query?apikey={key}", BalancePath: "$balance"}); err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, q := range KeyBalances(context.Background()) {
+		lines = append(lines, q.User+"|"+q.Balance+"|"+q.Error)
+	}
+	if want := "main|$3.00|,spare|$7.00|"; strings.Join(lines, ",") != want {
+		t.Fatalf("balances:\n%s\nwant\n%s", strings.Join(lines, ","), want)
+	}
+	// a URL that can't be asked doesn't show the key in what it says
+	_, _, err := Balance(context.Background(), Provider{Chat: "http://127.0.0.1:1/v1", Key: "sk-secret-123456",
+		BalanceURL: "http://127.0.0.1:1/q?key={key}", BalancePath: "balance"})
+	if err == nil || strings.Contains(err.Error(), "sk-secret-123456") {
+		t.Fatalf("error: %v", err)
+	}
+}

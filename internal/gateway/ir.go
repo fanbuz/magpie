@@ -117,8 +117,13 @@ type Request struct {
 }
 
 // nsTool is a tool as a Responses client knows it: by its namespace and its
-// name in it (Codex's collaboration.spawn_agent).
-type nsTool struct{ Namespace, Name string }
+// name in it (Codex's collaboration.spawn_agent). Search is Codex's own
+// tool search, offered to the model as a function and handed back as the
+// tool_search_call Codex runs.
+type nsTool struct {
+	Namespace, Name string
+	Search          bool
+}
 
 // EventKind is what a streamed event carries.
 type EventKind int

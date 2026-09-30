@@ -201,6 +201,8 @@ func TestSwappedModel(t *testing.T) {
 		{"gemini-2.5-pro", "gemini-2.5-pro-preview-06-05", false},
 		{"openai/gpt-5", "gpt-5-2025-08-07", false},
 		{"us.anthropic.claude-sonnet-4-20250514-v1:0", "claude-sonnet-4-20250514", false},
+		{"auto", "gpt-5-mini", false}, // Copilot's Auto, Cursor's: the vendor was asked to pick
+		{"copilot/auto", "claude-sonnet-5", false},
 		{"sol", "", false},
 		{"", "luna", false},
 	} {

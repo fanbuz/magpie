@@ -125,8 +125,8 @@ func TestCodexPromptCacheKey(t *testing.T) {
 }
 
 func TestCodexUserAgent(t *testing.T) {
-	ua := codexUserAgent()
-	if !strings.HasPrefix(ua, "codex_cli_rs/") || !strings.Contains(ua, " (") || !strings.Contains(ua, "; ") {
+	ua := codexUserAgent("0.159.0")
+	if !strings.HasPrefix(ua, "codex_cli_rs/0.159.0 (") || !strings.Contains(ua, " (") || !strings.Contains(ua, "; ") {
 		t.Fatalf("%q", ua)
 	}
 }

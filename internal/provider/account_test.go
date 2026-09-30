@@ -428,11 +428,11 @@ func TestCopilotSignAndModels(t *testing.T) {
 	for _, m := range ms {
 		ids = append(ids, m.ID)
 	}
-	if strings.Join(ids, ",") != "gpt-5.5,claude-sonnet-5,gpt-4.1" || len(ms[0].Efforts) != 2 {
+	if strings.Join(ids, ",") != "gpt-5.5,claude-sonnet-5,gpt-4.1,auto" || len(ms[0].Efforts) != 2 {
 		t.Fatalf("models: %v %+v", ids, ms)
 	}
 	p, _ = find(All(), "copilot")
-	if got := p.Available(); len(got) != 3 || got[0].ID != "gpt-5.5" {
+	if got := p.Available(); len(got) != 4 || got[0].ID != "gpt-5.5" {
 		t.Fatalf("available after fetch: %+v", got)
 	}
 

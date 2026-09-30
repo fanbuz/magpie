@@ -55,7 +55,7 @@ func TestCopilotCLILogin(t *testing.T) {
 		t.Fatalf("copilot: %+v, asked %q", p, asked)
 	}
 	ms, err := p.Fetch(context.Background())
-	if err != nil || len(ms) != 1 || ms[0].ID != "claude-sonnet-5" {
+	if err != nil || len(ms) != 2 || ms[0].ID != "claude-sonnet-5" || ms[1].ID != CopilotAuto {
 		t.Fatalf("models: %+v %v", ms, err)
 	}
 	req, _ := http.NewRequest("POST", p.Chat+"/chat/completions", nil)

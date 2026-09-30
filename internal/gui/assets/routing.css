@@ -149,7 +149,10 @@
 .rt-more { container-type: inline-size; padding-bottom: 12px; }
 .rt-cols { display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 16px; }
 @container (min-width: 860px) { .rt-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; } }
-.rt-col { min-width: 0; }
+/* each column its own container: a request's row lays itself out by the
+   list's width, not the page's (#273: in two columns of ~470px the rows
+   kept to one line, and the reasoning was drawn over the numbers) */
+.rt-col { min-width: 0; container-type: inline-size; }
 .rt-reqs { padding: 4px; max-height: 420px; overflow-y: auto; display: grid; grid-template-columns: auto fit-content(36%) minmax(0, 1fr) auto; }
 .rt-req { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; column-gap: 12px; padding: 6px 8px; font: inherit; font-size: 12px; text-align: left; color: var(--fg-2); background: none; border: 1px solid transparent; border-radius: 8px; cursor: pointer; }
 .rt-req:hover { background: var(--card-2); }
@@ -168,6 +171,7 @@
 .rt-req .to .ef { flex: none; overflow: visible; margin-left: -2px; color: var(--muted); }
 .rt-req .ef::before { content: "· "; }
 .rt-req .to .ef.picked { color: var(--fg-2); }
+.rt-req .ef .was { opacity: .75; }
 /* what a call was for (a Codex guardian review, a title…): a quiet grey tag by the model */
 .rt-req .asked .kind, .rp-req .kind, .rt-steps li .kind { flex: none; font-size: 10.5px; line-height: 16px; padding: 0 5px; border-radius: 5px; color: var(--muted); background: var(--card-2); border: 1px solid var(--line); white-space: nowrap; }
 .rt-steps li .kind { display: inline-block; vertical-align: 1px; }
@@ -178,7 +182,21 @@
 .rt-req .to .swap { flex: none; max-width: 70%; }
 .rt-steps li.swap::before { background: var(--amber); }
 .rt-req .meta { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
-@container (max-width: 520px) { .rt-reqs { grid-template-columns: auto minmax(0, 1fr); } .rt-req { row-gap: 2px; } .rt-req .to { grid-column: 2; } .rt-req .meta { grid-column: 2; text-align: left; } }
+/* one line wants room for the time, the model, where it went at what
+   reasoning, and the numbers; in less, where it went and the numbers share
+   a line under the model, and in less still each has a line of its own */
+@container (max-width: 640px) {
+  .rt-reqs { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .rt-req { row-gap: 2px; }
+  .rt-req .asked { grid-column: 2 / -1; }
+  .rt-req .to { grid-column: 2; }
+  .rt-req .meta { grid-column: 3; }
+}
+@container (max-width: 460px) {
+  .rt-reqs { grid-template-columns: auto minmax(0, 1fr); }
+  .rt-req .asked, .rt-req .to, .rt-req .meta { grid-column: 2; }
+  .rt-req .meta { text-align: left; white-space: normal; }
+}
 .rt-acts { padding: 4px 0; }
 .rt-cols.solo { grid-template-columns: minmax(0, 1fr); }
 .rt-reqs.none { display: block; background: none; border-color: transparent; }
@@ -409,10 +427,10 @@
 }
 @supports not (grid-template-columns: subgrid) {
   .rt-req { grid-template-columns: auto fit-content(36%) minmax(0, 1fr) auto; }
-  @media (max-width: 560px) {
+  @media (max-width: 700px) {
     .rt-reqs { grid-template-columns: auto minmax(0, 1fr); }
     .rt-req { grid-template-columns: auto minmax(0, 1fr); row-gap: 2px; }
     .rt-req .to { grid-column: 2; }
-    .rt-req .meta { grid-column: 2; text-align: left; }
+    .rt-req .meta { grid-column: 2; text-align: left; white-space: normal; }
   }
 }

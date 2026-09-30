@@ -7,53 +7,19 @@ import (
 	"strings"
 )
 
-// Top-level TOML and YAML keys are edited line by line. That keeps every
-// comment and every other line byte-for-byte intact, which a round trip
-// through a parser would not.
+// Top-level YAML keys are edited line by line. That keeps every comment and
+// every other line byte-for-byte intact, which a round trip through a parser
+// would not. TOML's are located by its parser (see toml.go), since a value
+// there can run over several lines.
 
 var (
+	// tomlTable and tomlKV only read a TOML file its parser refuses; see
+	// GetTOMLTop.
 	tomlTable = regexp.MustCompile(`^\s*\[`)
 	tomlKV    = regexp.MustCompile(`^\s*([A-Za-z0-9_.-]+|"[^"]*")\s*=\s*(.*?)\s*$`)
 	yamlKV    = regexp.MustCompile(`^([A-Za-z0-9_.-]+)\s*:\s*(.*?)\s*$`)
 	yamlPlain = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 )
-
-// GetTOMLTop reads a top-level (pre-table) key from a TOML file.
-func GetTOMLTop(path, key string) (string, bool) {
-	raw, err := Read(path)
-	if err != nil || raw == nil {
-		return "", false
-	}
-	for _, line := range splitLines(string(raw)) {
-		if tomlTable.MatchString(line) {
-			break
-		}
-		if m := tomlKV.FindStringSubmatch(line); m != nil && strings.Trim(m[1], `"`) == key {
-			return tomlValue(m[2]), true
-		}
-	}
-	return "", false
-}
-
-// SetTOMLTop sets top-level keys in a TOML file. Existing lines are replaced
-// in place; new keys go right after the last existing top-level key.
-func SetTOMLTop(path string, kvs ...KV) error {
-	raw, err := Read(path)
-	if err != nil {
-		return err
-	}
-	lines := splitLines(string(raw))
-	for _, kv := range kvs {
-		lines = setLine(lines, kv.Path, kv.Path+" = "+strconv.Quote(toString(kv.Value)), tomlTable, func(line string) (string, bool) {
-			m := tomlKV.FindStringSubmatch(line)
-			if m == nil {
-				return "", false
-			}
-			return strings.Trim(m[1], `"`), true
-		})
-	}
-	return writeTOML(path, lines)
-}
 
 // GetYAMLTop reads a top-level scalar key from a YAML file.
 func GetYAMLTop(path, key string) (string, bool) {

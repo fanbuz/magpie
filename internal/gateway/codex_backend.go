@@ -57,6 +57,9 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "magpie speaks HTTP", http.StatusUpgradeRequired)
 		return
 	}
+	// the pool's accounts and their model lists say they are this Codex, or
+	// newer: the backend serves a model only to a client that knows it
+	provider.SawCodexClient(r.Header)
 	rest := strings.TrimPrefix(r.URL.Path, CodexPath)
 	body, err := codexBody(r)
 	if err != nil {

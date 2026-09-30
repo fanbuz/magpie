@@ -2,6 +2,7 @@ package gui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -251,13 +252,18 @@ func updateRoutes(mux *http.ServeMux, w Windows) {
 	// install restarts into the staged version; after a failed download it
 	// downloads it again, and the page restarts once it's in. Only an app
 	// that can't replace itself is sent to the release page.
+	// The window's page names the tab it is on, to come back to it.
 	mux.HandleFunc("POST /api/update/install", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			View string `json:"view"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
 		if updates.json().State == "ready" {
 			updates.recheck()
 		}
 		switch j := updates.json(); {
 		case j.State == "ready":
-			if restartToUpdate(isWeb(w)) {
+			if restartToUpdate(isWeb(w), in.View != "" || mainShown(w), in.View) {
 				rw.WriteHeader(http.StatusNoContent)
 				go w.Quit()
 				return
@@ -276,7 +282,9 @@ func updateRoutes(mux *http.ServeMux, w Windows) {
 // restartToUpdate installs the staged version and arranges for it to open
 // once this process is gone; the caller then quits. magpie web runs on as
 // the new version in its own place (Web.Wait) instead of opening the app.
-func restartToUpdate(web bool) bool {
+// Off the Mac, the new one opens its window on view when window is set, and
+// only the tray icon when not; the Mac's always opens its window.
+func restartToUpdate(web, window bool, view string) bool {
 	bundle, exe := updates.bundle, updates.exe
 	if !updates.install(true) {
 		return false
@@ -289,10 +297,17 @@ func restartToUpdate(web bool) bool {
 	if bundle != "" {
 		err = update.Relaunch(bundle)
 	} else {
-		err = update.RelaunchBinary(exe)
+		err = update.RelaunchBinary(exe, window, view)
 	}
 	if err != nil {
 		log.Println("update:", err)
 	}
 	return true
+}
+
+// mainShown says whether the app's window is up, for a restart asked for
+// from the panel to bring it back.
+func mainShown(w Windows) bool {
+	s, ok := w.(interface{ MainShown() bool })
+	return ok && s.MainShown()
 }

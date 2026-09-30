@@ -11,7 +11,9 @@ package provider
 // and account id (no name, no token), so a restart doesn't ask again. An
 // answer — claimed, already in, not eligible, the event over — holds for
 // the rest of the day; a request that didn't get one (the network, a
-// refused token) is tried again after wbCheckinRetry.
+// refused token) is tried again after wbCheckinRetry, or, when it never
+// reached WorkBuddy (a machine just woken, its network not back yet), a
+// minute later, and twice as long each time it still doesn't.
 //
 // Only the Chinese build has the event: WorkBuddy AI ships with it off.
 
@@ -20,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -54,6 +57,10 @@ const (
 	CheckinFailed     = "failed"     // no answer; tried again later that day
 )
 
+// wbCheckinSoon is how long a check-in that never reached WorkBuddy waits
+// before it is tried again, doubling each time to wbCheckinRetry.
+const wbCheckinSoon = time.Minute
+
 // beijing is the day the event counts in, UTC+8 all year; fixed, so it
 // needs no time zone database (Windows has none Go can read without one).
 var beijing = time.FixedZone("CST", 8*60*60)
@@ -71,6 +78,10 @@ type WorkBuddyCheckin struct {
 	Credit  float64   `json:"credit,omitempty"`
 	Streak  int       `json:"streak,omitempty"`
 	Msg     string    `json:"msg,omitempty"`
+	// Offline is a failure that never reached WorkBuddy, and Tries how
+	// many before it the same day did the same.
+	Offline bool `json:"offline,omitempty"`
+	Tries   int  `json:"tries,omitempty"`
 	// Asked is true of one checked in on this run, not one read back.
 	Asked bool `json:"-"`
 }
@@ -86,7 +97,18 @@ func (r WorkBuddyCheckin) settled(day string, now time.Time, soon bool) bool {
 	if r.Day != day {
 		return false
 	}
-	return r.Outcome != CheckinFailed || !soon && now.Sub(r.At) < wbCheckinRetry
+	return r.Outcome != CheckinFailed || !soon && now.Sub(r.At) < r.retryAfter()
+}
+
+// retryAfter is how long a failure waits to be tried again: wbCheckinRetry,
+// or one that never reached WorkBuddy wbCheckinSoon, doubled for each try
+// before it that didn't either (#265: a check-in the moment the machine
+// woke, "no such host", then half an hour of 签到失败).
+func (r WorkBuddyCheckin) retryAfter() time.Duration {
+	if !r.Offline {
+		return wbCheckinRetry
+	}
+	return min(wbCheckinRetry, wbCheckinSoon<<min(r.Tries, 5))
 }
 
 // wbCheckinStatus is the event as an account sees it.
@@ -160,6 +182,9 @@ func (c wbCheckiner) checkinNow(ctx context.Context, soon bool) []WorkBuddyCheck
 		}
 		r := wbCheckin(ctx, a)
 		r.Day, r.At = day, now
+		if r.Offline && seen && prev.Day == day && prev.Offline {
+			r.Tries = prev.Tries + 1
+		}
 		st[key], changed = r, true
 		r.User, r.Asked = a.User, true
 		out = append(out, r)
@@ -179,7 +204,7 @@ func (c wbCheckiner) checkinNow(ctx context.Context, soon bool) []WorkBuddyCheck
 func wbCheckin(ctx context.Context, a wbAccount) WorkBuddyCheckin {
 	creds, err := wbFresh(ctx, a)
 	if err != nil {
-		return WorkBuddyCheckin{Outcome: CheckinFailed, Msg: err.Error()}
+		return wbCheckinFailed(err)
 	}
 	h := wbAuthHeaders(a.site, creds)
 	var st wbCheckinStatus
@@ -217,7 +242,15 @@ func wbCheckinRefused(err error) WorkBuddyCheckin {
 			return WorkBuddyCheckin{Outcome: CheckinInactive, Msg: we.msg}
 		}
 	}
-	return WorkBuddyCheckin{Outcome: CheckinFailed, Msg: err.Error()}
+	return wbCheckinFailed(err)
+}
+
+// wbCheckinFailed is a check-in err kept from an answer: offline when the
+// request got no reply at all (no name lookup, no connection, no answer
+// in time), as a *url.Error from the client says.
+func wbCheckinFailed(err error) WorkBuddyCheckin {
+	var ne net.Error
+	return WorkBuddyCheckin{Outcome: CheckinFailed, Msg: err.Error(), Offline: errors.As(err, &ne)}
 }
 
 // CheckInWorkBuddy checks each WorkBuddy (China) account in use in for
@@ -256,19 +289,15 @@ func KeepWorkBuddyCheckedIn(ctx context.Context) {
 func keepCheckedIn(ctx context.Context, c wbCheckiner, on func() bool) {
 	t := time.NewTimer(2 * time.Minute)
 	defer t.Stop()
-	var last time.Time
+	var l wbCheckinLoop
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
-		// the wall clock, which goes on while the machine sleeps
-		now := c.now().Round(0)
-		if on() && (last.IsZero() || now.Sub(last) >= wbCheckinEvery || wbCheckinDay(now) != wbCheckinDay(last)) {
-			last = now
-			cx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			for _, r := range c.checkinNow(cx, false) {
+		if on() {
+			for _, r := range l.tick(ctx, c) {
 				switch {
 				case !r.Asked:
 				case r.Outcome == CheckinClaimed:
@@ -279,8 +308,36 @@ func keepCheckedIn(ctx context.Context, c wbCheckiner, on func() bool) {
 					log.Printf("workbuddy check-in: %s: %s", r.User, r.Outcome)
 				}
 			}
-			cancel()
 		}
 		t.Reset(time.Minute)
 	}
+}
+
+// wbCheckinLoop is when keepCheckedIn last looked at the accounts, and
+// when a failure is due to be tried again, if before its next look.
+type wbCheckinLoop struct{ last, again time.Time }
+
+// tick looks at the accounts if it is time to: the first tick,
+// wbCheckinEvery after the last look, as the Beijing day turns, or as a
+// failure comes due again. It says how they stand, or nil.
+func (l *wbCheckinLoop) tick(ctx context.Context, c wbCheckiner) []WorkBuddyCheckin {
+	// the wall clock, which goes on while the machine sleeps
+	now := c.now().Round(0)
+	if !l.last.IsZero() && now.Sub(l.last) < wbCheckinEvery && wbCheckinDay(now) == wbCheckinDay(l.last) &&
+		(l.again.IsZero() || now.Before(l.again)) {
+		return nil
+	}
+	l.last, l.again = now, time.Time{}
+	cx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	rs := c.checkinNow(cx, false)
+	for _, r := range rs {
+		if r.Outcome != CheckinFailed {
+			continue
+		}
+		if due := r.At.Add(r.retryAfter()); l.again.IsZero() || due.Before(l.again) {
+			l.again = due
+		}
+	}
+	return rs
 }

@@ -78,7 +78,7 @@ func dsh(home string) *Agent {
 			},
 		}, {
 			// llm-deepseek's reasoningEffort, the thinking effort sessions
-			// start with (off, high or max; dsh's own default is high)
+			// start with (off, low, high or max; dsh's own default is high)
 			Key: "effort", Label: "thinking",
 			Get:     func() string { return dshGetEffort(dir) },
 			Set:     func(v string) error { return dshSetEffort(dir, v) },
@@ -525,8 +525,10 @@ func dshFillNewProfiles(files []string) error {
 	return nil
 }
 
-// dshEfforts are the thinking efforts llm-deepseek takes.
-var dshEfforts = []string{"off", "high", "max"}
+// dshEfforts are the thinking efforts llm-deepseek takes: its config's
+// reasoningEffort is off, low, high or max (low since 0.1.1), sent as
+// reasoning_effort before 0.1.7 and output_config.effort from it on.
+var dshEfforts = []string{"off", "low", "high", "max"}
 
 // dshEffortIn is the reasoningEffort of the llm-deepseek entry magpie
 // wrote, "" when there is none.
