@@ -54,6 +54,11 @@ func newZCodeStartUpstream(t *testing.T, jwt string) *zcodeStartUpstream {
 			}
 			ok(u.plans)
 		case r.URL.Path == "/api/v1/zcode-plan/billing/balance":
+			if r.Header.Get("X-Device-Mid") == "" { // as zcode.z.ai does (#282)
+				w.WriteHeader(400)
+				w.Write([]byte(`{"code":3001,"msg":"parameter error"}`))
+				return
+			}
 			if auth != "Bearer "+u.jwt || r.URL.Query().Get("app_version") == "" {
 				w.WriteHeader(401)
 				return

@@ -1944,6 +1944,7 @@ body.panel .modal { padding: 16px 12px; }
    clear. The panel's paint (which tintPanel hands the system), and the
    floating status, take a plain colour there instead. */
 @supports not (color: color-mix(in srgb, red 50%, blue)) {
+  .led .src, .led .src.official { --badge-bg: var(--card); border-color: var(--line); }
   body.panel { --panel-tint: var(--bg); }
   .status.ok, .status.err, .status.warn { background: var(--bg); }
   .status.lift { background: var(--card); }
@@ -1985,3 +1986,60 @@ body.panel .modal { padding: 16px 12px; }
 .usage-refresh .icon.busy svg { animation: spin .8s linear infinite; }
 .usage-refresh .sess-pick { height: 24px; }
 .led-rank .rk .rk-b { overflow-wrap: anywhere; }
+
+/* ---- an agent's model list ------------------------------------------------ */
+/* the line under an agent's name: quiet words, a pill only on hover */
+body.window .row.agent .who.with-models { flex-wrap: wrap; row-gap: 0; }
+.ag-models-line { flex: 0 0 100%; min-width: 0; display: flex; }
+.ag-models { min-width: 0; display: inline-flex; align-items: center; gap: 4px; height: 20px; margin: 1px 0 -2px -6px; padding: 0 6px; border: 0; border-radius: 6px; background: none; color: var(--muted); font: inherit; font-size: 11.5px; line-height: 1; white-space: nowrap; cursor: pointer; transition: background-color .15s, color .15s; }
+.ag-models b { font-weight: 600; color: var(--fg-2); font-variant-numeric: tabular-nums; }
+.ag-models .chev { display: inline-flex; color: var(--faint); transition: transform .2s var(--ease, ease); }
+.ag-models:hover, .ag-models.open { background: var(--pill); color: var(--fg-2); }
+.ag-models.open .chev { transform: rotate(90deg); }
+.ag-models:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 1px; }
+
+.pop.am-pop { overflow: visible; max-height: 560px; padding: 14px 6px 8px; border-radius: 14px; background: var(--pop-bg); }
+/* the arrow at the line it grows from */
+.pop.am-pop::before { content: ""; position: absolute; left: calc(var(--ox, 24px) - 6px); top: -5px; width: 12px; height: 12px; background: var(--pop-bg); transform: rotate(45deg); border-radius: 2px 0 0 0; box-shadow: -.5px -.5px 0 color-mix(in srgb, var(--fg) 10%, transparent); }
+.pop.am-pop.up::before { top: auto; bottom: -5px; border-radius: 0 0 2px 0; box-shadow: .5px .5px 0 color-mix(in srgb, var(--fg) 10%, transparent); }
+.am-head { padding: 0 12px; }
+.am-t { font-size: 14px; font-weight: 600; letter-spacing: -.01em; color: var(--fg); }
+.am-d { margin-top: 3px; font-size: 12px; line-height: 1.45; color: var(--muted); }
+.am-tools { display: flex; align-items: center; gap: 8px; margin: 12px 12px 6px; }
+.am-search { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border-radius: 8px; background: var(--pill); color: var(--faint); }
+.pop.am-pop .am-search input { flex: 1; min-width: 0; height: 28px; border: 0; outline: none; background: none; color: var(--fg); font: inherit; font-size: 12.5px; }
+.am-search:focus-within { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent); }
+.am-seg { display: inline-flex; flex: none; padding: 2px; border-radius: 8px; background: var(--seg-track); }
+.am-seg button { height: 24px; padding: 0 9px; border: 0; border-radius: 6px; background: none; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; transition: background-color .15s, color .15s; }
+.am-seg button.on { background: var(--seg-thumb); color: var(--fg); box-shadow: var(--seg-edge); }
+.am-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 2px; }
+.am-gh { display: flex; align-items: center; margin: 6px 2px 0; }
+.am-fold { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: none; color: var(--muted); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.am-fold > .ic, .am-fold > svg { width: 14px; height: 14px; flex: none; }
+.am-fold .tw { display: inline-flex; width: 10px; color: var(--faint); }
+.am-fold .tw svg { transition: transform .2s var(--ease, ease); }
+.am-g.shut .am-fold .tw svg { transform: rotate(-90deg); }
+.am-fold .gn { color: var(--fg-2); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.am-fold .c { font-variant-numeric: tabular-nums; }
+.am-all { flex: none; height: 24px; margin-right: 6px; padding: 0 6px; border: 0; border-radius: 6px; background: none; color: var(--accent); font: inherit; font-size: 11.5px; cursor: pointer; opacity: 0; transition: opacity .15s, background-color .15s; }
+.am-gh:hover .am-all { opacity: 1; }
+.am-all:focus-visible { opacity: 1; }
+.am-all:hover { background: var(--accent-soft); }
+@media (hover: none) { .am-all { opacity: 1; } }
+.am-mr { display: flex; align-items: center; gap: 10px; width: calc(100% - 4px); height: 32px; margin: 0 2px; padding: 0 12px; border: 0; border-radius: 8px; background: none; color: var(--fg); font: inherit; font-size: 13px; text-align: left; cursor: pointer; transition: background-color .12s; }
+.am-mr:hover { background: var(--pill); }
+.am-mr:focus-visible { outline: 1.5px solid var(--accent); outline-offset: -1.5px; }
+.am-mr .n { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color .15s; }
+.am-mr .x { flex: none; font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.am-mr .ck { flex: none; display: inline-flex; justify-content: center; width: 16px; color: var(--accent); }
+.am-mr.off .n { color: var(--faint); }
+.am-mr.lock { cursor: default; }
+.am-mr.lock:hover { background: none; }
+.am-mr.lock .ck { opacity: .45; }
+.am-tag { margin-left: 6px; padding: 1px 6px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); font-size: 10.5px; font-weight: 500; }
+.am-none { padding: 18px 12px; color: var(--muted); font-size: 12.5px; text-align: center; }
+.am-foot { display: flex; align-items: center; gap: 8px; margin: 8px 8px 0; padding: 10px 6px 2px; border-top: 1px solid var(--line-2); font-size: 11.5px; color: var(--muted); }
+.am-foot .sp { flex: 1; }
+.am-reset { border: 0; background: none; padding: 2px 4px; border-radius: 5px; color: var(--fg-2); font: inherit; font-size: 11.5px; cursor: pointer; }
+.am-reset:hover:not(:disabled) { color: var(--accent); }
+.am-reset:disabled { color: var(--faint); cursor: default; }

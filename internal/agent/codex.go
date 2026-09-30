@@ -284,7 +284,7 @@ func codexIn(at place) *Agent {
 					}
 				}
 			case viaBase():
-				if err := codexStaleCache(filepath.Join(dir, "models_cache.json"), codexcat.Tag(provider.CodexListed())); err != nil {
+				if err := codexStaleCache(filepath.Join(dir, "models_cache.json"), provider.CodexListTag()); err != nil {
 					return err
 				}
 			default:

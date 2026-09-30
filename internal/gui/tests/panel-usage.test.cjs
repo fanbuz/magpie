@@ -1,7 +1,7 @@
 // Run with Node's test runner and Playwright on the module path; see README.md.
 // The tray panel's Usage tab (the window's Requests, made small): what the
 // requests of a period add up to — four totals, a small chart of them by the
-// hour or day, and who they were of, five at most — for today, seven or thirty
+// hour or day, and who they were of, seven at most — for today, seven or thirty
 // days, over one provider when one is picked (the chart then tells its models
 // apart); a click on a provider in the ranking, or the picker beside the
 // period, switches to it; the metric can be tokens, cost or requests. Open
@@ -264,6 +264,16 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await settled(asked, (q) => q.get("provider") === "relay" && q.get("agent") === "codex");
       assert.equal(await w2.locator("#usageTab .opt.on").textContent(), lang === "zh" ? "请求" : "Requests");
       assert(!/provider=|tab=/.test(w2.url()), "the address is clean: " + w2.url());
+      // Every distinct chart color has a named legend row, with the rest grouped.
+      const ranked = await p.evaluate(() => {
+        const rows = Array.from({length:9}, (_,i) => ({id:"p"+i,name:"Provider "+i,calls:9-i,input:(9-i)*100,output:0,cache_read:0,cache_write:0,cost:0}));
+        const rank = document.createElement("div");
+        drawLedRank(rank,{by:{provider:rows}},"provider","tokens","",()=>{},true);
+        return {names:[...rank.querySelectorAll(".rk-nm")].map(x=>x.textContent), colors:[...rank.querySelectorAll(".rk-sw")].map(x=>x.style.background)};
+      });
+      assert.deepEqual(ranked.names.slice(0,7),Array.from({length:7},(_,i)=>"Provider "+i));
+      assert.equal(ranked.names.length,8);
+      assert.equal(new Set(ranked.colors.slice(0,7)).size,7);
       assert.deepEqual(errors, []);
     });
   }

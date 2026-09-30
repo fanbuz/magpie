@@ -395,6 +395,60 @@ func TestCodexModelListNarrowedByPicks(t *testing.T) {
 	}
 }
 
+// A native model taken out of Codex's list on the Agents page is dropped
+// from the backend's list too, and the ETag changes so Codex asks again.
+func TestCodexModelListHidesOnAgentsPage(t *testing.T) {
+	codexSignedIn(t)
+	if err := provider.Save(provider.Provider{ID: "codex", Models: []string{"gpt-5.5", "gpt-5-codex"}}); err != nil {
+		t.Fatal(err)
+	}
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"v1"`)
+		io.WriteString(w, `{"models":[{"slug":"gpt-5.5","priority":1},{"slug":"gpt-5-codex","priority":2}]}`)
+	}))
+	defer up.Close()
+	was := provider.CodexBase
+	provider.CodexBase = up.URL + "/backend-api/codex"
+	defer func() { provider.CodexBase = was }()
+	list := func() ([]string, string) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", CodexPath+"/models", nil)
+		req.Header.Set("Authorization", "Bearer chatgpt-token")
+		New().Handler().ServeHTTP(rec, req)
+		var got struct {
+			Models []map[string]any `json:"models"`
+		}
+		json.Unmarshal(rec.Body.Bytes(), &got)
+		var native []string
+		for _, m := range got.Models {
+			if slug, _ := m["slug"].(string); strings.HasPrefix(slug, "gpt-") {
+				native = append(native, slug)
+			}
+		}
+		return native, rec.Header().Get("ETag")
+	}
+	all, before := list()
+	if len(all) != 2 {
+		t.Fatalf("native models %v", all)
+	}
+	var id string
+	for _, e := range provider.Catalog() {
+		if acc := e.Provider.Account; acc != nil && acc.Agent == "codex" && e.Model == "gpt-5-codex" {
+			id = e.ID
+		}
+	}
+	if id == "" {
+		t.Fatal("no catalog entry for the account's gpt-5-codex")
+	}
+	if err := provider.SetHiddenModels("codex", []string{id}); err != nil {
+		t.Fatal(err)
+	}
+	native, after := list()
+	if len(native) != 1 || native[0] != "gpt-5.5" || after == before {
+		t.Errorf("native %v, ETag %q then %q", native, before, after)
+	}
+}
+
 // A reply's X-Models-Etag carries magpie's list too: Codex refetches its
 // model list on a new one, and only on the backend's it never would when a
 // provider was added.

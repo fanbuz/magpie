@@ -86,6 +86,9 @@ type agentJSON struct {
 	// Launch: the command that starts an agent taking the gateway only
 	// from its environment (agy) on magpie, to copy
 	Launch string `json:"launch,omitempty"`
+	// Models: how many of the catalog its lists show, for an agent that
+	// picks among it (agent_models.go)
+	Models *modelCountJSON `json:"models,omitempty"`
 }
 
 // clientJSON is an agent, or another client the gateway knows, as a
@@ -630,6 +633,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		}
 		rw.WriteHeader(http.StatusNoContent)
 	})
+	agentModelsAPI(mux)
 	devListen(mux)
 	return mux
 }
@@ -654,6 +658,9 @@ func state() stateJSON {
 				opts = []agent.Option{}
 			}
 			aj.Fields = append(aj.Fields, fieldJSON{Key: f.Key, Label: f.Label, Value: vals[f.Key], Options: opts})
+		}
+		if takesCatalog(aj.Fields) {
+			aj.Models = modelCount(a.ID)
 		}
 		aj.Drift = a.Drift()
 		if a.Import != nil {

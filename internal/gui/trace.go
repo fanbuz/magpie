@@ -46,6 +46,15 @@ func mainView(q url.Values) string {
 // mainName is the id of a provider or an agent.
 var mainName = regexp.MustCompile(`^[A-Za-z0-9._@:/ -]{1,80}$`)
 
+// mainURL is the window's page for a view as mainView gives it, the
+// request's id kept as its own parameter (the panel's link to one request,
+// which escaping the whole of it lost).
+func mainURL(view, query string) string { return "/?view=" + view + query }
+
+// argView is a tab named on the command line (`magpie gui settings`, a
+// restart to update) as ShowMain takes it: a name, never parameters.
+func argView(s string) string { return url.QueryEscape(s) }
+
 // traceRoutes serves the routing trace for the Gateway view to play: it
 // waits up to 25 s for something to change after the seq it is given, so
 // the page hears of a request as it happens.

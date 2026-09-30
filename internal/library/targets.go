@@ -76,6 +76,17 @@ func targetOf(a *agent.Agent) *Target {
 		t.Instructions = filepath.Join(d, "GEMINI.md")
 		t.MCP = &mcpFile{Path: filepath.Join(d, "settings.json"), Format: fmtGemini}
 		t.Skills = filepath.Join(d, "skills")
+	case "agy":
+		// Antigravity — the app and agy alike — reads its user-wide
+		// customizations from ~/.gemini/config: GEMINI.md there (as well as
+		// Gemini CLI's ~/.gemini/GEMINI.md), mcp_config.json and skills
+		// (antigravity.google/docs/rules, /mcp, /skills; agy 1.2's `mcp
+		// add` writes that file); agy 1.2 reads no mcp_config.json from the
+		// IDE's older ~/.gemini/antigravity.
+		d := filepath.Join(h, ".gemini", "config")
+		t.Instructions = filepath.Join(d, "GEMINI.md")
+		t.MCP = &mcpFile{Path: filepath.Join(d, "mcp_config.json"), Format: fmtAntigravity}
+		t.Skills = filepath.Join(d, "skills")
 	case "opencode":
 		d := filepath.Dir(a.Path)
 		t.Instructions = filepath.Join(d, "AGENTS.md")

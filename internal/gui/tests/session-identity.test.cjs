@@ -15,7 +15,7 @@ const rows = [
   { t:now, agent:"claude", agentName:"Claude Code", provider:"session-unknown", providerName:"Local session", model:"claude-opus-5", req:"claude-opus-5[1m]", model_vendor:"Anthropic", source:"log", in:10, out:2, status:0, cost:0, priced:false },
   { t:now, agent:"opencode", agentName:"OpenCode", provider:"relay", providerName:"My Relay", host:"relay.example", access:"api", model:"gpt-6-astra", in:10, out:2, status:200, cost:0, priced:false },
   { t:now, agent:"claude", agentName:"Claude Code", provider:"session-unknown", providerName:"Local session", model:"unknown-alias", source:"log", in:10, out:2, status:0, cost:0, priced:false },
-  { t:now, agent:"opencode", agentName:"OpenCode", provider:"unknown-relay", providerName:"Unknown provider", model:"gpt-6-astra", in:10, out:2, status:200, cost:0, priced:false },
+  { t:now, agent:"opencode", agentName:"OpenCode", provider:"unknown-relay", providerName:"Archived relay", model:"gpt-6-astra", in:10, out:2, status:200, cost:0, priced:false },
   { t:now, agent:"codex", agentName:"Codex", provider:"session-unknown", providerName:"Local session", session_provider:"custom", session_account:"reviewer@example.com", session_official_login:true, req:"codex-auto-review", model:"codex-auto-review", source:"log", in:10, out:2, status:0, cost:0.003, priced:true, pricing_model:"gpt-5.6-luna" },
   { t:now, agent:"codex", agentName:"Codex", provider:"session-unknown", providerName:"Local session", session_provider:"my-custom-route", model:"gpt-6-astra", source:"log", in:10, out:2, status:0, cost:0, priced:false },
 ];
@@ -59,6 +59,7 @@ for (const engine of ["chromium", "webkit"]) {
           const official = [0,1,7].includes(i);
           assert.equal(await cells.nth(i).locator(".where-name").textContent(),account);
           assert.equal(await cells.nth(i).locator(".official").count(),official ? 1 : 0);
+          if (official) assert.equal(await cells.nth(i).locator(".official").textContent(),lang === "zh" ? "官方" : "OFFICIAL");
           assert(text.includes(localName));
           assert.equal(await cells.nth(i).locator(".access").count(),0,"account login does not establish a supplier route");
           for (const inferred of ["OpenAI","Anthropic","custom","relay","官方登录","ChatGPT login"]) assert(!text.includes(inferred));
@@ -68,7 +69,7 @@ for (const engine of ["chromium", "webkit"]) {
         }
         assert((await cells.nth(4).textContent()).includes("My Relay · relay.example"));
         assert.equal(await cells.nth(4).locator(".access").textContent(),"API");
-        assert((await cells.nth(6).textContent()).startsWith(lang === "zh" ? "未知供应商" : "Unknown provider"));
+        assert((await cells.nth(6).textContent()).startsWith("Archived relay"));
         assert.equal(await cells.nth(6).locator(".src").count(),0,"an unknown gateway provider is not a local session");
         for (const [i,band] of [[0,"fast"],[1,"slow"],[2,"slow"],[3,"long"],[4,"fast"],[7,"fast"]]) {
           const cell=page.locator(".led-row .duration").nth(i);

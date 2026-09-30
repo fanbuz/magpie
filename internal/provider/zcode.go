@@ -566,6 +566,7 @@ func zcodeCallH(ctx context.Context, method, u, auth string, hdr map[string]stri
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "ZCode/"+zcodeAppVersion)
+	zcodeDeviceHeader(req)
 	for k, v := range hdr {
 		req.Header.Set(k, v)
 	}
@@ -582,6 +583,9 @@ func zcodeCallH(ctx context.Context, method, u, auth string, hdr map[string]stri
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		if json.Unmarshal(b, &env) == nil && env.Msg != "" {
+			if c := strings.Trim(string(env.Code), `"`); c != "" && c != "null" && c != "0" {
+				return fmt.Errorf("%s (%d, code %s)", env.Msg, res.StatusCode, c)
+			}
 			return fmt.Errorf("%s (%d)", env.Msg, res.StatusCode)
 		}
 		return &accountStatusError{status: res.StatusCode}
@@ -759,8 +763,12 @@ func zcodeSignedIn(ctx context.Context, site, token, jwt string) (zcodeKey, stri
 			}
 		}
 	}
+	// the Start Plan's balance not read is said as it is, not taken for
+	// the account having none (#282: a 400 "parameter error" read as that)
+	var berr error
 	if jwt != "" {
-		if b, berr := zcodeStartBalance(ctx, jwt); berr == nil {
+		var b zcodeBalance
+		if b, berr = zcodeStartBalance(ctx, jwt); berr == nil {
 			if name, _, ok := b.active(); ok {
 				if err != nil || k.Key == "" { // no key made: the Start Plan alone
 					k = zcodeKey{Base: zcodeSiteBase(site)}
@@ -770,11 +778,17 @@ func zcodeSignedIn(ctx context.Context, site, token, jwt string) (zcodeKey, stri
 			}
 		}
 	}
-	if team != "" {
+	switch {
+	case team != "" && berr != nil:
+		return zcodeKey{}, "", fmt.Errorf("%s; ZCode's Start Plan: %v", team, berr)
+	case team != "":
 		return zcodeKey{}, "", errors.New(string(team))
-	}
-	if err != nil {
+	case err != nil && berr != nil:
+		return zcodeKey{}, "", fmt.Errorf("%w; ZCode's Start Plan: %v", err, berr)
+	case err != nil:
 		return zcodeKey{}, "", err
+	case berr != nil:
+		return zcodeKey{}, "", fmt.Errorf("this %s account has no GLM Coding Plan, of its own or a team's, and ZCode's Start Plan could not be read: %v", zcodeSiteName(site), berr)
 	}
 	return zcodeKey{}, "", fmt.Errorf("this %s account has no GLM Coding Plan, of its own or a team's, and ZCode's Start Plan has ended or was never started — subscribe at %s, then add it again", zcodeSiteName(site), zcodeSubscribeAt(site))
 }

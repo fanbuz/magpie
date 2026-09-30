@@ -252,7 +252,15 @@ func vendorSees(p *Provider, model string) (bool, bool) {
 func renameModelPrefs(s *settings.Settings, from, to string) bool {
 	named := renameKeys(s.ModelNames, from, to)
 	imaged := renameKeys(s.ModelImages, from, to)
-	return renameKeys(s.ModelEfforts, from, to) || named || imaged
+	hidden := false
+	for _, ids := range s.HiddenModels {
+		for i, id := range ids {
+			if rest, ok := strings.CutPrefix(id, from+"/"); ok {
+				ids[i], hidden = to+"/"+rest, true
+			}
+		}
+	}
+	return renameKeys(s.ModelEfforts, from, to) || named || imaged || hidden
 }
 
 func renameKeys[V any](m map[string]V, from, to string) bool {

@@ -202,6 +202,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(await names(p), ["Codex", "Claude Code"]);
         await p.locator("#ledSplit .opt").nth(0).click();
         assert.deepEqual(await names(p), ["gpt-6-sol", "gpt-6-luna", "claude-sonnet-5"]);
+        await p.locator("#ledRank .rk").first().click();
+        await lastAsked(asked, (q) => q.get("model") === "gpt-6-sol" && !q.has("q"));
+        await p.locator("#ledRank .rk").first().click();
+        await lastAsked(asked, (q) => !q.has("model"));
         await p.locator("#ledSplit .opt").nth(1).click();
         await p.locator("#ledMetric .opt").nth(0).click();
 

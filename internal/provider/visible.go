@@ -1,9 +1,11 @@
 package provider
 
 import (
+	"errors"
 	"slices"
 	"strings"
 
+	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -44,8 +46,24 @@ func Shows(names []string, e Entry) bool {
 }
 
 // CatalogFor is the catalog as agent is shown it, and what is kept from it
-// (none when its lists aren't narrowed).
+// (none when its lists aren't narrowed): its visibility's, less the models
+// taken out of its lists one by one (HiddenModels).
 func CatalogFor(agent string) (shown, hidden []Entry) {
+	listed, hidden := ListedFor(agent)
+	off := HiddenModels(agent)
+	for _, e := range listed {
+		if off[e.ID] {
+			hidden = append(hidden, e)
+		} else {
+			shown = append(shown, e)
+		}
+	}
+	return shown, hidden
+}
+
+// ListedFor is the catalog agent's visibility gives it, the models it may
+// pick to show or not among, and what the visibility keeps from it.
+func ListedFor(agent string) (listed, kept []Entry) {
 	all := Catalog()
 	names, ok := VisibleTo(agent)
 	if !ok {
@@ -53,12 +71,56 @@ func CatalogFor(agent string) (shown, hidden []Entry) {
 	}
 	for _, e := range all {
 		if Shows(names, e) {
-			shown = append(shown, e)
+			listed = append(listed, e)
 		} else {
-			hidden = append(hidden, e)
+			kept = append(kept, e)
 		}
 	}
-	return shown, hidden
+	return listed, kept
+}
+
+// HiddenModels are the ids of the entries taken out of agent's lists.
+func HiddenModels(agent string) map[string]bool {
+	ids := settings.Load().HiddenModels[strings.ToLower(agent)]
+	out := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out
+}
+
+// SetHiddenModels takes these entries out of agent's lists, and puts back
+// every other; none shows it every model its visibility gives it. The
+// agents that keep the models in files of their own are told.
+func SetHiddenModels(agent string, ids []string) error {
+	agent = strings.ToLower(strings.TrimSpace(agent))
+	if agent == "" {
+		return errors.New("no agent")
+	}
+	var keep []string
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" && !slices.Contains(keep, id) {
+			keep = append(keep, id)
+		}
+	}
+	slices.Sort(keep)
+	s := settings.Load()
+	if slices.Equal(s.HiddenModels[agent], keep) {
+		return nil
+	}
+	if len(keep) == 0 {
+		delete(s.HiddenModels, agent)
+	} else {
+		if s.HiddenModels == nil {
+			s.HiddenModels = map[string][]string{}
+		}
+		s.HiddenModels[agent] = keep
+	}
+	if err := settings.Save(s); err != nil {
+		return err
+	}
+	catalog.Touched()
+	return nil
 }
 
 // Families are the families providers and groups are tagged with, sorted.

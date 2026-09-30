@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -96,7 +95,7 @@ func (h *host) HidePanel() { h.panel.Hide() }
 func (h *host) ShowMain(view string) {
 	h.panel.Hide()
 	if view != "" {
-		h.main.SetURL("/?view=" + url.QueryEscape(view) + h.query)
+		h.main.SetURL(mainURL(view, h.query))
 	}
 	h.dock(settings.Load(), true)
 	h.main.Show()
@@ -426,7 +425,7 @@ func Run(version string, showMain bool, link string) error {
 		h.whenReady(h.applyZoom)
 	}
 	if showMain {
-		h.whenReady(func() { h.ShowMain(OpenView) })
+		h.whenReady(func() { h.ShowMain(argView(OpenView)) })
 	}
 	if OpenPanel {
 		h.whenReady(func() { application.InvokeAsync(h.togglePanel) })
@@ -473,7 +472,7 @@ func singleInstance(h *host) *application.SingleInstanceOptions {
 			case len(args) == 1 && args[0] == "panel":
 				h.whenReady(func() { application.InvokeAsync(h.togglePanel) })
 			case len(args) == 2 && (args[0] == "gui" || args[0] == "app"):
-				h.whenReady(func() { h.ShowMain(args[1]) })
+				h.whenReady(func() { h.ShowMain(argView(args[1])) })
 			default:
 				h.whenReady(func() { h.ShowMain("") })
 			}

@@ -18,7 +18,9 @@ import (
 	"time"
 )
 
-const callCacheVersion = "calls-v2"
+// v3 persists Codex cumulative counters explicitly; v2 shards can contain
+// inflated deltas after a reload, so rebuild their derived rows from source.
+const callCacheVersion = "calls-v3"
 const maxKeptCalls = 131072
 const maxKeptFiles = 64
 

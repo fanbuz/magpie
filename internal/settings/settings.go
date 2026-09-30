@@ -118,6 +118,10 @@ type Settings struct {
 	// families (the tag a provider or group is given), provider ids and
 	// group ids its lists hold. An agent it doesn't name is shown them all.
 	Visible map[string][]string `json:"visible,omitempty"`
+	// HiddenModels are the catalog entries (their ids, "<provider>/<model>"
+	// or a group's) taken out of an agent's lists one by one, by agent id,
+	// after Visible: a model not named here, a new one among them, is shown.
+	HiddenModels map[string][]string `json:"hiddenModels,omitempty"`
 	// ModelNames are the names the user gave models, by "<provider
 	// id>/<model id>": agents, the gateway's model list and magpie itself
 	// show them for the vendor's (see provider.SetModelName).

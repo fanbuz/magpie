@@ -137,6 +137,7 @@ func zcodeSourceHeaders(req *http.Request) {
 	req.Header.Set("X-Title", "Z Code@electron")
 	req.Header.Set("HTTP-Referer", zcodeAPI)
 	req.Header.Set("X-Platform", platform+"-"+arch)
+	zcodeDeviceHeader(req)
 }
 
 // zcodeJWTExpired says whether ZCode's token has run out; ZCode then asks

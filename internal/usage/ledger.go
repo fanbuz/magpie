@@ -41,6 +41,7 @@ func (r Record) Failed() bool { return r.Status >= 400 || r.Error != "" }
 // one provider, to the failed calls, and to the rows whose models, provider, host or
 // session hold Query (any case).
 type Filter struct {
+	Model    string // exact model selected in the ranking
 	Agent    string
 	Provider string // a provider's id, as the ledger's rows have it
 	Failed   bool
@@ -48,6 +49,9 @@ type Filter struct {
 }
 
 func (f Filter) keeps(r Record) bool {
+	if f.Model != "" && r.Model != f.Model {
+		return false
+	}
 	if f.Agent != "" && AgentOf(r.Agent) != f.Agent {
 		return false
 	}

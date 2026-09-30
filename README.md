@@ -57,6 +57,10 @@ and there is a terminal version (`magpie tui`) and a plain CLI.
   background once it goes stale. Choose which models each provider exposes,
   or expose them all — a model released this morning is in the picker on
   the next refresh.
+- **Each agent's own model list.** Under an agent's name on the Agents page,
+  "Showing 5 / 32 models" opens its list: click a model to take it out of
+  that agent's picker (Codex's `/model` included, its ChatGPT models too) or
+  put it back; other agents still use it, and a new model is shown.
 - **Profiles.** Snapshot every agent's settings under a name and switch all of
   them back in one move.
 - **Real logos, no framework.** Plain HTML over the system webview; brand

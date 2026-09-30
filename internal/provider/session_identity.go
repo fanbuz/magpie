@@ -5,9 +5,7 @@ package provider
 import (
 	"cmp"
 	"encoding/json"
-	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/yetone/magpie/internal/filememo"
 )
@@ -27,43 +25,6 @@ func SessionIdentities(codexDir string) []SessionIdentity {
 	out := currentSessionIdentities(codexDir)
 	for _, l := range readLogins() {
 		if id, ok := savedSessionIdentity(l); ok {
-			out = append(out, id)
-		}
-	}
-	return out
-}
-
-// SessionIdentities of a subscription are only the identities of its actual
-// gateway accounts. A different CODEX_HOME can identify a session's creator,
-// but does not add that identity to this provider's signed-in accounts.
-func (p Provider) SessionIdentities() []SessionIdentity {
-	if p.Account == nil || (p.Account.Agent != "codex" && p.Account.Agent != "claude") {
-		return nil
-	}
-	users := map[string]bool{strings.ToLower(p.Account.User): true}
-	for _, l := range readLogins() {
-		if l.Agent == p.Account.Agent && l.On {
-			users[strings.ToLower(l.User)] = true
-		}
-	}
-	home, _ := os.UserHomeDir()
-	var out []SessionIdentity
-	current := map[string]bool{}
-	for _, id := range currentSessionIdentities(filepath.Join(home, ".codex")) {
-		u := strings.ToLower(id.User)
-		if id.Agent == p.Account.Agent && users[u] {
-			out = append(out, id)
-			current[u] = true
-		}
-	}
-	for _, l := range readLogins() {
-		u := strings.ToLower(l.User)
-		// The live store supersedes an older bookmark of the same email,
-		// whose account/workspace IDs may have changed since it was saved.
-		if l.Agent != p.Account.Agent || !users[u] || current[u] {
-			continue
-		}
-		if id, ok := savedSessionIdentity(l); ok && strings.EqualFold(id.User, l.User) {
 			out = append(out, id)
 		}
 	}

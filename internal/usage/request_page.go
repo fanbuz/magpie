@@ -12,12 +12,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/provider"
@@ -44,12 +47,14 @@ type packedRow struct {
 	Flags                          uint8
 }
 type rowChunk struct {
-	Rows    []packedRow
-	Strings []string
-	dict    map[string]uint32
-	Source  sessions.CallSource
-	Bytes   int64
-	Used    uint64
+	Archive   []byte
+	Locations []*time.Location
+	Rows      []packedRow
+	Strings   []string
+	dict      map[string]uint32
+	Source    sessions.CallSource
+	Bytes     int64
+	Used      uint64
 }
 
 func rowText(r *Row) [17]*string {
@@ -91,7 +96,7 @@ func (c *rowChunk) add(r Row, msg string, order int64, failed bool) {
 		p.Flags |= 16
 	}
 	c.Rows = append(c.Rows, p)
-	c.Bytes += 192
+	c.Bytes += int64(unsafe.Sizeof(packedRow{}))
 }
 func (c *rowChunk) row(i int) Row {
 	p := &c.Rows[i]
@@ -148,8 +153,7 @@ type requestIndex struct {
 
 var requestCache requestIndex
 
-const requestCacheBytes = 96 << 20
-const gatewayCacheBytes = 32 << 20
+const requestCacheBytes = 24 << 20
 
 func statKey(path string) string {
 	s, e := os.Stat(path)
@@ -172,6 +176,9 @@ func recordHash(path string, n int64) string {
 }
 
 func QueryPage(p Period, f Filter, offset, limit int) RequestPage {
+	return queryPage(p, f, offset, limit, sessions.ReadCallSource)
+}
+func queryPage(p Period, f Filter, offset, limit int, readSource func(sessions.CallSource) []sessions.Call) RequestPage {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -210,7 +217,7 @@ func QueryPage(p Period, f Filter, offset, limit int) RequestPage {
 	root := Path() + "|" + catalog.CachePath()
 	idx := &requestCache
 	idx.Lock()
-	defer idx.Unlock()
+
 	if idx.root != root || idx.meta != meta {
 		idx.root, idx.meta = root, meta
 		idx.chunks = map[string]*rowChunk{}
@@ -224,9 +231,17 @@ func QueryPage(p Period, f Filter, offset, limit int) RequestPage {
 	}
 	q := pageKey{p, f, offset, limit}
 	if page, ok := idx.pages[q]; ok {
+		idx.Unlock()
 		return page
 	}
 	idx.tick++
+	// Copy only metadata while holding the lock. Published chunks are immutable;
+	// reading, decoding, pricing and aggregation use a private snapshot.
+	shared := idx
+	idx = &requestIndex{root: idx.root, meta: idx.meta, key: idx.key, tick: idx.tick,
+		chunks: maps.Clone(idx.chunks), gateway: idx.gateway,
+		gatewaySize: idx.gatewaySize, gatewayMod: idx.gatewayMod, gatewayOff: idx.gatewayOff, gatewayHash: idx.gatewayHash}
+	shared.Unlock()
 	price := pricer()
 	priceRow := func(r Record, source string) Row {
 		row := Row{Record: r, Source: source, Swapped: r.Served != "" && Swapped(r.Model, r.Served)}
@@ -237,6 +252,7 @@ func QueryPage(p Period, f Filter, offset, limit int) RequestPage {
 		row.Agent = AgentOf(r.Agent)
 		return row
 	}
+	cachedGateway, cachedSize, cachedMod := idx.gateway, idx.gatewaySize, idx.gatewayMod
 	idx.readGateway(priceRow)
 	since := p.Since(time.Now())
 	on := map[string]bool{}
@@ -247,12 +263,14 @@ func QueryPage(p Period, f Filter, offset, limit int) RequestPage {
 		if !since.IsZero() && s.Modified.Before(since) {
 			continue
 		}
-		c := idx.chunks[s.Path]
-		if c == nil || c.Source.Size != s.Size || !c.Source.Modified.Equal(s.Modified) {
+		cached := idx.chunks[s.Path]
+		c := cached.unpack()
+		reused := c != nil && c.Source.Size == s.Size && c.Source.Modified.Equal(s.Modified)
+		if !reused {
 			if resolver == nil {
 				resolver = newSessionResolver([]sessions.Call{{}})
 			}
-			cs := sessions.ReadCallSource(s)
+			cs := readSource(s)
 			c = &rowChunk{Source: s, Rows: make([]packedRow, 0, len(cs))}
 			for _, call := range cs {
 				r := logRecord(call)
@@ -265,7 +283,16 @@ func QueryPage(p Period, f Filter, offset, limit int) RequestPage {
 			c.dict = nil // local chunks are immutable until the source changes
 			idx.chunks[s.Path] = c
 		}
+		next := *c
+		c = &next
 		c.Used = idx.tick
+		if reused {
+			kept := *cached
+			kept.Used = idx.tick
+			idx.chunks[s.Path] = &kept
+		} else {
+			idx.chunks[s.Path] = c.pack()
+		}
 		chunks = append(chunks, c)
 	}
 	for path := range idx.chunks {
@@ -274,13 +301,41 @@ func QueryPage(p Period, f Filter, offset, limit int) RequestPage {
 		}
 	}
 	page := buildRequestPage(p, f, offset, limit, idx.gateway, chunks)
-	if len(idx.pages) >= 16 {
-		idx.pages = map[pageKey]RequestPage{}
+	// Compression and decoding also stay outside the cache lock.
+	gatewaySnapshot := cachedGateway
+	if gatewaySnapshot == nil || cachedSize != idx.gatewaySize || cachedMod != idx.gatewayMod {
+		gatewaySnapshot = idx.gateway.pack()
 	}
-	idx.pages[q] = page
+	if gatewaySnapshot.dict != nil {
+		next := *gatewaySnapshot
+		next.dict = nil
+		next.Bytes -= int64(32 * len(next.Strings))
+		gatewaySnapshot = &next
+	}
+	shared.Lock()
+	defer shared.Unlock()
+	// A query for an older filesystem snapshot may finish after a newer one.
+	if shared.root != idx.root || shared.meta != idx.meta || shared.key != idx.key {
+		return page
+	}
+	for path, c := range idx.chunks {
+		if prev := shared.chunks[path]; prev == nil || prev.Used <= c.Used {
+			shared.chunks[path] = c
+		}
+	}
+	for path := range shared.chunks {
+		if !on[path] {
+			delete(shared.chunks, path)
+		}
+	}
+	shared.gateway, shared.gatewaySize, shared.gatewayMod, shared.gatewayOff, shared.gatewayHash = gatewaySnapshot, idx.gatewaySize, idx.gatewayMod, idx.gatewayOff, idx.gatewayHash
+	if len(shared.pages) >= 16 {
+		shared.pages = map[pageKey]RequestPage{}
+	}
+	shared.pages[q] = page
 	var bytes int64
 	var kept []*rowChunk
-	for _, c := range idx.chunks {
+	for _, c := range shared.chunks {
 		bytes += c.Bytes
 		kept = append(kept, c)
 	}
@@ -297,16 +352,14 @@ func QueryPage(p Period, f Filter, offset, limit int) RequestPage {
 		if bytes <= requestCacheBytes {
 			break
 		}
-		delete(idx.chunks, c.Source.Path)
+		delete(shared.chunks, c.Source.Path)
 		bytes -= c.Bytes
-	}
-	if idx.gateway.Bytes > gatewayCacheBytes {
-		idx.gateway = nil
 	}
 	return page
 }
 
 func (idx *requestIndex) readGateway(price func(Record, string) Row) {
+	idx.gateway = idx.gateway.unpack()
 	info, err := os.Stat(Path())
 	if err != nil {
 		idx.gateway = &rowChunk{}
@@ -318,6 +371,19 @@ func (idx *requestIndex) readGateway(price func(Record, string) Row) {
 		return
 	}
 	continued := idx.gateway != nil && info.Size() > idx.gatewaySize && idx.gatewayHash != "" && recordHash(Path(), idx.gatewaySize) == idx.gatewayHash
+	if continued {
+		// Append to a copy; another period can be aggregating the published rows.
+		c := *idx.gateway
+		c.Rows, c.Strings, c.dict = slices.Clone(c.Rows), slices.Clone(c.Strings), maps.Clone(c.dict)
+		if c.dict == nil {
+			c.dict = make(map[string]uint32, len(c.Strings))
+			for i, s := range c.Strings {
+				c.dict[s] = uint32(i)
+				c.Bytes += 32
+			}
+		}
+		idx.gateway = &c
+	}
 	if !continued {
 		idx.gateway = &rowChunk{}
 		idx.gatewayOff = 0
@@ -371,26 +437,35 @@ func visibleLocal(chunks []*rowChunk) map[rowRef]bool {
 	}
 	return duplicates
 }
+
+// matchKey narrows candidates before comparing their end times. Request IDs
+// are consumed first; fallback matching still requires uniqueness both ways.
+type matchKey struct {
+	session, agent string
+	tokens         [4]int64
+	failed, hasID  bool
+}
+type matchEnd struct {
+	at    time.Time
+	index int
+}
+type matchGroup struct {
+	ends   []matchEnd
+	counts []int
+}
+
 func matchedLocal(gateway *rowChunk, chunks []*rowChunk, skip map[rowRef]bool, since time.Time) map[rowRef]bool {
 	gatewaySince := since
 	if !since.IsZero() {
 		gatewaySince = since.Add(-24 * time.Hour)
 	}
-	byID, bySession := map[string][]int{}, map[string][]int{}
-	for i := range gateway.Rows {
-		r := gateway.row(i)
-		if r.IsRejected() || r.Time.Before(gatewaySince) {
+	byID := map[string][]int{}
+	for i, p := range gateway.Rows {
+		if (p.Flags&4 != 0 || p.Text[1] == 0 && p.Status >= 400) || p.Time.Before(gatewaySince) {
 			continue
 		}
-		if r.RequestID != "" {
-			byID[r.RequestID] = append(byID[r.RequestID], i)
-		}
-		s := r.NativeSession
-		if s == "" {
-			s = r.Session
-		}
-		if s != "" {
-			bySession[s] = append(bySession[s], i)
+		if id := gateway.Strings[p.Text[11]]; id != "" {
+			byID[id] = append(byID[id], i)
 		}
 	}
 	byRequest := map[string][]rowRef{}
@@ -400,8 +475,7 @@ func matchedLocal(gateway *rowChunk, chunks []*rowChunk, skip map[rowRef]bool, s
 			if skip[ref] || p.Time.Before(since) {
 				continue
 			}
-			id := c.Strings[p.Text[11]]
-			if len(byID[id]) > 0 {
+			if id := c.Strings[p.Text[11]]; len(byID[id]) > 0 {
 				byRequest[id] = append(byRequest[id], ref)
 			}
 		}
@@ -421,46 +495,85 @@ func matchedLocal(gateway *rowChunk, chunks []*rowChunk, skip map[rowRef]bool, s
 			if j >= len(byID[id]) {
 				break
 			}
-			matched[ref] = true
-			used[byID[id][j]] = true
+			matched[ref], used[byID[id][j]] = true, true
 		}
 	}
-	candidates := map[rowRef][]int{}
-	counts := map[int]int{}
+	groups := map[matchKey]*matchGroup{}
+	for i, p := range gateway.Rows {
+		if used[i] || (p.Flags&4 != 0 || p.Text[1] == 0 && p.Status >= 400) || p.Time.Before(gatewaySince) {
+			continue
+		}
+		session := gateway.Strings[p.Text[14]]
+		if session == "" {
+			session = gateway.Strings[p.Text[13]]
+		}
+		if session == "" {
+			continue
+		}
+		key := matchKey{session, gateway.Strings[p.Text[0]], [4]int64(p.Tokens[:4]), p.Status >= 400 || p.Text[9] != 0, p.Text[11] != 0}
+		g := groups[key]
+		if g == nil {
+			g = &matchGroup{}
+			groups[key] = g
+		}
+		g.ends = append(g.ends, matchEnd{p.Time.Add(time.Duration(p.Millis) * time.Millisecond), i})
+	}
+	for _, g := range groups {
+		slices.SortFunc(g.ends, func(a, b matchEnd) int { return a.at.Compare(b.at) })
+		g.counts = make([]int, len(g.ends)+1)
+	}
+	candidates := map[rowRef]int{}
 	for _, c := range chunks {
 		for j, p := range c.Rows {
 			ref := rowRef{c, j}
 			if skip[ref] || matched[ref] || p.Time.Before(since) {
 				continue
 			}
-			s := c.Strings[p.Text[13]]
-			if len(bySession[s]) == 0 {
+			failed := p.Flags&16 != 0
+			if p.Tokens[0]+p.Tokens[1]+p.Tokens[2]+p.Tokens[3] == 0 && !failed {
 				continue
 			}
-			r := c.row(j)
-			failed := p.Flags&16 != 0
-			for _, i := range bySession[s] {
-				g := gateway.row(i)
-				if used[i] || r.RequestID != "" && g.RequestID != "" {
+			key := matchKey{session: c.Strings[p.Text[13]], agent: c.Strings[p.Text[0]], tokens: [4]int64(p.Tokens[:4]), failed: failed}
+			count, candidate := 0, 0
+			// Without a local ID either gateway partition can match. With an ID,
+			// only an unnamed gateway call can match (different IDs stay distinct).
+			for _, hasID := range []bool{false, true} {
+				if hasID && p.Text[11] != 0 {
 					continue
 				}
-				if r.Input+r.Output+r.CacheRead+r.CacheWrite == 0 && (!failed || !g.Failed()) {
+				key.hasID = hasID
+				g := groups[key]
+				if g == nil {
 					continue
 				}
-				if failed != g.Failed() || g.Agent != r.Agent || g.Input != r.Input || g.Output != r.Output || g.CacheRead != r.CacheRead || g.CacheWrite != r.CacheWrite {
-					continue
+				lo := sort.Search(len(g.ends), func(i int) bool { return !g.ends[i].at.Before(p.Time.Add(-2 * time.Second)) })
+				hi := sort.Search(len(g.ends), func(i int) bool { return g.ends[i].at.After(p.Time.Add(2 * time.Second)) })
+				if hi > lo {
+					count += hi - lo
+					candidate = g.ends[lo].index
+					// Range counts preserve ambiguity even for thousands of identical
+					// retries, without enumerating their Cartesian product.
+					g.counts[lo]++
+					g.counts[hi]--
 				}
-				end := g.Time.Add(time.Duration(g.Millis) * time.Millisecond)
-				if r.Time.Before(end.Add(-2*time.Second)) || r.Time.After(end.Add(2*time.Second)) {
-					continue
-				}
-				candidates[ref] = append(candidates[ref], i)
-				counts[i]++
+			}
+			if count == 1 {
+				candidates[ref] = candidate
 			}
 		}
 	}
-	for ref, cs := range candidates {
-		if len(cs) == 1 && counts[cs[0]] == 1 {
+	unique := map[int]bool{}
+	for _, g := range groups {
+		count := 0
+		for i, end := range g.ends {
+			count += g.counts[i]
+			if count == 1 {
+				unique[end.index] = true
+			}
+		}
+	}
+	for ref, i := range candidates {
+		if unique[i] {
 			matched[ref] = true
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/codexcat"
 	"github.com/yetone/magpie/internal/proc"
 )
 
@@ -274,6 +276,35 @@ func CodexListed() []catalog.Model {
 		_, ms, _ := find(id)
 		return ms
 	})
+}
+
+// CodexNativeHidden is the ChatGPT account's own model slugs the user took
+// out of Codex's list (HiddenModels): the backend lists them, and the
+// gateway drops them from its /models answer as it does the ones not picked.
+func CodexNativeHidden() map[string]bool {
+	off := HiddenModels("codex")
+	if len(off) == 0 {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, e := range Catalog() {
+		if off[e.ID] && e.Group == "" && e.Provider.Account != nil && e.Provider.Account.Agent == "codex" {
+			out[e.Model] = true
+		}
+	}
+	return out
+}
+
+// CodexListTag names the list Codex is handed, for its ETag: magpie's models
+// and the account's own taken out of it, so either changing has Codex ask
+// for the list again.
+func CodexListTag() string {
+	ms := CodexListed()
+	off := slices.Sorted(maps.Keys(CodexNativeHidden()))
+	for _, slug := range off {
+		ms = append(ms, catalog.Model{ID: "-" + slug})
+	}
+	return codexcat.Tag(ms)
 }
 
 // CodexNativePicked is the set of the ChatGPT account's own model slugs the

@@ -83,7 +83,7 @@ function server(lang, asked, refreshed) {
 }
 
 const L = {
-  en: { loading: "Loading…", input: "Input", output: "Output", roles: ["You", "Context"], out: ["Thinking", "Assistant", "Tool call", "Assistant"], tool: "Tool result", more: "Show all", less: "Show less", cut: "… 250 more characters not shown", whole: "There was more than is shown here",
+  en: { loading: "Loading…", input: "Input", output: "Output", roles: ["You", "Context"], out: ["Thinking", "Assistant", "Tool call", "Assistant"], tool: "Tool result", more: "Show full content", less: "Collapse content", cut: "… 250 more characters not shown", whole: "There was more than is shown here",
     why: ["No session was named with this request, so its session file can't be found", "magpie reads the session files of Claude Code, Claude Desktop and Codex only", "This request isn't in the agent's session files: they may be deleted, moved, or not written yet"],
     src: "Read from the agent's session file; magpie keeps no copy" },
   zh: { loading: "读取中…", input: "输入", output: "输出", roles: ["你", "上下文"], out: ["思考", "助手", "工具调用", "助手"], tool: "工具结果", more: "展开全部", less: "收起", cut: "……还有 250 个字符未显示", whole: "内容太多，这里只显示了一部分",
@@ -177,7 +177,17 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         for (let i = 0; i < 60 && refreshed.n < r + 2; i++) await p.waitForTimeout(40);
         await p.waitForTimeout(200);
         await p.locator(".led-detail").first().locator(".cx-sec").first().waitFor();
-        assert.equal(asked.length, n, "it was not asked for again");
+        assert.equal(asked.filter((q) => q.session === "sess-gw").length, 1, "successful content stays cached");
+        assert(asked.length > n, "missing content is retried after a refresh");
+        // A source that appears later can be read on reopening the detail.
+        await p.route("**/api/usage/requests/content?**", async (route) => {
+          const q = new URL(route.request().url()).searchParams;
+          if (q.get("session") === ROWS[4].session) return route.fulfill({ json: { found: true, input: [], output: [{role:"assistant",text:"Written later"}] } });
+          return route.fallback();
+        });
+        await reader.click(p, rows.nth(4));
+        await reader.click(p, rows.nth(4));
+        await p.getByText("Written later", { exact: true }).waitFor();
 
         if (shots) await p.screenshot({ path: path.join(shots, `content-${engine}-${lang}.png`) });
         assert.deepEqual(errors, []);

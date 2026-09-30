@@ -135,6 +135,9 @@ func TestUsageScale(t *testing.T) {
 			page := ledgerPage(p, usage.Filter{}, 0, 100)
 			elapsed := time.Since(start)
 			peak := stop()
+			runtime.GC()
+			runtime.ReadMemStats(&mem)
+			t.Logf("Requests %s %s retained heap: %.2f MiB", p, phase, float64(mem.HeapAlloc)/(1<<20))
 			t.Logf("Requests %s %s: %s (%d rows), peak HeapInuse %.2f MiB", p, phase, elapsed, page.Total, float64(peak)/(1<<20))
 			if p == usage.All && page.Total != wantCalls+50_000 {
 				t.Fatalf("wrong total: %d", page.Total)

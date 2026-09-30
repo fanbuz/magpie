@@ -99,8 +99,17 @@ type cxOpen struct{ N, First int }
 // cxCallUsage is Codex's usage with the reasoning tokens in it, which
 // cxUsage leaves out.
 type cxCallUsage struct {
-	cxUsage
-	Reasoning int `json:"reasoning_output_tokens"`
+	// These fields must be explicit: gob skips an unexported embedded cxUsage,
+	// losing the previous cumulative counters when the append shard is reloaded.
+	Input      int `json:"input_tokens"`
+	Cached     int `json:"cached_input_tokens"`
+	CacheWrite int `json:"cache_write_input_tokens"`
+	Output     int `json:"output_tokens"`
+	Reasoning  int `json:"reasoning_output_tokens"`
+}
+
+func (u cxCallUsage) raw() Tokens {
+	return Tokens{Input: u.Input, Output: u.Output, CacheRead: u.Cached, CacheWrite: u.CacheWrite}
 }
 
 // callDesktopDirs are Claude Desktop's data folders. Tests swap it.
@@ -650,8 +659,10 @@ func sameHead(head, hash string, size int) bool {
 	return size >= 0 && len(head) >= size && hashHead(head[:size]) == hash
 }
 
-// prefixHash verifies the already indexed bytes before continuing an append.
-// A prefix sampled only at the first 256 bytes cannot detect in-place rewrites.
+// prefixHash checks distributed windows of the indexed prefix. Small files
+// are checked in full. The version tag invalidates earlier full-file hashes.
+// Rewrites outside the sampled windows can go undetected; appends cost at most
+// 64 KiB of reads per fingerprint regardless of the session's length.
 func prefixHash(path string, n int64) string {
 	f, err := os.Open(path)
 	if err != nil {
@@ -659,10 +670,20 @@ func prefixHash(path string, n int64) string {
 	}
 	defer f.Close()
 	h := sha256.New()
-	if _, err = io.CopyN(h, f, n); err != nil {
-		return ""
+	const window, samples = int64(4096), int64(16)
+	if n <= window*samples {
+		if _, err = io.CopyN(h, f, n); err != nil {
+			return ""
+		}
+	} else {
+		for i := int64(0); i < samples; i++ {
+			off := (n - window) * i / (samples - 1)
+			if _, err = io.CopyN(h, io.NewSectionReader(f, off, window), window); err != nil {
+				return ""
+			}
+		}
 	}
-	return fmt.Sprintf("%x", h.Sum(nil))
+	return fmt.Sprintf("sample-v1:%x", h.Sum(nil))
 }
 
 // CallSource identifies a raw local request log without reading its contents.
@@ -685,5 +706,20 @@ func CallSources() []CallSource {
 // ReadCallSource returns immutable calls for one source. Independent files can
 // be read concurrently; disk IO never holds callsMu.
 func ReadCallSource(s CallSource) []Call {
-	return readCalls(file{path: s.Path, key: s.Key, agent: s.Agent, size: s.Size, mod: s.Modified}).Calls
+	st := readCalls(file{path: s.Path, key: s.Key, agent: s.Agent, size: s.Size, mod: s.Modified})
+	// Requests retains its own compact snapshot. Keeping the expanded parser's
+	// calls as well doubles residency, especially for long active sessions. The
+	// append-frame shard still carries the continuation for the next read.
+	callsMu.Lock()
+	if callCache[s.Path] == st {
+		delete(callCache, s.Path)
+		for i, p := range callOrder {
+			if p == s.Path {
+				callOrder = append(callOrder[:i], callOrder[i+1:]...)
+				break
+			}
+		}
+	}
+	callsMu.Unlock()
+	return st.Calls
 }

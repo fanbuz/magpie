@@ -535,9 +535,21 @@ func (s *Server) codexModels(w http.ResponseWriter, r *http.Request) {
 		}
 		own = kept
 	}
+	// and the ones taken out of Codex's list on the Agents page
+	if off := provider.CodexNativeHidden(); len(off) > 0 {
+		kept := own[:0]
+		for _, m := range own {
+			o, _ := m.(map[string]any)
+			if slug, _ := o["slug"].(string); off[slug] {
+				continue
+			}
+			kept = append(kept, m)
+		}
+		own = kept
+	}
 	ms := provider.CodexListed()
 	// the list is the backend's and magpie's, and so is its ETag
-	w.Header().Set("ETag", codexcat.WithTag(etag, codexcat.Tag(ms)))
+	w.Header().Set("ETag", codexcat.WithTag(etag, provider.CodexListTag()))
 	writeJSON(w, 200, map[string]any{"models": append(own, codexcat.Entries(ms, len(own)+100)...)})
 }
 
@@ -546,7 +558,7 @@ func (s *Server) codexModels(w http.ResponseWriter, r *http.Request) {
 // change to either has Codex ask for the list again.
 func modelsEtag(h http.Header) {
 	if v := h.Get("X-Models-Etag"); v != "" {
-		h.Set("X-Models-Etag", codexcat.WithTag(v, codexcat.Tag(provider.CodexListed())))
+		h.Set("X-Models-Etag", codexcat.WithTag(v, provider.CodexListTag()))
 	}
 }
 

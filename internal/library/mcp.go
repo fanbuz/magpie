@@ -110,6 +110,9 @@ const (
 	fmtDsh
 	// fmtPiNative is the mcp.json Pi 0.99 reads itself (pimcp.go)
 	fmtPiNative
+	// fmtAntigravity is Antigravity's mcp_config.json: a remote server is
+	// its serverUrl, whatever it speaks
+	fmtAntigravity
 )
 
 // mcpFile is the file an agent keeps its user-wide MCP servers in.
@@ -319,6 +322,20 @@ func (f *mcpFile) encode(s *Server) ordered {
 			add("args", list(s.Args))
 			optional("env", s.Env)
 		}
+	case fmtAntigravity:
+		// Antigravity tells SSE from streamable HTTP itself; "type" only
+		// lets magpie read an SSE server back as one (agy keeps the key)
+		if s.Remote() {
+			if s.Transport == "sse" {
+				add("type", "sse")
+			}
+			add("serverUrl", s.URL)
+			optional("headers", s.Headers)
+		} else {
+			add("command", s.Command)
+			add("args", list(s.Args))
+			optional("env", s.Env)
+		}
 	case fmtCodex:
 		if s.Remote() {
 			add("url", s.URL)
@@ -393,6 +410,21 @@ func (f *mcpFile) decode(name string, m map[string]any) (*Server, bool) {
 			remote("http", str(m, "uri"), m["headers"])
 		case "sse":
 			remote("sse", str(m, "uri"), m["headers"])
+		}
+	case fmtAntigravity:
+		// agy reads a url where there's no serverUrl too
+		u := str(m, "serverUrl")
+		if u == "" {
+			u = str(m, "url")
+		}
+		if u != "" {
+			t := "http"
+			if str(m, "type") == "sse" {
+				t = "sse"
+			}
+			remote(t, u, m["headers"])
+		} else {
+			local(str(m, "command"), m["args"], m["env"])
 		}
 	case fmtCodex:
 		if u := str(m, "url"); u != "" {
@@ -561,6 +593,9 @@ var owned = map[mcpFormat][]string{
 	fmtPiNative: {"type", "transport", "httpTransport", "url", "headers", "command", "args", "env"},
 	fmtZCode:    {"type", "url", "headers", "command", "args", "env"},
 	fmtDsh:      {"serverName", "transport", "url", "headers", "command", "args", "env"},
+
+	// a url agy read in place of serverUrl goes when magpie writes one
+	fmtAntigravity: {"type", "serverUrl", "url", "headers", "command", "args", "env"},
 }
 
 // merged is the entry magpie writes, with what the user added to the old

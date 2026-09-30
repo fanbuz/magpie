@@ -907,6 +907,7 @@
       det.append(w);
     }
     if (a.agent === "opencode" || a.agent === "mimocode") det.append(el("p", "lib-aside", t("{agent} reads Claude Code's CLAUDE.md when it has no AGENTS.md of its own.", { agent: a.name })));
+    if (a.agent === "agy") det.append(el("p", "lib-aside", t("Antigravity reads Gemini CLI's ~/.gemini/GEMINI.md as well as this file, so text given to both is read twice.")));
     const lab = el("label", "lib-lab", t("Only for {agent}, after the shared text", { agent: a.name }));
     const ta = el("textarea", "lib-text small");
     ta.dataset.lib = "extra:" + a.agent;

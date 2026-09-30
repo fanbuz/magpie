@@ -363,6 +363,13 @@ function renderAgents() {
     // the CLI's version, and an update when one is out (#202); the panel's
     // name column has no room for it
     if (mode !== "panel") who.append(cliTag(a));
+    // which of magpie's models its lists show, on a line under the name
+    if (mode !== "panel" && a.models) {
+      const line = el("div", "ag-models-line");
+      line.append(modelsEntry(a));
+      who.append(line);
+      who.classList.add("with-models");
+    }
     row.append(agentHandle(a, row, inFold), who);
     if (sum) row.append(sum, ...(openBox ? [openBox] : []));
     else row.append(fields);
@@ -781,6 +788,235 @@ function dragAgent(e, handle, row) {
   handle.addEventListener("pointermove", move);
   handle.addEventListener("pointerup", up);
   handle.addEventListener("pointercancel", up);
+}
+
+// ---------- an agent's model list ----------
+
+// modelsEntry: the line under an agent's name counting the models its
+// lists show ("All 41 models", or "Showing 5 / 32 models"); it opens the
+// list to take models out of them and put them back.
+function modelsEntry(a) {
+  const b = el("button", "ag-models");
+  b.type = "button";
+  fillModelsEntry(b, a);
+  b.onclick = (ev) => openAgentModels(a, b, ev);
+  // the rows drawn again while its list is open: the list stays, held to
+  // the new line
+  if (agentModels?.a.id === a.id) {
+    b.classList.add("open");
+    agentModels.anchor = b;
+    if (agentModels.count) { a.models = agentModels.count; fillModelsEntry(b, a); }
+  }
+  return b;
+}
+function fillModelsEntry(b, a) {
+  const c = a.models;
+  b.replaceChildren();
+  // the words in one box, so the flex line keeps the spaces round the number
+  const words = el("span");
+  if (c.shown >= c.listed) words.append(t("All {n} models", { n: c.listed }));
+  else {
+    const [pre, post] = t("Showing {shown} / {listed} models", { listed: c.listed }).split("{shown}");
+    words.append(pre, el("b", "", String(c.shown)), post || "");
+  }
+  b.append(words);
+  const ch = el("span", "chev");
+  ch.append(svg(CHEV_R, 10, 1.6));
+  b.append(ch);
+  b.title = t("Pick which models {agent} lists", { agent: a.name });
+}
+
+const ctxShort = (n) => !n ? "" : n >= 1e6 ? (n % 1e6 ? (n / 1e6).toFixed(1) : n / 1e6) + "M" : Math.round(n / 1e3) + "K";
+
+let agentModels = null;
+function closeAgentModels() {
+  const m = agentModels;
+  if (!m) return;
+  agentModels = null;
+  m.anchor.classList.remove("open");
+  popGhost(m.box);
+  m.box.remove();
+  document.removeEventListener("mousedown", m.outside, true);
+  document.removeEventListener("keydown", m.keys, true);
+  document.removeEventListener("scroll", m.scrolled, true);
+  removeEventListener("resize", closeAgentModels);
+  // the agents' pickers list what's left once the writes are in
+  if (m.changed) m.saving.then(async () => { state = await api("state"); renderAgents(); }).catch(() => {});
+}
+
+async function openAgentModels(a, anchor, ev) {
+  ev.stopPropagation();
+  const again = agentModels?.a.id === a.id;
+  closeAgentModels();
+  closePicker();
+  if (again) return;
+  let models;
+  try { models = (await api("agent-models/" + encodeURIComponent(a.id))).models; }
+  catch (e) { status(e.message, "err"); return; }
+  if (!anchor.isConnected) return;
+  const box = el("div", "pop am-pop");
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-label", t("{agent}'s model list", { agent: a.name }));
+  const head = el("div", "am-head");
+  head.append(el("div", "am-t", t("{agent}'s model list", { agent: a.name })),
+    el("div", "am-d", t("Models turned off don't show in {agent}'s model picker; other agents can still use them.", { agent: a.name })));
+  const tools = el("div", "am-tools");
+  const search = el("label", "am-search");
+  search.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  const q = el("input");
+  q.type = "text";
+  q.spellcheck = false;
+  q.autocomplete = "off";
+  q.placeholder = t("Search models");
+  search.append(q);
+  const seg = el("div", "am-seg");
+  const segAll = el("button", "on", t("All")), segOn = el("button", "", t("Shown"));
+  segAll.type = segOn.type = "button";
+  seg.append(segAll, segOn);
+  tools.append(search, seg);
+  const list = el("div", "am-list");
+  const foot = el("div", "am-foot");
+  const reset = el("button", "am-reset", t("Show all again"));
+  reset.type = "button";
+  foot.append(el("span", "", t("New models are shown")), el("span", "sp"), reset);
+  box.append(head, tools, list, foot);
+
+  // groups as the catalog has them, routing groups first; a long one
+  // starts folded, unless the agent is set to a model in it
+  const groups = [];
+  for (const m of models) {
+    let g = groups.find((x) => x.name === m.group);
+    if (!g) groups.push(g = { name: m.group, icon: m.icon, models: [] });
+    g.models.push(m);
+  }
+  groups.sort((x, y) => (y.name === ROUTING_GROUPS) - (x.name === ROUTING_GROUPS));
+  const shut = new Set(groups.filter((g) => groups.length > 1 && g.models.length > 8 && !g.models.some((m) => m.inUse)).map((g) => g.name));
+  // under "Shown", one just turned off stays until the view changes
+  let onlyShown = false, kept = new Set();
+
+  const me = agentModels = { a, anchor, box, saving: Promise.resolve(), changed: false };
+  const save = () => {
+    me.changed = true;
+    const hidden = models.filter((m) => m.hidden).map((m) => m.id);
+    const count = { shown: models.length - hidden.length, listed: models.length };
+    me.count = a.models = count;
+    fillModelsEntry(me.anchor, a);
+    me.saving = me.saving.then(() => api("agent-models/" + encodeURIComponent(a.id), { hidden }))
+      .catch((e) => status(e.message, "err"));
+  };
+  const draw = () => {
+    const top = list.scrollTop;
+    list.replaceChildren();
+    const words = q.value.trim().toLowerCase();
+    for (const g of groups) {
+      const rows = g.models.filter((m) => (!onlyShown || !m.hidden || kept.has(m.id)) &&
+        (!words || [m.name, m.id, g.name].some((s) => s.toLowerCase().includes(words))));
+      if (!rows.length) continue;
+      const on = g.models.filter((m) => !m.hidden).length;
+      const folded = !words && shut.has(g.name);
+      const sec = el("section", "am-g" + (folded ? " shut" : ""));
+      const gh = el("div", "am-gh");
+      const fold = el("button", "am-fold");
+      fold.type = "button";
+      fold.setAttribute("aria-expanded", String(!folded));
+      const tw = el("span", "tw");
+      tw.append(svg(CHEV, 10, 1.7));
+      fold.append(tw, g.name === ROUTING_GROUPS ? svg(FAN, 14, 1.5) : icon(g.icon || "generic"),
+        el("span", "gn", g.name === ROUTING_GROUPS ? t(g.name) : g.name), el("span", "c", `${on} / ${g.models.length}`));
+      fold.onclick = () => { shut.has(g.name) ? shut.delete(g.name) : shut.add(g.name); draw(); };
+      const free = g.models.filter((m) => !m.inUse);
+      const allOn = free.every((m) => !m.hidden);
+      const all = el("button", "am-all", allOn ? t("Hide all") : t("Show all"));
+      all.type = "button";
+      all.hidden = !free.length;
+      all.onclick = () => {
+        for (const m of free) { m.hidden = allOn; if (allOn) kept.add(m.id); }
+        save();
+        draw();
+      };
+      gh.append(fold, all);
+      sec.append(gh);
+      if (!folded) {
+        const body = el("div", "am-rows");
+        for (const m of rows) {
+          const r = el("button", "am-mr" + (m.hidden ? " off" : "") + (m.inUse ? " lock" : ""));
+          r.type = "button";
+          r.setAttribute("role", "menuitemcheckbox");
+          r.setAttribute("aria-checked", String(!m.hidden));
+          r.title = m.inUse ? t("{agent} is set to it, so it stays", { agent: a.name }) : m.id;
+          const n = el("span", "n", m.name);
+          if (m.inUse) n.append(el("span", "am-tag", t("Current")));
+          const ck = el("span", "ck");
+          if (!m.hidden) ck.append(svg("m3.5 8.5 3 3 6-7", 12, 1.9));
+          r.append(n, el("span", "x", ctxShort(m.context)), ck);
+          if (m.inUse) r.setAttribute("aria-disabled", "true");
+          else r.onclick = () => {
+            m.hidden = !m.hidden;
+            if (m.hidden) kept.add(m.id);
+            save();
+            draw();
+          };
+          body.append(r);
+        }
+        sec.append(body);
+      }
+      list.append(sec);
+    }
+    if (!list.childNodes.length) list.append(el("div", "am-none", t("No matches.")));
+    list.scrollTop = top;
+    reset.disabled = !models.some((m) => m.hidden);
+  };
+  q.oninput = () => { list.scrollTop = 0; draw(); };
+  const view = (shown) => {
+    onlyShown = shown;
+    kept = new Set();
+    segAll.classList.toggle("on", !shown);
+    segOn.classList.toggle("on", shown);
+    list.scrollTop = 0;
+    draw();
+  };
+  segAll.onclick = () => view(false);
+  segOn.onclick = () => view(true);
+  reset.onclick = () => {
+    for (const m of models) m.hidden = false;
+    save();
+    draw();
+  };
+  draw();
+
+  document.body.append(box);
+  // under the line, or over it where there's no room; the list scrolls
+  const r = anchor.getBoundingClientRect(), pad = 8;
+  const w = Math.min(380, innerWidth - pad * 2);
+  box.style.width = w + "px";
+  const x = Math.max(pad, Math.min(r.left - 10, innerWidth - w - pad));
+  box.style.left = x + "px";
+  box.style.setProperty("--ox", Math.max(18, Math.min(w - 18, r.left + Math.min(r.width, 60) / 2 - x)) + "px");
+  const below = innerHeight - r.bottom - 8 - pad, above = r.top - 8 - pad;
+  const want = Math.min(560, box.scrollHeight);
+  if (want > below && above > below) {
+    box.classList.add("up");
+    box.style.bottom = innerHeight - r.top + 8 + "px";
+    box.style.maxHeight = Math.min(560, above) + "px";
+  } else {
+    box.style.top = r.bottom + 8 + "px";
+    box.style.maxHeight = Math.min(560, below) + "px";
+  }
+  anchor.classList.add("open");
+  me.outside = (e) => { if (!box.contains(e.target) && !me.anchor.contains(e.target)) closeAgentModels(); };
+  me.keys = (e) => {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeAgentModels();
+    me.anchor.focus({ preventScroll: true });
+  };
+  me.scrolled = (e) => { if (!box.contains(e.target)) closeAgentModels(); };
+  document.addEventListener("mousedown", me.outside, true);
+  document.addEventListener("keydown", me.keys, true);
+  document.addEventListener("scroll", me.scrolled, true);
+  addEventListener("resize", closeAgentModels);
+  q.focus({ preventScroll: true });
 }
 
 let agentMenu = null;
@@ -4667,7 +4903,7 @@ function renderAccounts(a) {
     }
     row.append(dot, el("span", "n", l.user), el("span", "plan", accountPlan({ agent: a.agent, plan: l.plan })), el("span", "grow"));
     if (l.active) {
-      row.append(el("span", "using", l.paused ? t("Paused") : several ? t("First") : t("In use")));
+      row.append(el("span", "using", l.paused ? t("Paused") : several ? t("First") : t("Current")));
       if (a.agent === "qoder" || l.own) {
         const forget = el("button", "text quiet", t("Remove"));
         if (l.own) forget.title = forgetOwnTitle(a);
@@ -5083,7 +5319,7 @@ function renderKeyAccounts(p) {
       rm.onclick = () => accountAction("keys/remove", { id: p.id, ref: k.id }, t("Key removed"));
       row.append(rm);
     }
-    if (k.active) row.append(el("span", "using", several ? t("First") : t("In use")));
+    if (k.active) row.append(el("span", "using", several ? t("First") : t("Current")));
     else if (k.on) {
       const first = el("button", "text", t("Make first"));
       first.onclick = () => { first.classList.add("busy"); accountAction("keys/use", { id: p.id, ref: k.id }, t("{name} tries {key} first", { name: p.name, key: k.name || k.masked })); };
@@ -6256,7 +6492,7 @@ function renderUsage() {
 // server pages it (/api/usage/requests) and saves it whole as CSV.
 
 let ledger = null; // the page shown: { rows, offset, total, agents, …totals }
-let ledOffset = 0, ledAgent = "", ledProvider = "", ledFailed = false, ledQuery = "";
+let ledOffset = 0, ledAgent = "", ledProvider = "", ledFailed = false, ledQuery = "", ledModel = "";
 const LED_PAGE = 100;
 // Remember the chart metric; start each app load split by model.
 let ledMetric = "tokens", ledSplit = "model";
@@ -6270,7 +6506,8 @@ function ledParams(extra) {
   if (ledAgent) q.set("agent", ledAgent);
   if (ledProvider) q.set("provider", ledProvider);
   if (ledFailed) q.set("failed", "1");
-  if (ledQuery.trim()) q.set("q", ledQuery.trim());
+  if (ledModel) q.set("model", ledModel);
+  else if (ledQuery.trim()) q.set("q", ledQuery.trim());
   if (extra) for (const k in extra) q.set(k, extra[k]);
   return q.toString();
 }
@@ -6384,7 +6621,11 @@ function ledLoadContent(r) {
     // ended nearest the request's own end is its call
     const at = r.source === "log" ? t0 : t0 + (r.ms || 0);
     const q = new URLSearchParams({ agent: r.agent, session: r.native_session || r.session || "", from: new Date(a).toISOString(), to: new Date(b).toISOString(), at: new Date(at).toISOString() });
-    ledContent.set(key, api("usage/requests/content?" + q).catch(() => ({ found: false, why: "read" })));
+    const pending = api("usage/requests/content?" + q).catch(() => ({ found: false, why: "read" })).then((c) => {
+      if (!c.found && ledContent.get(key) === pending) ledContent.delete(key);
+      return c;
+    });
+    ledContent.set(key, pending);
   }
   return ledContent.get(key);
 }
@@ -6416,11 +6657,11 @@ function ledSaid(p) {
   part.append(head, words);
   if (p.text.length > 700 || p.text.split("\n").length > 9) {
     part.classList.add("clamp");
-    const more = el("button", "text cx-more", t("Show all"));
+    const more = el("button", "text cx-more", t("Show full content"));
     more.type = "button";
     more.onclick = () => {
       const open = part.classList.toggle("clamp");
-      more.textContent = t(open ? "Show all" : "Show less");
+      more.textContent = t(open ? "Show full content" : "Collapse content");
     };
     part.append(more);
   }
@@ -6623,7 +6864,7 @@ function drawLedRank(box, l, split, metric, picked, choose, compact) {
   if (!list.length) return;
   const sum = list.reduce((a, x) => a + ledValue(metric, x), 0) || 1;
   const leader = Math.max(1, ledValue(metric, top[0]));
-  const rows = top.slice(0, compact ? 5 : LED_SHOWN);
+  const rows = top;
   const one = (x, color, plain) => {
     const b = el("button", "rk" + (plain ? " plain" : "") + (picked && picked === x.id ? " on" : ""));
     b.type = "button";
@@ -6760,12 +7001,12 @@ function drawLedTrend() {
   drawLedColumns(chart, l, ledSplit, ledMetric, false);
   rank.chart = chart;
   if (!rank.rail) ledRail($("#ledRail"), rank);
-  const picked = ledSplit === "provider" ? ledProvider : ledSplit === "agent" ? ledAgent : "";
+  const picked = ledSplit === "provider" ? ledProvider : ledSplit === "agent" ? ledAgent : ledModel;
   drawLedRank(rank, l, ledSplit, ledMetric, picked, (x) => {
     // a click lists only that one's requests; on the one listed, all again
     if (ledSplit === "provider") ledProvider = ledProvider === x.id ? "" : x.id;
     else if (ledSplit === "agent") ledAgent = ledAgent === x.id ? "" : x.id;
-    else { const q = $("#ledQ"); ledQuery = ledQuery === x.id ? "" : x.id; q.value = ledQuery; }
+    else { const q = $("#ledQ"); ledModel = ledModel === x.id ? "" : x.id; ledQuery = ledModel; q.value = ledQuery; }
     ledOffset = 0;
     loadLedger().catch((e) => status(e.message, "err"));
   }, false);
@@ -6869,7 +7110,7 @@ function renderLedger() {
     const wc = td(el("div", "where-name", where), "where", where);
     const badges = el("div", "source-badges");
     if (local && r.session_account && r.session_official_login) {
-      const badge = el("span", "src official", "OFFICIAL");
+      const badge = el("span", "src official", t("OFFICIAL"));
       badge.title = t("Official login confirmed for this account by local login metadata. This does not establish the route or authentication used for this request.");
       badges.append(badge);
     }
@@ -6952,11 +7193,12 @@ function renderLedger() {
   let typing = 0;
   $("#ledQ").oninput = (e) => {
     ledQuery = e.target.value;
+    ledModel = "";
     clearTimeout(typing);
     typing = setTimeout(() => { ledOffset = 0; loadLedger().catch((err) => status(err.message, "err")); }, 250);
   };
   $("#ledQ").onkeydown = (e) => {
-    if (e.key === "Escape" && e.target.value) { e.stopPropagation(); e.target.value = ""; ledQuery = ""; ledOffset = 0; loadLedger().catch((err) => status(err.message, "err")); }
+    if (e.key === "Escape" && e.target.value) { e.stopPropagation(); e.target.value = ""; ledQuery = ""; ledModel = ""; ledOffset = 0; loadLedger().catch((err) => status(err.message, "err")); }
   };
   $("#ledExport").onclick = async () => {
     const b = $("#ledExport");
@@ -9405,6 +9647,7 @@ function show(v) {
   const back = () => backToReader($("#view-" + v));
   requestAnimationFrame(back);
   closePicker();
+  closeAgentModels();
   if (v !== "providers" && editing !== null) cancelEdit();
   if (v === "providers" || v === "gateway" || v === "routing") loadProviders().then(back, (e) => status(e.message, "err"));
   if (v === "usage") loadUsage().then(back, (e) => status(e.message, "err"));
