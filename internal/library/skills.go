@@ -237,8 +237,9 @@ func linked(p string) bool {
 
 // sharedSkillsDir is the user-wide shared skills folder, the cross-agent
 // convention a project's .agents/skills is the project's own of (#227):
-// the library finds skills there but never moves one out of it, and gives
-// none to it (no agent magpie knows is said to read it user-wide).
+// the library finds skills there but never moves one out of it. It gives
+// skills to it only for the agents whose one place it is (Kimi Code,
+// Goose, Cindy): one link there, whichever of them it's for.
 func sharedSkillsDir() string { return filepath.Join(home(), ".agents", "skills") }
 
 // within is whether p is dir or inside it.
@@ -267,11 +268,24 @@ func (l *Library) syncSkills(t *Target, res *Result, all []*Target) {
 		}
 		return slices.Contains(s.Agents, id) || slices.ContainsFunc(sharers, func(o string) bool { return slices.Contains(s.Agents, o) })
 	}
+	// an agent that reads ~/.agents/skills as well as its own folder finds
+	// a skill magpie put there for another (Kimi Code) already: a link in
+	// its own too would be the skill twice
+	shared := realDir(sharedSkillsDir())
+	inShared := func(s *Skill) bool {
+		if s == nil || !slices.Contains(readsShared, id) || realDir(t.Skills) == shared {
+			return false
+		}
+		p := filepath.Join(sharedSkillsDir(), s.Name)
+		return slices.ContainsFunc(all, func(o *Target) bool {
+			return o.Skills != "" && realDir(o.Skills) == shared && slices.Contains(s.Agents, o.Agent.ID)
+		}) && (ours(p, s.Name) || realDir(p) == realDir(skillDir(s.Name)))
+	}
 	var mine []string
 	for _, name := range a.Skills {
 		s := l.skill(name)
 		p := filepath.Join(t.Skills, name)
-		if wanted(s) || !ours(p, name) {
+		if wanted(s) && !inShared(s) || !ours(p, name) {
 			continue
 		}
 		if err := unlink(p); err != nil {
@@ -282,11 +296,13 @@ func (l *Library) syncSkills(t *Target, res *Result, all []*Target) {
 		res.changed(id)
 	}
 	for _, s := range l.Skills {
-		if !slices.Contains(s.Agents, id) {
+		if !slices.Contains(s.Agents, id) || inShared(s) {
 			continue
 		}
 		p := filepath.Join(t.Skills, s.Name)
-		if ours(p, s.Name) {
+		// the folder the library's skill links to is there already: one
+		// brought in from ~/.agents/skills, which stays where it is
+		if ours(p, s.Name) || realDir(p) == realDir(skillDir(s.Name)) {
 			mine = append(mine, s.Name)
 			continue
 		}

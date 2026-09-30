@@ -6,8 +6,9 @@
 // with a manifest.json that publish.mjs turns into the PR's preview.
 //
 // env: MAGPIE_URL (the web link, key included), DIFF_FILE, PR_TITLE,
-// PR_BODY_FILE, OUT_DIR, DEEPSEEK_API_KEY, SECRETS (words that must never
-// be on screen, one per line), UI_LOCALE (zh-CN), PLAN_MODEL.
+// PR_BODY_FILE, OUT_DIR, SRC_DIR (the PR's source), DEEPSEEK_API_KEY,
+// SECRETS (words that must never be on screen, one per line), UI_LOCALE
+// (zh-CN), PLAN_MODEL.
 import { chromium } from "playwright";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
@@ -88,25 +89,93 @@ async function checkLeak(page, where) {
 }
 
 async function deepseek(messages) {
-  const res = await fetch("https://api.deepseek.com/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${env("DEEPSEEK_API_KEY")}` },
-    body: JSON.stringify({ model: MODEL, messages, response_format: { type: "json_object" }, max_tokens: 8000 }),
-    signal: AbortSignal.timeout(240e3),
-  });
-  if (!res.ok) throw new Error(`DeepSeek ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const j = await res.json();
-  const text = j.choices?.[0]?.message?.content ?? "";
-  return JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ""));
+  // a reply cut short or not JSON is asked for again
+  let last;
+  for (let i = 0; i < 3; i++) {
+    const res = await fetch("https://api.deepseek.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${env("DEEPSEEK_API_KEY")}` },
+      body: JSON.stringify({ model: MODEL, messages, response_format: { type: "json_object" }, max_tokens: 16000 }),
+      signal: AbortSignal.timeout(240e3),
+    });
+    if (!res.ok) throw new Error(`DeepSeek ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    const j = await res.json();
+    const text = j.choices?.[0]?.message?.content ?? "";
+    try { return JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, "")); }
+    catch (e) { last = new Error(`reply not JSON (${j.choices?.[0]?.finish_reason}): ${e.message}`); log(last.message, "— asking again"); }
+  }
+  throw last;
+}
+
+// The page's own code around what the diff touches, from the PR's source:
+// where the changed classes and functions are built and what calls them,
+// so the plan knows how to reach a popover or menu the outlines show
+// closed. Two hops of callers, at most ~24k characters.
+async function codeContext(diff, src) {
+  if (!src) return "";
+  const dir = path.join(src, "internal/gui/assets");
+  const names = new Set(await fs.readdir(dir).catch(() => []));
+  const files = {};
+  for (const f of names) if (f.endsWith(".js") && !f.includes(".min.")) files[f] = (await fs.readFile(path.join(dir, f), "utf8")).split("\n");
+  if (!Object.keys(files).length) return "";
+  const tokens = new Set(), fns = new Set();
+  for (const line of diff.split("\n")) {
+    const hunk = /^@@.*@@\s*(?:async\s+)?(?:function\s+(\w+)|(?:const|let)\s+(\w+)\s*=)/.exec(line);
+    if (hunk) fns.add(hunk[1] || hunk[2]);
+    if (/^[+-][^+-]/.test(line)) {
+      for (const m of line.matchAll(/\.([a-z][\w-]*-[\w-]+|[a-z]{3,}[A-Z]\w*)/g)) tokens.add(m[1]);
+      for (const m of line.matchAll(/["' ]([a-z]+(?:-[a-z0-9]+)+)["' ]/g)) tokens.add(m[1]);
+      for (const m of line.matchAll(/function\s+(\w+)/g)) fns.add(m[1]);
+    }
+  }
+  const enclosing = (lines, i) => {
+    for (let j = i; j >= 0; j--) {
+      const m = /^\s*(?:async\s+)?function\s+(\w+)|^\s*(?:const|let)\s+(\w+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>/.exec(lines[j]);
+      if (m) return m[1] || m[2];
+    }
+  };
+  const hits = {}; // file -> Set of line numbers
+  const mark = (f, i) => (hits[f] ??= new Set()).add(i);
+  const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  for (const [f, lines] of Object.entries(files))
+    lines.forEach((l, i) => { for (const t of tokens) if (new RegExp(`(^|[^\\w-])${esc(t)}([^\\w-]|$)`).test(l)) { mark(f, i); const e = enclosing(lines, i); if (e) fns.add(e); break; } });
+  let seen = new Set();
+  for (let hop = 0; hop < 2; hop++) {
+    const next = new Set();
+    for (const fn of fns) {
+      if (seen.has(fn)) continue;
+      seen.add(fn);
+      const call = new RegExp(`\\b${esc(fn)}\\s*\\(`), def = new RegExp(`function\\s+${esc(fn)}\\b|(const|let)\\s+${esc(fn)}\\s*=`);
+      for (const [f, lines] of Object.entries(files))
+        lines.forEach((l, i) => { if (call.test(l) && !def.test(l)) { mark(f, i); const e = enclosing(lines, i); if (e) next.add(e); } });
+    }
+    for (const n of next) fns.add(n);
+  }
+  let out = "";
+  for (const [f, set] of Object.entries(hits)) {
+    const lines = files[f];
+    const spans = [];
+    for (const i of [...set].sort((a, b) => a - b)) {
+      const a = Math.max(0, i - 8), b = Math.min(lines.length, i + 9);
+      if (spans.length && a <= spans.at(-1)[1]) spans.at(-1)[1] = Math.max(spans.at(-1)[1], b);
+      else spans.push([a, b]);
+    }
+    for (const [a, b] of spans) {
+      const chunk = `--- ${f}:${a + 1}\n${lines.slice(a, b).map((l) => l.slice(0, 200)).join("\n")}\n`;
+      if (out.length + chunk.length > 24e3) return out + "… (cut)\n";
+      out += chunk;
+    }
+  }
+  return out;
 }
 
 const GUIDE = `You plan a short screen recording of magpie, a desktop app (shown here in a browser at ${VIEW.width}x${VIEW.height}) that picks the model for every local coding agent. It runs for real: a sandbox machine with a DeepSeek API key added as a provider and a few real requests already sent through its gateway, so Routing and Usage have data. The UI language is ${LOCALE}.
 
 Places ("start" of a scene): agents, providers, gateway, routing, usage, library, settings (tabs of the main window; the tab bar is nav#nav with button[data-view=…]; settings opens from #prefs) and panel (the menu-bar icon's quick panel, a separate page).
 
-You get the PR's title, description and diff, and an outline of each place as it is rendered now: one element per line, indented by nesting, as tag#id.class[data-x="…"] attributes "own text". Use only selectors you can build from what the outline shows.
+You get the PR's title, description and diff, and an outline of each place as it is rendered now: one element per line, indented by nesting, as tag#id.class[data-x="…"] attributes "own text". Use only selectors you can build from what the outline shows, or, for what only appears after an interaction (a popover, menu, dialog, hover state), from the diff itself: the outlines show each place closed, so an element the diff styles or builds being missing from them means you must open it first, not that it isn't there.
 
-Write a plan that shows a reviewer exactly what this PR changes in the UI and whether it works as intended: go where the change is, do what a user would do to see it (open the menu, hover the row, type in the field, switch the tab…), and take a screenshot at each state that matters, before and after an interaction when that is the point. Captions say what is being done or what to look at ("点击「全部隐藏」后的列表"), never what the result is or should be — the reviewer judges that from the picture, and the sandbox may differ from what you expect. Keep it short: usually 1–3 scenes, under 15 steps each. Don't show unrelated pages. Never press anything that quits, deletes, removes, updates, restarts or signs out. If the diff doesn't change anything a user can see (tests, comments, code that doesn't reach the screen), say so with ui_change false and no scenes.
+Write a plan that shows a reviewer exactly what this PR changes in the UI and whether it works as intended: go where the change is, do what a user would do to see it (open the menu, hover the row, type in the field, switch the tab…), and take a screenshot at each state that matters, before and after an interaction when that is the point. Captions say what is being done or what to look at ("点击「全部隐藏」后的列表"), never what the result is or should be — the reviewer judges that from the picture, and the sandbox may differ from what you expect. Keep it short: usually 1–3 scenes, under 15 steps each. Don't show unrelated pages. Never press anything that quits, deletes, removes, updates, restarts or signs out. Say ui_change false (and no scenes) only when the diff plainly changes nothing a user can see — only tests, comments, docs, or code that never reaches the screen; any change to the page's CSS, markup, text or behaviour is a UI change.
 
 Reply with JSON only:
 {
@@ -225,8 +294,8 @@ async function runStep(page, step, scene) {
       const file = `${String(++shotN).padStart(2, "0")}-${(step.name || "shot").replace(/[^a-z0-9-]/gi, "-").slice(0, 40)}.png`;
       // the screenshot without the drawn mouse and caption
       await page.evaluate(() => document.querySelector("[data-ui-preview]")?.style.setProperty("visibility", "hidden"));
+      let clip;
       try {
-        let clip;
         if (step.target) {
           const b = await (await locate(page, step)).boundingBox();
           if (b) {
@@ -288,10 +357,13 @@ async function main() {
   await look.close();
 
   const MAXDIFF = 150e3;
+  const code = await codeContext(diff, env("SRC_DIR")).catch((e) => (log("code context:", e.message), ""));
+  log(`code context: ${code.length} characters`);
   const ask = [
     { role: "system", content: GUIDE },
     { role: "user", content: `PR title: ${env("PR_TITLE", "")}\n\nPR description:\n${body.slice(0, 6000)}\n\nDiff${diff.length > MAXDIFF ? " (cut)" : ""}:\n${diff.slice(0, MAXDIFF)}\n\n` +
-      Object.entries(outlines).map(([k, v]) => `=== outline: ${k} ===\n${v}`).join("\n\n") },
+      Object.entries(outlines).map(([k, v]) => `=== outline: ${k} ===\n${v}`).join("\n\n") +
+      (code ? `\n\n=== the page's code around the change (the PR's version), to see how to reach it ===\n${code}` : "") },
   ];
   let plan;
   try { plan = await deepseek(ask); }

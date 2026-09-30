@@ -29,6 +29,12 @@ scrolled to its end, in the tray panel (one agent open) and in the window:
 them and never back up; "Show less", and a row opened and closed, leave what
 was clicked where it is on every frame.
 
+`rail-tip.test.cjs` hovers the model picker's rail in Chromium and WebKit,
+English light and Chinese dark: an icon's name shows to its right, level with
+it and over no other icon (the browser's tooltip put Devin's name on ZCode's
+Z), moves at once to the next icon, and goes on a click, on leaving, and when
+Esc closes the picker; a rail icon focused from the keyboard is named too.
+
 `agent-models.test.cjs` opens Codex's model list from the line under its
 name, in Chromium and WebKit, English and Chinese: the line reads "Showing 8 /
 31 models" under the name, opening it moves nothing and puts it on the screen
@@ -235,7 +241,7 @@ the app says Omarchy's bar isn't there; in English and Chinese.
 With Node.js and Playwright available:
 
 ```sh
-node --test internal/gui/tests/menu-scroll.test.cjs internal/gui/tests/click-scroll.test.cjs internal/gui/tests/panel-fold.test.cjs internal/gui/tests/panel-routing.test.cjs internal/gui/tests/gateway-fold.test.cjs internal/gui/tests/routing-kind.test.cjs internal/gui/tests/balance-fix.test.cjs internal/gui/tests/cli-update.test.cjs internal/gui/tests/login-import.test.cjs internal/gui/tests/agy-launch.test.cjs internal/gui/tests/currency.test.cjs internal/gui/tests/usage-ledger.test.cjs internal/gui/tests/update-check.test.cjs internal/gui/tests/omarchy.test.cjs node --test internal/gui/tests/signin-callback.test.cjs internal/gui/tests/routing-steady.test.cjs internal/gui/tests/old-webkit.test.cjs internal/gui/tests/session-terminal.test.cjs internal/gui/tests/text-size.test.cjs internal/gui/tests/zcode-site.test.cjs
+node --test internal/gui/tests/menu-scroll.test.cjs internal/gui/tests/click-scroll.test.cjs internal/gui/tests/panel-fold.test.cjs internal/gui/tests/panel-routing.test.cjs internal/gui/tests/gateway-fold.test.cjs internal/gui/tests/routing-kind.test.cjs internal/gui/tests/balance-fix.test.cjs internal/gui/tests/cli-update.test.cjs internal/gui/tests/login-import.test.cjs internal/gui/tests/agy-launch.test.cjs internal/gui/tests/currency.test.cjs internal/gui/tests/usage-ledger.test.cjs internal/gui/tests/update-check.test.cjs internal/gui/tests/omarchy.test.cjs node --test internal/gui/tests/signin-callback.test.cjs internal/gui/tests/routing-steady.test.cjs internal/gui/tests/old-webkit.test.cjs internal/gui/tests/session-terminal.test.cjs internal/gui/tests/text-size.test.cjs internal/gui/tests/zcode-site.test.cjs internal/gui/tests/rail-tip.test.cjs
 ```
 
 If Playwright is installed outside the repository, set `NODE_PATH` to the

@@ -1684,6 +1684,34 @@ function switchPickerGroup(id) {
   }).catch(() => {});
 }
 
+// a rail icon's name, beside it on the right: the browser's own tooltip
+// came up under the pointer, over the icon below — Devin's name on ZCode's
+// Z, as if that were ZCode's (Elan on X). Hovering from one icon to the
+// next moves it at once; the first waits a moment, as a tooltip does.
+let railTip = null, railTipTimer = 0, railTipShownAt = 0;
+function showRailTip(b, now) {
+  clearTimeout(railTipTimer);
+  const warm = railTip?.classList.contains("on") || performance.now() - railTipShownAt < 400;
+  const show = () => {
+    if (!b.isConnected || !pick?.modelPicker) return;
+    if (!railTip) { railTip = el("div", "rail-tip"); railTip.setAttribute("role", "tooltip"); document.body.append(railTip); }
+    railTip.textContent = b.getAttribute("aria-label");
+    const r = b.getBoundingClientRect(), w = railTip.offsetWidth;
+    const right = r.right + 8 + w <= innerWidth - 4;
+    railTip.style.left = (right ? r.right + 8 : Math.max(4, r.left - 8 - w)) + "px";
+    railTip.style.top = r.top + r.height / 2 + "px";
+    railTip.classList.toggle("left", !right);
+    railTip.classList.add("on");
+    railTipShownAt = performance.now();
+  };
+  if (now || warm) show(); else railTipTimer = setTimeout(show, 450);
+}
+function hideRailTip() {
+  clearTimeout(railTipTimer);
+  if (railTip?.classList.contains("on")) { railTip.classList.remove("on"); railTipShownAt = performance.now(); }
+}
+$("#pickerRail").addEventListener("scroll", hideRailTip, { passive: true });
+
 function renderPickerRail() {
   const rail = $("#pickerRail");
   rail.hidden = !pick?.modelPicker;
@@ -1698,10 +1726,13 @@ function renderPickerRail() {
     const add = (id, title, child) => {
       const b = el("button", "rail-item");
       b.dataset.group = id;
-      b.title = title;
       b.setAttribute("aria-label", title);
       b.append(child);
-      b.onclick = () => switchPickerGroup(id);
+      b.onclick = () => { hideRailTip(); switchPickerGroup(id); };
+      b.onpointerenter = () => showRailTip(b, false);
+      b.onpointerleave = hideRailTip;
+      b.onfocus = () => { if (b.matches(":focus-visible")) showRailTip(b, true); };
+      b.onblur = hideRailTip;
       rail.append(b);
     };
     add("all", t("All models"), svg("M3 3h4v4H3zM9 3h4v4H9zM3 9h4v4H3zM9 9h4v4H9z", 15, 1.4));
@@ -1869,6 +1900,7 @@ function popGhost(pop) {
 
 function closePicker() {
   if (!pick) return;
+  hideRailTip();
   pick.groupAnimation?.cancel();
   popGhost($("#pop"));
   pick.anchor.classList.remove("open");

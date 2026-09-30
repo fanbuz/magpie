@@ -50,7 +50,7 @@ for q in "Say hi in three words." "What is 17 * 23? Answer with the number." "Na
 done
 
 status=0
-MAGPIE_URL=$url OUT_DIR=$out SECRETS="$DEEPSEEK_API_KEY"$'\n'"$MAGPIE_WEB_KEY" \
+MAGPIE_URL=$url OUT_DIR=$out SRC_DIR=$src SECRETS="$DEEPSEEK_API_KEY"$'\n'"$MAGPIE_WEB_KEY" \
   node "$here/record.mjs" || status=$?
 sed -E 's/k=[A-Za-z0-9._~-]+/k=***/g' "$work/web.log" | tail -40
 exit $status

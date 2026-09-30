@@ -129,7 +129,7 @@ func cindy() *Agent {
 		Dir: dir, Path: dir,
 		detect: func() bool {
 			for _, d := range dirs {
-				if _, err := os.Stat(d); err == nil {
+				if isDir(d) {
 					return true
 				}
 			}

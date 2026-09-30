@@ -121,7 +121,7 @@ func claudeDesktop(home string) *Agent {
 				if d == "" {
 					continue
 				}
-				if _, err := os.Stat(d); err == nil {
+				if isDir(d) {
 					return true
 				}
 			}

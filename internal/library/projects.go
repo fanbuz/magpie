@@ -37,8 +37,8 @@ type Project struct {
 // projectSkillsDirs is where, in a project, each agent reads skills of its
 // own from — only an agent that does: Claude Code its .claude/skills, and
 // those that read the shared .agents/skills (Codex from where it runs to
-// the repository's root, Gemini CLI, OpenCode, Pi, Cursor, Copilot and Antigravity)
-// that one, so that one folder serves them all. MiMo Code, Crush, ZCode,
+// the repository's root, Gemini CLI, OpenCode, Pi, Cursor, Copilot, Antigravity,
+// Kimi Code, Goose and Grok Build) that one, so that one folder serves them all. MiMo Code, Crush, ZCode,
 // DeepSeek Harness and oh-my-pi say of no project folder magpie can rely on.
 var projectSkillsDirs = map[string]string{
 	"claude":   ".claude/skills",
@@ -49,6 +49,9 @@ var projectSkillsDirs = map[string]string{
 	"cursor":   ".agents/skills",
 	"copilot":  ".agents/skills",
 	"agy":      ".agents/skills",
+	"kimi":     ".agents/skills",
+	"goose":    ".agents/skills",
+	"grok":     ".agents/skills",
 }
 
 // ProjectSkillsDir is the folder, in a project, an agent reads its skills

@@ -989,6 +989,11 @@ body.window .foot { padding-left: 18px; }
 .rail-item.on { color: var(--fg); background: transparent; }
 .rail-item .ic { width: 16px; height: 16px; transition: transform 220ms cubic-bezier(.22, 1, .36, 1); }
 .rail-item.on .ic { transform: scale(1.04); }
+/* a rail icon's name, drawn beside it (renderPickerRail's showRailTip) */
+.rail-tip { position: fixed; z-index: 31; top: 0; left: 0; transform: translate(-3px, -50%); padding: 3px 8px; border-radius: 6px; background: var(--fg); color: var(--bg); font-size: 11.5px; font-weight: 500; line-height: 16px; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; pointer-events: none; opacity: 0; visibility: hidden; box-shadow: 0 2px 8px rgba(0, 0, 0, .18); transition: opacity 90ms ease-out, transform 140ms cubic-bezier(.22, 1, .36, 1), visibility 0s 90ms; }
+.rail-tip.left { transform: translate(3px, -50%); }
+.rail-tip.on { opacity: 1; visibility: visible; transform: translate(0, -50%); transition: opacity 90ms ease-out, transform 140ms cubic-bezier(.22, 1, .36, 1); }
+@media (prefers-reduced-motion: reduce) { .rail-tip, .rail-tip.on { transition: none; } }
 .rail-sep { width: 24px; height: 1px; margin: 2px 0; background: var(--line-2); flex: none; }
 .pop ul { list-style: none; overflow-y: auto; padding: 5px; min-width: 0; flex: 1 1 auto; contain: paint; }
 .pop li {
