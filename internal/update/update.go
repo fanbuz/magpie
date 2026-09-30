@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/proc"
 )
 
@@ -56,7 +57,17 @@ type Asset struct {
 	SHA256 string `json:"sha256"`
 }
 
-var client = &http.Client{Timeout: 10 * time.Minute}
+// client asks the feed and downloads a release through the proxy the rest
+// of magpie's requests take — Settings' Proxy, else the environment's, else
+// the system's (#294) — on a transport of its own, whatever the process has
+// done to http.DefaultTransport.
+var client = &http.Client{Timeout: 10 * time.Minute, Transport: proxied()}
+
+func proxied() http.RoundTripper {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = netproxy.Func
+	return t
+}
 
 // Latest asks the feed for the newest release.
 func Latest(ctx context.Context) (*Release, error) {

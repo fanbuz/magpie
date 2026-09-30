@@ -9060,7 +9060,7 @@ function renderTrayUsage(s, keep) {
 }
 const TRAY_EVERY = [1, 3, 5, 10, 30];
 
-// renderProxy: magpie's own requests to vendors follow the system proxy on
+// renderProxy: magpie's own requests to vendors, and its update checks, follow the system proxy on
 // their own; this row says which one, and lets it be turned off or set.
 let proxyCustom = false; // Custom picked, nothing typed yet
 function renderProxy(s, keep) {
@@ -9068,11 +9068,11 @@ function renderProxy(s, keep) {
   const mode = proxyCustom ? "custom" : cur;
   const sub = $("#proxySub");
   sub.textContent = {
-    settings: t("Requests to vendors go through {proxy}", { proxy: s.proxyNow }),
+    settings: t("Requests to vendors and update checks go through {proxy}", { proxy: s.proxyNow }),
     system: t("Following the system proxy, {proxy}", { proxy: s.proxyNow }),
     environment: t("Following HTTPS_PROXY, {proxy}", { proxy: s.proxyNow }),
-    off: t("Off: requests to vendors go direct"),
-    none: t("No system proxy found; requests to vendors go direct"),
+    off: t("Off: requests to vendors and update checks go direct"),
+    none: t("No system proxy found; requests to vendors and update checks go direct"),
   }[s.proxySource] || "";
   const box = $("#proxySegs");
   box.replaceChildren();
@@ -9716,6 +9716,9 @@ $("#sync").onclick = async () => {
   const b = $("#sync");
   if (b.classList.contains("spin")) return;
   b.classList.add("spin");
+  // a newer magpie is looked for too: the Update pill beside it shows once
+  // it's in (inaction on Discord looked for it here, not in Settings)
+  api("update/check", {}).then(renderUpdateBadge, () => {});
   try {
     state = await api("sync", {});
     renderAgents();
