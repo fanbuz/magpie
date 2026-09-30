@@ -112,7 +112,7 @@
 .rt-steps li.wait::before { animation: rtlive 1.8s infinite; }
 .rt-off { padding: 18px 4px; text-align: center; color: var(--muted); font-size: 13px; }
 @media (prefers-reduced-motion: reduce) {
-  .rt-accts li.on .dot, .rt-wires path.live, .rt-sky .pkt.held, .rt-accts li.new, .rt-accts li.hit, .rt-hub.tick, .rt-src.tick, .rt-cap.in, .rt-steps li.wait::before, .masking .pii { animation: none; }
+  .rt-accts li.on .dot, .rt-wires path.live, .rt-sky .pkt.held, .rt-accts li.new, .rt-accts li.hit, .rt-hub.tick, .rt-src.tick, .rt-cap.in, .rt-steps li.wait::before { animation: none; }
   .rt-accts li { transition: none; }
 }
 /* a narrow list: what a row says goes under its name */
@@ -140,11 +140,6 @@
 /* on, it says so in its struck eye and its words, a shade darker: a
    page tool, not a banner */
 .rt-mask[aria-pressed="true"] { color: var(--fg-2); }
-/* an email, hidden: stand-in letters of its shape, softly blurred —
-   coming in out of focus when asked for */
-.pii { filter: blur(2.2px); opacity: .5; user-select: none; }
-.masking .pii { animation: rtpii .35s ease-out both; }
-@keyframes rtpii { from { filter: blur(0); opacity: 1; } }
 #view-routing .rt { margin: 0; }
 .rt-more { container-type: inline-size; padding-bottom: 12px; }
 .rt-cols { display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 16px; }

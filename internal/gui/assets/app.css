@@ -229,7 +229,7 @@ body.panel .seg { display: none; }
 .top.tight .brand > span:not(.logo), .top.tight .update span { display: none; }
 .top.tight .update { width: 22px; padding: 0; justify-content: center; margin-right: 4px; }
 body.window .top.cramped .seg { position: relative; left: auto; top: auto; transform: none; margin: 0 auto; } /* relative still: its thumb sits in it, not over the whole header */
-.top.cramped .seg button { padding: 0 8px; }
+.top.cramped .seg button { padding: 0 6px; }
 @keyframes update-in { from { opacity: 0; transform: translateY(-3px) scale(.94); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -1871,3 +1871,8 @@ body.window .row.agent .who.with-models { flex-wrap: wrap; row-gap: 0; }
 .am-reset:hover:not(:disabled) { color: var(--accent); }
 .am-reset:disabled { color: var(--faint); cursor: default; }
 .am-dot { color: var(--faint); }
+
+/* Screenshot privacy: field values remain intact for editing and submission. */
+.privacy-value { -webkit-text-security: disc; }
+#privacyMode svg { width: 14px; height: 14px; }
+#privacyMode[aria-pressed="true"] { background: var(--pill); color: var(--fg); }
