@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -13,10 +14,12 @@ import (
 	"github.com/yetone/magpie/internal/settings"
 )
 
-// Settings → Usage in the menu bar: one subscription's or plan's windows
-// beside the tray icon ("42% · 18%"), for keeping an eye on them without
-// opening magpie. The Mac's menu bar shows the text; Windows' tray has no
-// room for any, and gets it in the icon's tooltip only.
+// Settings → Usage in the menu bar: the windows of the subscriptions and
+// plans ticked there, beside the tray icon, for keeping an eye on them
+// without opening magpie. The Mac's menu bar draws each as its logo with
+// its two windows stacked, "42%" over "18%", side by side (trayimage); a
+// tray elsewhere gets them as text ("42% · 18% | 10% · 5%"), Windows' in
+// the icon's tooltip only, having no room for any.
 
 // trayUsageEvery is how often the text is brought up to date, as Settings
 // says (every 3 minutes unless told otherwise). The vendors are asked no
@@ -121,19 +124,167 @@ func until(d time.Duration) string {
 	return fmt.Sprintf("%dm", max(mins, 1))
 }
 
-// trayUsageCard is the card settings.TrayUsage names, among the Usage
-// page's (cached as there); false when it is off or gone.
-func trayUsageCard(ctx context.Context) (provider.SubscriptionQuota, bool) {
-	id := settings.Load().TrayUsage
-	if id == "" {
-		return provider.SubscriptionQuota{}, false
+// trayUsageCards are the cards settings.TrayUsages names, in its order,
+// among the Usage page's (cached as there); one gone is left out.
+func trayUsageCards(ctx context.Context, ids []string) []provider.SubscriptionQuota {
+	if len(ids) == 0 {
+		return nil
 	}
-	cards := provider.Quotas(ctx)
-	i := slices.IndexFunc(cards, func(q provider.SubscriptionQuota) bool { return trayCardID(q) == id })
-	if i < 0 {
-		return provider.SubscriptionQuota{}, false
+	return trayPick(provider.Quotas(ctx), ids)
+}
+
+func trayPick(cards []provider.SubscriptionQuota, ids []string) []provider.SubscriptionQuota {
+	var out []provider.SubscriptionQuota
+	for _, id := range ids {
+		if i := slices.IndexFunc(cards, func(q provider.SubscriptionQuota) bool { return trayCardID(q) == id }); i >= 0 {
+			out = append(out, cards[i])
+		}
 	}
-	return cards[i], true
+	return out
+}
+
+// trayCell is a card as the Mac's menu bar draws it: its logo, and its
+// label's parts stacked, the shortest window over the longer ("42%" over
+// "18%"), or its balance alone.
+type trayCell struct {
+	Icon   []byte // the logo as the Usage page has it (SVG or PNG); nil for none
+	Mono   bool   // a black glyph, drawn in the menu bar's text colour
+	Letter string // drawn in its place when there is no logo, or it can't be read
+	Rows   []string
+}
+
+// trayUsageView is what the tray shows for the cards: a cell for each
+// that has a label; the labels as one line of text, " | " between cards,
+// for a tray that shows text and not the cells; and the tooltip spelling
+// each out.
+func trayUsageView(cards []provider.SubscriptionQuota, now time.Time, left bool) (cells []trayCell, label, tip string) {
+	var labels, tips []string
+	for _, q := range cards {
+		l, t := trayUsageText(q, now, left)
+		if t != "" {
+			tips = append(tips, t)
+		}
+		if l == "" {
+			continue
+		}
+		labels = append(labels, l)
+		c := trayCell{Rows: strings.Split(l, " · ")}
+		for i, r := range c.Rows {
+			c.Rows[i] = trayRow(r)
+		}
+		c.Icon, c.Mono = trayIconFile(q.Icon)
+		if r := []rune(strings.TrimSpace(q.Name)); len(r) > 0 {
+			c.Letter = strings.ToUpper(string(r[0]))
+		}
+		cells = append(cells, c)
+	}
+	return cells, strings.Join(labels, " | "), strings.Join(tips, "\n\n")
+}
+
+// trayRow is a cell's row cut to fit the menu bar: a balance is a few
+// figures ("¥12345.67"), but one read from a plan's own page can be any
+// text, and the whole of it is in the tooltip.
+func trayRow(r string) string {
+	if rs := []rune(r); len(rs) > trayRowMax {
+		return strings.TrimSpace(string(rs[:trayRowMax-1])) + "…"
+	}
+	return r
+}
+
+const trayRowMax = 10
+
+// trayIconFile is a card's logo among the page's icons, as its icon() has
+// it: a "-color" one and the PNGs in their own colours, the others a black
+// glyph (a mask there); nil when there is no such file (a picture the user
+// gave their own provider isn't one).
+func trayIconFile(name string) (b []byte, mono bool) {
+	if name == "" || strings.ContainsAny(name, `/\:`) {
+		return nil, false
+	}
+	if b, err := assets.ReadFile("assets/icons/" + name + ".png"); err == nil {
+		return b, false
+	}
+	b, err := assets.ReadFile("assets/icons/" + name + ".svg")
+	if err != nil {
+		return nil, false
+	}
+	return svgArcFlags(b), !strings.HasSuffix(name, "-color")
+}
+
+var svgPathData = regexp.MustCompile(`\sd="([^"]*[aA][^"]*)"`)
+
+// svgArcFlags spaces out the flags of a path's arcs ("a4.5 4.5 0 004.5 0",
+// the flags run into the number after them), which browsers read and the
+// Mac's own SVG drawing doesn't: it draws a line for such an arc, and
+// Codex's logo comes out a blot.
+func svgArcFlags(svg []byte) []byte {
+	return svgPathData.ReplaceAllFunc(svg, func(m []byte) []byte {
+		d := string(svgPathData.FindSubmatch(m)[1])
+		var out []string
+		cmd, arg := byte(0), 0
+		for i := 0; i < len(d); {
+			c := d[i]
+			switch {
+			case c == ' ' || c == ',' || c == '\t' || c == '\n' || c == '\r':
+				i++
+			case c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z':
+				if c == 'e' || c == 'E' { // not a command: a number's exponent, never alone
+					return m
+				}
+				cmd, arg = c, 0
+				out = append(out, string(c))
+				i++
+			case (cmd == 'a' || cmd == 'A') && (arg%7 == 3 || arg%7 == 4):
+				if c != '0' && c != '1' {
+					return m
+				}
+				out = append(out, string(c))
+				arg++
+				i++
+			default:
+				j := svgNumber(d, i)
+				if j == i {
+					return m
+				}
+				out = append(out, d[i:j])
+				arg++
+				i = j
+			}
+		}
+		return []byte(` d="` + strings.Join(out, " ") + `"`)
+	})
+}
+
+// svgNumber is where the number at d[i:] ends: a sign, digits with at most
+// one point, an exponent.
+func svgNumber(d string, i int) int {
+	j := i
+	if j < len(d) && (d[j] == '-' || d[j] == '+') {
+		j++
+	}
+	digits, point := 0, false
+	for j < len(d) && (d[j] >= '0' && d[j] <= '9' || d[j] == '.' && !point) {
+		if d[j] == '.' {
+			point = true
+		} else {
+			digits++
+		}
+		j++
+	}
+	if digits == 0 {
+		return i
+	}
+	if j < len(d) && (d[j] == 'e' || d[j] == 'E') {
+		k := j + 1
+		if k < len(d) && (d[k] == '-' || d[k] == '+') {
+			k++
+		}
+		if k < len(d) && d[k] >= '0' && d[k] <= '9' {
+			for j = k; j < len(d) && d[j] >= '0' && d[j] <= '9'; j++ {
+			}
+		}
+	}
+	return j
 }
 
 // onTrayUsage brings the tray's text up to date at once, when the Settings

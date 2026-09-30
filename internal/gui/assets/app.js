@@ -5775,24 +5775,43 @@ function closeProtoMenu() {
   document.removeEventListener("keydown", protoMenu.keys, true);
   document.removeEventListener("scroll", protoMenu.scroll, true);
   removeEventListener("resize", closeProtoMenu);
+  const done = protoMenu.done;
   protoMenu = null;
+  done?.();
 }
+// openProtoMenu picks one of opts, or several when value is a list: each
+// ticked or unticked in turn with the menu kept open, choose given the
+// ticked ones, in the menu's order, once it closes (and only if they
+// changed); "" is none of them and closes it, "\x00" a note to read.
 function openProtoMenu(anchor, opts, value, choose, head = "Protocol this key speaks", cls = "") {
   closeProtoMenu();
+  const multi = Array.isArray(value);
+  let picked = multi ? [...value] : null;
+  const isOn = (v) => !multi ? v === value : v === "" ? !picked.length : picked.includes(v);
   const box = el("div", "pop proto-menu" + (cls ? " " + cls : ""));
   box.setAttribute("role", "menu");
   box.append(el("div", "pm-head", t(head)));
+  const tick = (b, o) => {
+    b.classList.toggle("on", isOn(o.v));
+    b.setAttribute("aria-checked", isOn(o.v));
+    b.firstChild.replaceChildren(...(isOn(o.v) ? [svg(CHECK, 12, 1.9)] : []));
+  };
   const items = opts.map((o) => {
-    const b = el("button", "pm-item" + (o.v === value ? " on" : ""));
+    const b = el("button", "pm-item");
     b.type = "button";
-    b.setAttribute("role", "menuitemradio");
-    b.setAttribute("aria-checked", o.v === value);
-    const tick = el("span", "pm-tick");
-    if (o.v === value) tick.append(svg(CHECK, 12, 1.9));
+    b.setAttribute("role", multi && o.v && o.v !== "\x00" ? "menuitemcheckbox" : "menuitemradio");
     const words = el("span", "pm-words");
     words.append(el("span", "pm-name", t(o.name)), el("span", "pm-note", t(o.note)));
-    b.append(tick, words);
-    b.onclick = (e) => { e.stopPropagation(); closeProtoMenu(); choose(o.v); };
+    b.append(el("span", "pm-tick"), words);
+    tick(b, o);
+    b.onclick = (e) => {
+      e.stopPropagation();
+      if (!multi) { closeProtoMenu(); choose(o.v); return; }
+      if (o.v === "\x00") return;
+      if (!o.v) { picked = []; closeProtoMenu(); return; }
+      picked = picked.includes(o.v) ? picked.filter((v) => v !== o.v) : [...picked, o.v];
+      items.forEach((it, i) => tick(it, opts[i]));
+    };
     b.onmouseenter = () => b.focus({ preventScroll: true });
     box.append(b);
     return b;
@@ -5821,7 +5840,11 @@ function openProtoMenu(anchor, opts, value, choose, head = "Protocol this key sp
   document.addEventListener("keydown", keys, true);
   document.addEventListener("scroll", scroll, true);
   addEventListener("resize", closeProtoMenu);
-  protoMenu = { box, anchor, outside, keys, scroll };
+  const done = multi ? () => {
+    if (picked.length === value.length && picked.every((v) => value.includes(v))) return;
+    choose(opts.map((o) => o.v).filter((v) => picked.includes(v)));
+  } : null;
+  protoMenu = { box, anchor, outside, keys, scroll, done };
   (items.find((b) => b.classList.contains("on")) || items[0]).focus({ preventScroll: true });
 }
 
@@ -9412,8 +9435,9 @@ function importForm() {
 // provider, and the account when there is one.
 const trayCardID = (q) => q.user ? q.provider + "|" + q.user : q.provider;
 
-// renderTrayUsage: the subscription or plan whose windows show beside the
-// tray icon. The cards are the Usage page's, asked for when the menu opens.
+// renderTrayUsage: the subscriptions and plans whose windows show beside
+// the tray icon, side by side. The cards are the Usage page's, asked for
+// when the menu opens; any number are ticked in it.
 function renderTrayUsage(s, keep) {
   $("#quotaLeftSegs").replaceChildren(segs([[false, t("Used")], [true, t("Left")]], !!s.quotaLeft,
     (on) => { if (on !== quotaLeft) setQuotaLeft(on); }));
@@ -9425,17 +9449,18 @@ function renderTrayUsage(s, keep) {
   $("#trayUsageRow").hidden = web;
   if (web) return;
   const mac = document.body.classList.contains("mac");
-  $("#trayUsageSub").textContent = mac ? t("Show a subscription's use beside magpie's icon in the menu bar, refreshed every few minutes")
-    : t("Show a subscription's use when pointing at magpie's tray icon, refreshed every few minutes");
-  const id = s.trayUsage || "";
-  const pill = el("button", "proto pick" + (id ? " set" : ""));
+  $("#trayUsageSub").textContent = mac ? t("Show your subscriptions' use beside magpie's icon in the menu bar, side by side, refreshed every few minutes")
+    : t("Show your subscriptions' use when pointing at magpie's tray icon, refreshed every few minutes");
+  const ids = s.trayUsages || (s.trayUsage ? [s.trayUsage] : []);
+  const pill = el("button", "proto pick" + (ids.length ? " set" : ""));
   pill.type = "button";
   const paint = () => {
-    const card = (quotas || []).find((q) => trayCardID(q) === id);
-    pill.replaceChildren(el("span", "", !id ? t("Off") : card ? card.name : id.split("|")[0]), svg(CHEV, 11, 1.6));
+    const card = (quotas || []).find((q) => trayCardID(q) === ids[0]);
+    pill.replaceChildren(el("span", "", !ids.length ? t("Off") : ids.length > 1 ? t("{n} subscriptions", { n: ids.length })
+      : card ? card.name : ids[0].split("|")[0]), svg(CHEV, 11, 1.6));
   };
   paint();
-  if (id && !quotas) loadQuotas().then(paint);
+  if (ids.length === 1 && !quotas) loadQuotas().then(paint);
   pill.onclick = async (e) => {
     e.stopPropagation();
     if (pill.classList.contains("open")) return closeProtoMenu();
@@ -9443,13 +9468,16 @@ function renderTrayUsage(s, keep) {
     const cards = (quotas || []).filter((q) => !q.error && (q.windows?.length || q.balance));
     const opts = [{ v: "", name: "Off", note: "" },
       ...cards.map((q) => ({ v: trayCardID(q), name: q.name, note: [q.plan, q.user].filter(Boolean).join(" · ") }))];
+    // one ticked that isn't there now (signed out, or not answering) stays
+    // to be unticked
+    for (const id of ids) if (!opts.some((o) => o.v === id)) opts.push({ v: id, name: id.split("|")[0], note: id.split("|")[1] || "" });
     if (!cards.length) opts.push({ v: "\x00", name: "No subscriptions yet", note: "Sign in to one, or add a plan's key, and it shows on the Usage page" });
-    openProtoMenu(pill, opts, id, (v) => { if (v !== id && v !== "\x00") savePrefs({ ...keep, trayUsage: v }); }, "Shown beside the icon");
+    openProtoMenu(pill, opts, ids, (trayUsages) => savePrefs({ ...keep, trayUsages }), "Shown beside the icon");
   };
   $("#trayUsagePick").replaceChildren(pill);
   // how often it is asked for again, and whether it reads as used or left —
   // the Usage page's choice too (#122)
-  $("#trayEveryRow").hidden = !id;
+  $("#trayEveryRow").hidden = !ids.length;
   $("#trayEverySegs").replaceChildren(segs(TRAY_EVERY.map((m) => [m, t("{n} min", { n: m })]), s.trayUsageEvery || 3,
     (trayUsageEvery) => savePrefs({ ...keep, trayUsageEvery })));
 }
@@ -9854,6 +9882,7 @@ function wbCheckinLine(r) {
 function prefsKeep(s) {
   return { theme: s.theme, lang: s.lang, tray: s.tray, dock: !!s.dock, dockWindow: !!s.dockWindow, proxy: s.proxy || "",
     sessionTerminal: s.sessionTerminal || "",
+    trayUsages: s.trayUsages || [],
     redact: !!s.redact, redactPersonal: !!s.redactPersonal, redactWords: s.redactWords || [], codexWarmup: s.codexWarmup || "",
     claudeWarmup: s.claudeWarmup || "", codexWarmAt: s.codexWarmAt || "", claudeWarmAt: s.claudeWarmAt || "", workbuddyCheckin: !!s.workbuddyCheckin, noStats: !!s.noStats,
     trayUsage: s.trayUsage || "", trayUsageEvery: s.trayUsageEvery || 3, vision: s.vision || "", imageGen: s.imageGen || "", currency: s.currency || "usd" };

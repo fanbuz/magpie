@@ -94,8 +94,13 @@ type Settings struct {
 	// gateway's /v1/images/generations when a request names no model): a
 	// model's id, "off", or empty for one magpie picks (gateway.drawer).
 	ImageGen string `json:"imageGen,omitempty"`
-	// TrayUsage is the subscription or plan whose windows are shown beside
-	// the tray icon, by its provider and account ("claude|a@b.c"); "" none.
+	// TrayUsages are the subscriptions and plans whose windows are shown
+	// beside the tray icon, in the order shown, each by its provider and
+	// account ("claude|a@b.c"); none when empty.
+	TrayUsages []string `json:"trayUsages,omitempty"`
+	// TrayUsage is TrayUsages' first, all a magpie before them read: a file
+	// with it and no TrayUsages shows that one, and it is kept written for
+	// an older magpie to go on showing it.
 	TrayUsage string `json:"trayUsage,omitempty"`
 	// TrayUsageEvery is how often, in minutes, that text is brought up to
 	// date; 0 is every 3 (one of TrayEvery).
@@ -400,6 +405,11 @@ func Save(s Settings) error {
 	}
 	s.RedactRules = rules
 	s.AgentOrder, s.AgentsHidden, s.AgentsShown = ids(s.AgentOrder), ids(s.AgentsHidden), ids(s.AgentsShown)
+	s.TrayUsages = ids(s.TrayUsages)
+	s.TrayUsage = ""
+	if len(s.TrayUsages) > 0 {
+		s.TrayUsage = s.TrayUsages[0]
+	}
 	if err := os.MkdirAll(Dir(), 0o755); err != nil {
 		return err
 	}
@@ -434,6 +444,11 @@ func (s Settings) normal() Settings {
 	}
 	if s.TextSize == 0 {
 		s.TextSize = 100
+	}
+	// one card, as a magpie before TrayUsages kept it; an empty list
+	// sent on purpose (all of them turned off) stays empty
+	if s.TrayUsages == nil && s.TrayUsage != "" {
+		s.TrayUsages = []string{s.TrayUsage}
 	}
 	// a time of day as 06:00 whichever way it came (6:00, 06:00:00)
 	for _, at := range []*string{&s.CodexWarmAt, &s.ClaudeWarmAt} {

@@ -524,10 +524,18 @@ func (h *host) flap() {
 		if err != nil {
 			break
 		}
-		h.tray.SetTemplateIcon(b)
+		h.setBird(b)
 		time.Sleep(30 * time.Millisecond)
 	}
-	h.tray.SetTemplateIcon(trayIcon)
+	h.setBird(trayIcon)
+}
+
+// setBird sets a frame of the bird: in the menu bar's image while it shows
+// the usage cards (trayImageFrame), else as the tray's icon.
+func (h *host) setBird(b []byte) {
+	if !trayImageFrame(b) {
+		h.tray.SetTemplateIcon(b)
+	}
 }
 
 // panelOptions: the tray panel's window, frameless and see-through. On
