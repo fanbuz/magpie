@@ -629,7 +629,7 @@ body.window .field.solo { grid-column: auto; }
 .led .n { text-align: right; }
 .led .faint { color: var(--faint); }
 .led .muted { color: var(--muted); }
-.led .when { color: var(--muted); }
+.led th, .led .when, .led .model-value { color: var(--fg-2); }
 .led .model, .led .where { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
 .led .where { color: var(--fg-2); }
 .led .where-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

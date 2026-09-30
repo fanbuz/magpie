@@ -6316,7 +6316,7 @@ function ledTime(when) {
 // another than the one sent; plain when it is that one under a dated name
 function ledServed(r) {
   if (!r.served) return el("span", "faint", "—");
-  if (!r.swapped) return el("span", "muted", r.served);
+  if (!r.swapped) return el("span", "model-value", r.served);
   const k = el("span", "swap", r.served);
   k.title = window.swapWhy ? window.swapWhy({ model: r.model, served: r.served }) : "";
   return k;
@@ -6889,7 +6889,7 @@ function renderLedger() {
     if (badges.childElementCount) wc.append(badges);
     // the model sent is what the gateway sent the vendor: a session file has none
     // The log names a model, but does not capture the outbound HTTP request.
-    td(r.model || "—", "model" + (r.source === "log" ? " faint" : ""), r.source === "log" && r.model ? t("Model recorded in the local session log; the outbound HTTP request was not captured.") : r.model);
+    td(r.model || "—", "model " + (r.model ? "model-value" : "faint"), r.source === "log" && r.model ? t("Model recorded in the local session log; the outbound HTTP request was not captured.") : r.model);
     td(ledServed(r), "model");
     td(r.effort || "—", r.effort ? "" : "faint");
     td(ledNum(r.in), "n");
