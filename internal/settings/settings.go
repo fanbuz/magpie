@@ -39,7 +39,7 @@ type Settings struct {
 	// menu bar too full to show its icon.
 	Dock bool `json:"dock,omitempty"`
 	// PrivacyMode hides email addresses in the desktop and web UI for screenshots.
-	PrivacyMode bool `json:"privacyMode"`
+	PrivacyMode bool `json:"privacyMode,omitempty"`
 	// DockWindow shows it in the Dock only while its window is open, so
 	// Cmd-Tab reaches the window without an icon kept there the rest of
 	// the time. Dock wins over it.

@@ -89,6 +89,13 @@ func TestPrivacyModeSharedAndPersisted(t *testing.T) {
 	if read(request("POST", "/api/settings/privacy", `{"on":false}`)) {
 		t.Fatal("privacy mode did not disable")
 	}
+	stored, err := json.Marshal(settings.Load())
+	if err != nil || strings.Contains(string(stored), `"privacyMode"`) {
+		t.Fatalf("disabled privacy mode should be omitted from settings: %s, %v", stored, err)
+	}
+	if r := request("GET", "/boot.js", ""); !strings.Contains(r.Body.String(), `"privacyMode":false`) {
+		t.Fatalf("boot must explicitly enable synchronization while off: %s", r.Body)
+	}
 	// Closing a hidden webview cancels its outstanding wait.
 	cancelled, stop := context.WithCancel(context.Background())
 	stop()

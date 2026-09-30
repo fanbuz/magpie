@@ -258,6 +258,9 @@ failed assertions. These browser checks run separately from `make test`.
 
 `mask-emails.test.cjs` checks the global Privacy mode switch in the window and
 440px quick panel, with separate browser storage and a shared settings endpoint.
+Routing and Settings share the same state, including the tray-account picker.
+Version-pinned commands stay readable in text and inputs; email stand-ins retain
+the blurred style. Repeated preference refreshes while off do not scan the page.
 It covers subscriptions, provider accounts, partly masked and Unicode addresses,
 updated text/tooltips, transient UI, preserved form values, two-way switching,
 save errors, reloads, keyboard access, and the old local preference migration.
