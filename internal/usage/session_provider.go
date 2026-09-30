@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"cmp"
 	"encoding/json"
 	"net/url"
 	"path/filepath"
@@ -40,11 +41,14 @@ type desktopSessionIdentity struct {
 
 type sessionResolver struct {
 	identities []provider.SessionIdentity
-	providers  map[string]codexSessionProvider
-	desktop    map[string]desktopSessionIdentity // absolute metadata file
-	bySession  map[string][]desktopSessionIdentity
-	emails     map[string]string // exact account/organization identity
-	roots      []string
+	// signedIn are magpie's own subscriptions (codex, claude) by agent: a
+	// session call of one of their accounts is theirs, beside the gateway's
+	signedIn  map[string]string
+	providers map[string]codexSessionProvider
+	desktop   map[string]desktopSessionIdentity // absolute metadata file
+	bySession map[string][]desktopSessionIdentity
+	emails    map[string]string // exact account/organization identity
+	roots     []string
 }
 
 func newSessionResolver(logs []sessions.Call) *sessionResolver {
@@ -53,6 +57,12 @@ func newSessionResolver(logs []sessions.Call) *sessionResolver {
 		return r
 	}
 	r.identities = provider.SessionIdentities(sessions.CodexDir())
+	r.signedIn = map[string]string{}
+	for _, p := range provider.All() {
+		if p.Account != nil && (p.Account.Agent == "codex" || p.Account.Agent == "claude") && p.ID == p.Account.Agent {
+			r.signedIn[p.Account.Agent] = p.ID
+		}
+	}
 	r.providers, _ = filememo.Read("session codex providers", filepath.Join(sessions.CodexDir(), "config.toml"), func(b []byte) (map[string]codexSessionProvider, error) {
 		var c struct {
 			Providers map[string]codexSessionProvider `toml:"model_providers"`
@@ -170,6 +180,11 @@ func (r *sessionResolver) resolve(c sessions.Call) sessionAttribution {
 		p, ok := r.providers[c.Upstream]
 		if c.Upstream == "openai" && (!ok || officialOpenAI(p.BaseURL)) ||
 			c.Upstream != "" && ok && officialOpenAI(p.BaseURL) && (p.BaseURL != "" || p.RequiresOpenAIAuth) {
+			// the creator is one of magpie's Codex accounts: the same
+			// subscription as the gateway's Codex calls, and told as them
+			if id := r.signedIn["codex"]; id != "" && user != "" {
+				return sessionAttribution{provider: id, user: user, account: user}
+			}
 			return sessionAttribution{provider: SessionOpenAIProvider, account: user}
 		}
 		// A creator identity proves who owns the session, not which service
@@ -206,6 +221,15 @@ func (r *sessionResolver) resolve(c sessions.Call) sessionAttribution {
 	}
 	if !id.official {
 		return sessionAttribution{provider: UnknownProvider, account: id.email}
+	}
+	// the account and organization of one of magpie's Claude sign-ins: the
+	// same subscription as the gateway's Claude calls
+	if pid := r.signedIn["claude"]; pid != "" {
+		for _, s := range r.identities {
+			if s.Agent == "claude" && s.AccountID == id.account && s.OrganizationID == id.org {
+				return sessionAttribution{provider: pid, user: cmp.Or(id.email, s.User)}
+			}
+		}
 	}
 	return sessionAttribution{provider: SessionAnthropicProvider, user: id.email}
 }

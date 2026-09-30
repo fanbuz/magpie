@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -178,5 +179,88 @@ func TestModelsNeverEstablishProviderOrAccount(t *testing.T) {
 		if len(actual) != 1 || actual[0].Provider != provider || actual[0].Host == "" || actual[0].Source != "" {
 			t.Fatalf("third-party gateway route changed: %+v", actual)
 		}
+	}
+}
+
+func TestSessionCallsOfMagpiesAccountsAreItsProviders(t *testing.T) {
+	account, org := "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
+	r := &sessionResolver{
+		identities: []provider.SessionIdentity{
+			{Agent: "codex", AccountID: "a-mine", UserID: "u-mine", User: "mine@example.com"},
+			{Agent: "claude", AccountID: account, OrganizationID: org, User: "claude@example.com"},
+		},
+		signedIn:  map[string]string{"codex": "codex", "claude": "claude"},
+		providers: map[string]codexSessionProvider{"custom": {RequiresOpenAIAuth: true}, "relay": {BaseURL: "https://relay.example.com", RequiresOpenAIAuth: true}},
+		desktop:   map[string]desktopSessionIdentity{},
+		bySession: map[string][]desktopSessionIdentity{
+			"mine":     {{account: account, org: org, email: "claude@example.com", official: true}},
+			"other":    {{account: account, org: "33333333-3333-4333-8333-333333333333", email: "team@example.com", official: true}},
+			"third-3p": {{account: account, org: org, email: "claude@example.com"}},
+		},
+	}
+	for _, tc := range []struct {
+		name string
+		call sessions.Call
+		want sessionAttribution
+	}{
+		{"Codex on magpie's account", sessions.Call{Agent: "codex", Upstream: "custom", AccountID: "a-mine", UserID: "u-mine"}, sessionAttribution{provider: "codex", user: "mine@example.com", account: "mine@example.com"}},
+		{"Codex on another account", sessions.Call{Agent: "codex", Upstream: "custom", AccountID: "a-other"}, sessionAttribution{provider: SessionOpenAIProvider}},
+		{"Codex with no account recorded", sessions.Call{Agent: "codex", Upstream: "openai"}, sessionAttribution{provider: SessionOpenAIProvider}},
+		{"magpie's account through a relay", sessions.Call{Agent: "codex", Upstream: "relay", AccountID: "a-mine", UserID: "u-mine"}, sessionAttribution{provider: UnknownProvider, account: "mine@example.com"}},
+		{"Claude Desktop on magpie's account", sessions.Call{Agent: "claude-desktop", Session: "mine"}, sessionAttribution{provider: "claude", user: "claude@example.com"}},
+		{"Claude Desktop in another organization", sessions.Call{Agent: "claude-desktop", Session: "other"}, sessionAttribution{provider: SessionAnthropicProvider, user: "team@example.com"}},
+		{"Claude-3p on magpie's account's ids", sessions.Call{Agent: "claude-desktop", Session: "third-3p"}, sessionAttribution{provider: UnknownProvider, account: "claude@example.com"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := r.resolve(tc.call); got != tc.want {
+				t.Fatalf("got %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+	// magpie signed out of Codex: the vendor, not a provider it doesn't have
+	r.signedIn = map[string]string{}
+	if got := r.resolve(sessions.Call{Agent: "codex", Upstream: "custom", AccountID: "a-mine", UserID: "u-mine"}); got.provider != SessionOpenAIProvider {
+		t.Fatalf("signed out, got %+v", got)
+	}
+}
+
+func TestLedgerTellsCodexSessionCallsAsMagpiesCodex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	if err := os.MkdirAll(sessions.CodexDir(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	claims := `{"email":"mine@example.com","https://api.openai.com/auth":{"chatgpt_account_id":"a","chatgpt_user_id":"u","chatgpt_plan_type":"plus"}}`
+	jwt := "h." + base64.RawURLEncoding.EncodeToString([]byte(claims)) + ".sig"
+	auth, _ := json.Marshal(map[string]any{"auth_mode": "chatgpt", "tokens": map[string]string{"account_id": "a", "id_token": jwt, "access_token": jwt, "refresh_token": "r"}})
+	os.WriteFile(filepath.Join(sessions.CodexDir(), "auth.json"), auth, 0600)
+	os.WriteFile(filepath.Join(sessions.CodexDir(), "config.toml"), []byte("model_provider = \"custom\"\n[model_providers.custom]\nname = \"OpenAI\"\nrequires_openai_auth = true\n"), 0600)
+	at := time.Now()
+	gateway := []Record{{Time: at.Add(-time.Minute), Agent: "opencode", Provider: "codex", Host: "mine@example.com", Model: "gpt-6-sol", Input: 5, Output: 1, Status: 200}}
+	logs := []sessions.Call{
+		{Time: at, Agent: "codex", Model: "gpt-6-sol", Upstream: "custom", AccountID: "a", UserID: "u", Tokens: sessions.Tokens{Input: 10, Output: 2}},
+		{Time: at, Agent: "codex", Model: "gpt-6-sol", Upstream: "custom", AccountID: "someone-else", Tokens: sessions.Tokens{Input: 7, Output: 1}},
+	}
+	rows, _, _, providers := ledgerWith(time.Time{}, Filter{}, gateway, logs)
+	if len(rows) != 3 || !slices.Equal(providers, []string{"codex", SessionOpenAIProvider}) {
+		t.Fatalf("providers %v", providers)
+	}
+	var mine []Row
+	for _, b := range Breakdown(rows, "provider") {
+		if b.ID == "codex" && b.Calls != 2 {
+			t.Fatalf("the gateway's and the session file's Codex calls are one provider: %+v", b)
+		}
+	}
+	for _, row := range rows {
+		if row.Provider == "codex" {
+			mine = append(mine, row)
+		}
+	}
+	if len(mine) != 2 || mine[0].Host != "mine@example.com" || mine[1].Host != "mine@example.com" {
+		t.Fatalf("magpie's Codex rows %+v", mine)
 	}
 }
