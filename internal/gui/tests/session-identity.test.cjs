@@ -57,7 +57,7 @@ for (const engine of ["chromium", "webkit"]) {
         for (const [i, account] of [[0,"historical@example.com"],[1,"recorded@example.com"],[2,"creator@example.com"],[7,"reviewer@example.com"]]) {
           const text = await cells.nth(i).textContent();
           const official = [0,1,7].includes(i);
-          assert(text.startsWith((official ? "OFFICIAL " : "") + account));
+          assert.equal(await cells.nth(i).locator(".where-name").textContent(),account);
           assert.equal(await cells.nth(i).locator(".official").count(),official ? 1 : 0);
           assert(text.includes(localName));
           assert.equal(await cells.nth(i).locator(".access").count(),0,"account login does not establish a supplier route");
@@ -105,9 +105,10 @@ for (const engine of ["chromium", "webkit"]) {
           const layout = await cells.nth(7).evaluate(cell => {
             const badges = [...cell.querySelectorAll(".source-badges .src")].map(n => n.getBoundingClientRect());
             const bounds = cell.getBoundingClientRect();
-            return badges.every(b => b.top > bounds.top + 14 && b.left >= bounds.left && b.right <= bounds.right && b.bottom <= bounds.bottom);
+            const name = cell.querySelector(".where-name").getBoundingClientRect();
+            return badges.length === 2 && Math.abs(badges[0].top - badges[1].top) < 1 && badges[0].right < badges[1].left && badges.every(b => b.top >= name.bottom && b.left >= bounds.left && b.right <= bounds.right && b.bottom <= bounds.bottom);
           });
-          assert(layout,"local-session badge stays visible below the email at " + width);
+          assert(layout,"both badges share one row below the account at " + width);
         }
         await page.setViewportSize({width:1200,height:900});
         await review.focus();

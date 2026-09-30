@@ -6792,16 +6792,16 @@ function renderLedger() {
     td(r.req || "—", "model" + (r.req ? "" : " faint"), r.req || t("Not kept for requests before this version"));
     const local = r.source === "log";
     const where = local ? (r.session_account || t("Local session")) : t(r.providerName) + (r.host ? " · " + r.host : "");
-    const wc = td(where, "where", where);
+    const wc = td(el("div", "where-name", where), "where", where);
+    const badges = el("div", "source-badges");
     if (local && r.session_account && r.session_official_login) {
       const badge = el("span", "src official", "OFFICIAL");
       badge.title = t("Official login confirmed for this account by local login metadata. This does not establish the route or authentication used for this request.");
-      wc.prepend(badge, " ");
+      badges.append(badge);
     }
     let access = "";
     if (!local && r.access === "subscription") access = "Subscription";
     else if (!local && r.access === "api") access = "API";
-    const badges = el("div", "source-badges");
     if (access) {
       const badge = el("span", "src access access-" + r.access, t(access));
       badge.title = t(access);
