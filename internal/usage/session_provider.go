@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -24,11 +25,6 @@ type sessionAttribution struct {
 	provider, user, account string
 }
 
-type codexSessionProvider struct {
-	BaseURL            string `toml:"base_url"`
-	RequiresOpenAIAuth bool   `toml:"requires_openai_auth"`
-}
-
 type desktopSessionInfo struct {
 	Session string `json:"cliSessionId"`
 	Email   string `json:"emailAddress"`
@@ -40,11 +36,12 @@ type desktopSessionIdentity struct {
 }
 
 type sessionResolver struct {
-	identities []provider.SessionIdentity
+	identities    []provider.SessionIdentity
+	builtinOpenAI bool
 	// signedIn are magpie's own subscriptions (codex, claude) by agent: a
 	// session call of one of their accounts is theirs, beside the gateway's
 	signedIn  map[string]string
-	providers map[string]codexSessionProvider
+	accounts  []provider.SessionIdentity        // actual gateway subscription identities
 	desktop   map[string]desktopSessionIdentity // absolute metadata file
 	bySession map[string][]desktopSessionIdentity
 	emails    map[string]string // exact account/organization identity
@@ -56,20 +53,15 @@ func newSessionResolver(logs []sessions.Call) *sessionResolver {
 	if len(logs) == 0 {
 		return r
 	}
+	r.builtinOpenAI = codexOfficialRoute()
 	r.identities = provider.SessionIdentities(sessions.CodexDir())
 	r.signedIn = map[string]string{}
 	for _, p := range provider.All() {
-		if p.Account != nil && (p.Account.Agent == "codex" || p.Account.Agent == "claude") && p.ID == p.Account.Agent {
+		if !p.Off && p.Account != nil && (p.Account.Agent == "codex" || p.Account.Agent == "claude") && p.ID == p.Account.Agent {
 			r.signedIn[p.Account.Agent] = p.ID
+			r.accounts = append(r.accounts, p.SessionIdentities()...)
 		}
 	}
-	r.providers, _ = filememo.Read("session codex providers", filepath.Join(sessions.CodexDir(), "config.toml"), func(b []byte) (map[string]codexSessionProvider, error) {
-		var c struct {
-			Providers map[string]codexSessionProvider `toml:"model_providers"`
-		}
-		err := toml.Unmarshal(b, &c)
-		return c.Providers, err
-	})
 	r.desktop = map[string]desktopSessionIdentity{}
 	r.bySession = map[string][]desktopSessionIdentity{}
 	r.emails = map[string]string{}
@@ -137,12 +129,12 @@ func (r *sessionResolver) noteEmail(account, org, email string) {
 }
 
 func (r *sessionResolver) codexUser(c sessions.Call) string {
-	if c.AccountID == "" {
+	if c.AccountID == "" || c.UserID == "" {
 		return ""
 	}
 	user := ""
 	for _, id := range r.identities {
-		if id.Agent != "codex" || id.AccountID != c.AccountID || c.UserID != "" && id.UserID != c.UserID {
+		if id.Agent != "codex" || id.AccountID != c.AccountID || id.UserID != c.UserID {
 			continue
 		}
 		if user != "" && user != id.User {
@@ -153,37 +145,24 @@ func (r *sessionResolver) codexUser(c sessions.Call) string {
 	return user
 }
 
-func officialOpenAI(base string) bool {
-	if base == "" {
-		return true // the agent's built-in OpenAI backend
-	}
-	u, err := url.Parse(base)
-	if err != nil || u.Scheme != "https" || u.User != nil {
-		return false
-	}
-	switch u.Hostname() {
-	case "api.openai.com", "chatgpt.com", "chat.openai.com":
-		return true
-	}
-	return false
-}
-
 func (r *sessionResolver) resolve(c sessions.Call) sessionAttribution {
 	unknown := sessionAttribution{provider: UnknownProvider}
 	if c.Agent == "codex" {
 		user := r.codexUser(c)
 		unknown.account = user
-		// The file names the provider id, not its address: that id is judged by
-		// today's configuration, for the built-in "openai" and a named one alike.
-		// A named provider is OpenAI's when it points at OpenAI, or signs in with
-		// the ChatGPT account and leaves the address to Codex's default.
-		p, ok := r.providers[c.Upstream]
-		if c.Upstream == "openai" && (!ok || officialOpenAI(p.BaseURL)) ||
-			c.Upstream != "" && ok && officialOpenAI(p.BaseURL) && (p.BaseURL != "" || p.RequiresOpenAIAuth) {
+		// A named provider ID has no historical endpoint or auth-mode snapshot.
+		// Today's config cannot establish its route. Only the recorded built-in
+		// OpenAI backend is attributed here, unless an endpoint override makes
+		// even that route uncertain; custom calls retain creator identity.
+		if c.Upstream == "openai" && r.builtinOpenAI {
 			// the creator is one of magpie's Codex accounts: the same
 			// subscription as the gateway's Codex calls, and told as them
-			if id := r.signedIn["codex"]; id != "" && user != "" {
-				return sessionAttribution{provider: id, user: user, account: user}
+			if id := r.signedIn["codex"]; id != "" && c.AccountID != "" && c.UserID != "" && user != "" {
+				for _, a := range r.accounts {
+					if a.Agent == "codex" && a.AccountID == c.AccountID && a.UserID == c.UserID && a.User == user {
+						return sessionAttribution{provider: id, user: user, account: user}
+					}
+				}
 			}
 			return sessionAttribution{provider: SessionOpenAIProvider, account: user}
 		}
@@ -225,11 +204,42 @@ func (r *sessionResolver) resolve(c sessions.Call) sessionAttribution {
 	// the account and organization of one of magpie's Claude sign-ins: the
 	// same subscription as the gateway's Claude calls
 	if pid := r.signedIn["claude"]; pid != "" {
-		for _, s := range r.identities {
+		for _, s := range r.accounts {
 			if s.Agent == "claude" && s.AccountID == id.account && s.OrganizationID == id.org {
 				return sessionAttribution{provider: pid, user: cmp.Or(id.email, s.User)}
 			}
 		}
 	}
 	return sessionAttribution{provider: SessionAnthropicProvider, user: id.email}
+}
+
+// Today's overrides cannot prove a historical route, but are enough to reject
+// the assumption that the built-in provider went directly to OpenAI. Magpie
+// itself sets openai_base_url when routing Codex through its gateway.
+func codexOfficialRoute() bool {
+	var cfg struct {
+		BaseURL   string `toml:"openai_base_url"`
+		Providers map[string]struct {
+			BaseURL string `toml:"base_url"`
+		} `toml:"model_providers"`
+	}
+	b, err := os.ReadFile(filepath.Join(sessions.CodexDir(), "config.toml"))
+	if err != nil && !os.IsNotExist(err) {
+		return false
+	}
+	if len(b) > 0 && toml.Unmarshal(b, &cfg) != nil {
+		return false
+	}
+	for _, endpoint := range []string{os.Getenv("OPENAI_BASE_URL"), cfg.BaseURL, cfg.Providers["openai"].BaseURL} {
+		if endpoint != "" && !officialOpenAI(endpoint) {
+			return false
+		}
+	}
+	return true
+}
+
+func officialOpenAI(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	return err == nil && u.Scheme == "https" && u.User == nil &&
+		(u.Host == "api.openai.com" || u.Host == "chatgpt.com" || u.Host == "chat.openai.com")
 }

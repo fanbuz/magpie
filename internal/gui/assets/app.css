@@ -1932,7 +1932,7 @@ body.panel .modal { padding: 16px 12px; }
 .pu-tot .k { display: block; font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pu-tot .v { display: block; margin-top: 1px; font-size: 16px; font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pu-tot .v.cost { color: var(--green); }
-.pu-tot .sub { display: block; margin-top: 1px; font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pu-tot .sub { display: block; margin-top: 1px; font-size: 10.5px; color: var(--muted); white-space: normal; overflow: visible; text-overflow: clip; }
 .pu-tot .sub.bad { color: var(--red); }
 .pu-card { padding: 8px 10px 6px; border-radius: 11px; background: var(--card); box-shadow: var(--card-edge); }
 .pu-card .led-bar { margin-bottom: 4px; }

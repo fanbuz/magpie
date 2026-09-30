@@ -1,9 +1,11 @@
 package sessions
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,17 +16,15 @@ func TestCallsReuseSavedIndexAndContinue(t *testing.T) {
 	path := filepath.Join(d.claude, "projects", "-p", "sess1.jsonl")
 	writeLines(t, path, claudeMsg("m1", "claude-sonnet-5", 1, 2, 3, 4, 1))
 	original := Calls(time.Time{})
-	old := cache[path].Calls
+	old := callCache[path]
 	Saved()
 	Reset()
-	mu.Lock()
-	loadCache()
-	restored := cache[path].Calls
-	mu.Unlock()
-	if !reflect.DeepEqual(original, restored.Calls) || restored.Off != old.Off {
+	restoredCalls := Calls(time.Time{})
+	restored := callCache[path]
+	if !reflect.DeepEqual(original, restoredCalls) || restored.Off != old.Off {
 		t.Fatal("per-call metadata/offsets did not survive restart")
 	}
-	if got := Calls(time.Time{}); !reflect.DeepEqual(got, original) || cache[path].Calls != restored {
+	if got := Calls(time.Time{}); !reflect.DeepEqual(got, original) || callCache[path] != restored {
 		t.Fatal("unchanged file was parsed again after restart")
 	}
 	appendText(t, path, claudeMsg("m2", "claude-sonnet-5", 5, 6, 7, 8, 2)+"\n")
@@ -34,14 +34,11 @@ func TestCallsReuseSavedIndexAndContinue(t *testing.T) {
 	if len(restored.Calls) != 1 {
 		t.Fatal("published snapshot mutated")
 	}
-	Saved()
-	b, err := os.ReadFile(CachePath())
-	if err != nil {
-		t.Fatal(err)
+	b, err := os.ReadFile(callCachePath(path))
+	if err != nil || len(b) == 0 {
+		t.Fatal("no saved request shard", err)
 	}
-	if len(b) == 0 {
-		t.Fatal("no saved index")
-	}
+
 }
 
 func TestCodexSessionIdentitySurvivesIndexRestart(t *testing.T) {
@@ -68,18 +65,27 @@ func TestCodexSessionIdentitySurvivesIndexRestart(t *testing.T) {
 	}
 }
 
-func TestCallsShareSessionScan(t *testing.T) {
+func TestCallsDoNotInflateSessionIndex(t *testing.T) {
 	d := setupCalls(t)
 	path := filepath.Join(d.claude, "projects", "-p", "sess1.jsonl")
 	writeLines(t, path, claudeMsg("m1", "claude-sonnet-5", 1, 2, 3, 4, 1))
 	List(0)
 	kept := cache[path]
-	if kept.Calls == nil || len(kept.Calls.Calls) != 1 {
-		t.Fatal("session scan did not index its calls")
+	if len(callCache) != 0 {
+		t.Fatal("session list loaded request details")
 	}
+	Saved()
+	before, _ := os.ReadFile(CachePath())
 	Calls(time.Time{})
-	if cache[path] != kept {
-		t.Fatal("ledger repeated the session parse")
+	Saved()
+	after, _ := os.ReadFile(CachePath())
+	if cache[path] != kept || !reflect.DeepEqual(before, after) {
+		t.Fatal("request scan rewrote the summary index")
+	}
+	Reset()
+	List(0)
+	if len(callCache) != 0 {
+		t.Fatal("restarting Sessions loaded request details")
 	}
 }
 
@@ -114,4 +120,65 @@ func TestCallsConcurrentWithSessionReaders(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestRequestShardsAreBoundedAndIndependent(t *testing.T) {
+	d := setupCalls(t)
+	for i := 0; i < 40; i++ {
+		var lines []string
+		for j := 0; j < 150; j++ {
+			lines = append(lines, strings.ReplaceAll(claudeMsg(fmt.Sprintf("%d-%d", i, j), "m", 1, 1, 0, 0, j), `"text":"hi"`, `"text":"PRIVATE REPLY MUST NOT BE CACHED"`))
+		}
+		writeLines(t, filepath.Join(d.claude, "projects", "-p", fmt.Sprintf("s-%02d.jsonl", i)), lines...)
+	}
+	if n := len(Calls(time.Time{})); n != 6000 {
+		t.Fatal(n)
+	}
+	kept := 0
+	for _, st := range callCache {
+		kept += len(st.Calls)
+	}
+	if len(callCache) > maxKeptFiles || kept > maxKeptCalls {
+		t.Fatalf("unbounded memory cache: %d files, %d calls", len(callCache), kept)
+	}
+	a := filepath.Join(d.claude, "projects", "-p", "s-00.jsonl")
+	b := filepath.Join(d.claude, "projects", "-p", "s-01.jsonl")
+	before, err := os.Stat(callCachePath(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(callCachePath(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "PRIVATE REPLY") {
+		t.Fatal("conversation content persisted in request shard")
+	}
+	appendText(t, a, claudeMsg("new", "m", 2, 1, 0, 0, 200)+"\n")
+	if n := len(Calls(time.Time{})); n != 6001 {
+		t.Fatal(n)
+	}
+	after, err := os.Stat(callCachePath(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.ModTime().Equal(after.ModTime()) {
+		t.Fatal("one changed session rewrote an unrelated shard")
+	}
+	resetCalls()
+	if err := os.WriteFile(callCachePath(b), []byte("broken cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(Calls(time.Time{})); n != 6001 {
+		t.Fatalf("corrupt shard was not rebuilt: %d", n)
+	}
+	if err := os.Remove(b); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(Calls(time.Time{})); n != 5851 {
+		t.Fatal(n)
+	}
+	if _, err := os.Stat(callCachePath(b)); !os.IsNotExist(err) {
+		t.Fatal("removed session's shard remains")
+	}
 }

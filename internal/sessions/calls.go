@@ -107,87 +107,60 @@ var callDesktopDirs = desktopDataDirs
 // DesktopDataDirs are the folders whose session metadata belongs to this index.
 func DesktopDataDirs() []string { return callDesktopDirs() }
 
-// Calls reads the same persistent, incremental index as List and Stats. Only
-// files changed since the requested period are parsed. Disk reads happen outside
-// the index lock; published parses are immutable snapshots.
-func Calls(since time.Time) []Call {
+// Calls reads per-file request shards, separately from the session summaries.
+// Only changed files are scanned, and only a bounded number of parses stay in
+// memory. Conversation text is read by ContentOf when a detail is opened.
+func Calls(since time.Time) []Call { return callsFor(since, "") }
+
+func callsFor(since time.Time, session string) []Call {
+	callsMu.Lock()
+	defer callsMu.Unlock()
 	files := callFiles()
-	late := func(f file) bool { return since.IsZero() || !f.mod.Before(since) }
-	want := []file{}
+	pruneCalls(files)
+	// Earlier files own messages copied into a resumed Claude session.
+	sort.Slice(files, func(i, j int) bool {
+		if !files[i].mod.Equal(files[j].mod) {
+			return files[i].mod.Before(files[j].mod)
+		}
+		return files[i].path < files[j].path
+	})
+	seen := map[string]bool{}
+	capacity := 0
 	for _, f := range files {
-		if late(f) {
-			want = append(want, f)
+		if since.IsZero() || !f.mod.Before(since) {
+			capacity += callCounts[f.path]
 		}
 	}
-	mu.Lock()
-	loadCache()
-	// Preserve other agents' index entries without opening their databases.
-	all := append([]file(nil), files...)
-	for path, st := range cache {
-		if st.Calls == nil {
-			all = append(all, file{path: path})
-		}
+	if session != "" {
+		capacity = 0
 	}
-	refresh(want, all)
-	reads := make(map[string]*callFile, len(files))
+	out := make([]Call, 0, capacity)
 	for _, f := range files {
-		if st := cache[f.path]; st != nil && st.Calls != nil {
-			reads[f.path] = st.Calls
-		}
-	}
-	mu.Unlock()
-	copied := twins(files, late, reads)
-	out := []Call{}
-	for i := len(files) - 1; i >= 0; i-- {
-		st := reads[files[i].path]
-		if st == nil || !late(files[i]) {
+		if !since.IsZero() && f.mod.Before(since) {
 			continue
 		}
-		skip := copied[files[i].path]
-		for j := len(st.Calls) - 1; j >= 0; j-- {
-			if c := st.Calls[j]; !skip[j] && (since.IsZero() || !c.Time.Before(since)) {
+		st := readCalls(f)
+		for _, c := range st.Calls {
+			if c.Msg != "" {
+				if seen[c.Msg] {
+					continue
+				}
+				seen[c.Msg] = true
+			}
+			if (since.IsZero() || !c.Time.Before(since)) && (session == "" || c.Session == session) {
 				out = append(out, c)
 			}
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })
-	return out
-}
-
-// twins are the calls, by file and place, that a file written before has as
-// well: a Claude Code session picked up again is a file of its own with its
-// history copied in (under its own session's id, or the old), and the
-// original is in the file written first.
-func twins(files []file, late func(file) bool, reads map[string]*callFile) map[string]map[int]bool {
-	order := make([]file, 0, len(files))
-	for _, f := range files {
-		if late(f) && reads[f.path] != nil {
-			order = append(order, f)
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].Time.Equal(out[j].Time) {
+			return out[i].Time.After(out[j].Time)
 		}
-	}
-	sort.Slice(order, func(i, j int) bool {
-		if !order[i].mod.Equal(order[j].mod) {
-			return order[i].mod.Before(order[j].mod)
+		if out[i].File != out[j].File {
+			return out[i].File > out[j].File
 		}
-		return order[i].path < order[j].path
+		return out[i].To > out[j].To
 	})
-	seen := map[string]bool{}
-	var out map[string]map[int]bool
-	for _, f := range order {
-		for id, i := range reads[f.path].Msgs {
-			if !seen[id] {
-				seen[id] = true
-				continue
-			}
-			if out == nil {
-				out = map[string]map[int]bool{}
-			}
-			if out[f.path] == nil {
-				out[f.path] = map[int]bool{}
-			}
-			out[f.path][i] = true
-		}
-	}
 	return out
 }
 
@@ -283,7 +256,7 @@ func headOf(path string) string {
 func prepareCalls(f file, old *callFile) *callFile {
 	head := headOf(f.path)
 	var st *callFile
-	if old != nil && f.size >= old.Size && old.Off <= f.size && len(head) >= old.HeadSize && fmt.Sprintf("%x", sha256.Sum256([]byte(head[:old.HeadSize]))) == old.Head {
+	if old != nil && f.size >= old.Size && old.Off <= f.size && sameHead(head, old.Head, old.HeadSize) {
 		st = old.clone()
 	} else {
 		st = &callFile{Agent: f.agent}
@@ -297,7 +270,7 @@ func prepareCalls(f file, old *callFile) *callFile {
 			st.Msgs = map[string]int{}
 		}
 	}
-	st.Head, st.HeadSize, st.Path = fmt.Sprintf("%x", sha256.Sum256([]byte(head))), len(head), f.path
+	st.Head, st.HeadSize, st.Path = hashHead(head), len(head), f.path
 	return st
 }
 
@@ -661,4 +634,9 @@ func codexCallLine(st *callFile, b []byte) {
 			Reasoning: reasoning, Effort: r.Effort, Cwd: r.Cwd, Millis: took, File: st.Path, From: r.LastEnd, To: st.End})
 		r.LastEnd = st.End
 	}
+}
+
+func hashHead(head string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(head))) }
+func sameHead(head, hash string, size int) bool {
+	return size >= 0 && len(head) >= size && hashHead(head[:size]) == hash
 }

@@ -5,7 +5,9 @@ package provider
 import (
 	"cmp"
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/yetone/magpie/internal/filememo"
 )
@@ -19,47 +21,100 @@ type SessionIdentity struct {
 // Callers must match the IDs recorded in a session; presence alone is not evidence
 // that the account served that session's requests.
 func SessionIdentities(codexDir string) []SessionIdentity {
+	out := currentSessionIdentities(codexDir)
+	for _, l := range readLogins() {
+		if id, ok := savedSessionIdentity(l); ok {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// SessionIdentities of a subscription are only the identities of its actual
+// gateway accounts. A different CODEX_HOME can identify a session's creator,
+// but does not add that identity to this provider's signed-in accounts.
+func (p Provider) SessionIdentities() []SessionIdentity {
+	if p.Account == nil || (p.Account.Agent != "codex" && p.Account.Agent != "claude") {
+		return nil
+	}
+	users := map[string]bool{strings.ToLower(p.Account.User): true}
+	for _, l := range readLogins() {
+		if l.Agent == p.Account.Agent && l.On {
+			users[strings.ToLower(l.User)] = true
+		}
+	}
+	home, _ := os.UserHomeDir()
 	var out []SessionIdentity
-	appendCodex := func(b []byte) {
-		var a codexAuth
-		if json.Unmarshal(b, &a) != nil || a.AuthMode == "apikey" {
-			return
-		}
-		claims := jwtClaims(a.Tokens.IDToken)
-		id := cmp.Or(a.Tokens.AccountID, claimString(claims, "https://api.openai.com/auth", "chatgpt_account_id"))
-		if user := codexUser(claims); id != "" && user != "" {
-			out = append(out, SessionIdentity{Agent: "codex", AccountID: id,
-				UserID: cmp.Or(claimString(claims, "https://api.openai.com/auth", "chatgpt_user_id"), claimString(claims, "https://api.openai.com/auth", "user_id")), User: user})
+	current := map[string]bool{}
+	for _, id := range currentSessionIdentities(filepath.Join(home, ".codex")) {
+		u := strings.ToLower(id.User)
+		if id.Agent == p.Account.Agent && users[u] {
+			out = append(out, id)
+			current[u] = true
 		}
 	}
-	appendClaude := func(b []byte) {
-		var a struct {
-			Account string `json:"accountUuid"`
-			Org     string `json:"organizationUuid"`
-			Email   string `json:"emailAddress"`
+	for _, l := range readLogins() {
+		u := strings.ToLower(l.User)
+		// The live store supersedes an older bookmark of the same email,
+		// whose account/workspace IDs may have changed since it was saved.
+		if l.Agent != p.Account.Agent || !users[u] || current[u] {
+			continue
 		}
-		if json.Unmarshal(b, &a) == nil && a.Account != "" && a.Email != "" {
-			out = append(out, SessionIdentity{Agent: "claude", AccountID: a.Account, OrganizationID: a.Org, User: a.Email})
+		if id, ok := savedSessionIdentity(l); ok && strings.EqualFold(id.User, l.User) {
+			out = append(out, id)
 		}
 	}
+	return out
+}
+
+func savedSessionIdentity(l savedLogin) (SessionIdentity, bool) {
+	switch l.Agent {
+	case "codex":
+		return codexSessionIdentity(l.Auth)
+	case "claude":
+		return claudeSessionIdentity(l.Profile)
+	}
+	return SessionIdentity{}, false
+}
+
+func codexSessionIdentity(b []byte) (SessionIdentity, bool) {
+	var a codexAuth
+	if json.Unmarshal(b, &a) != nil || a.AuthMode == "apikey" {
+		return SessionIdentity{}, false
+	}
+	claims := jwtClaims(a.Tokens.IDToken)
+	id := cmp.Or(a.Tokens.AccountID, claimString(claims, "https://api.openai.com/auth", "chatgpt_account_id"))
+	user := codexUser(claims)
+	return SessionIdentity{Agent: "codex", AccountID: id,
+		UserID: cmp.Or(claimString(claims, "https://api.openai.com/auth", "chatgpt_user_id"), claimString(claims, "https://api.openai.com/auth", "user_id")), User: user}, id != "" && user != ""
+}
+
+func claudeSessionIdentity(b []byte) (SessionIdentity, bool) {
+	var a struct {
+		Account string `json:"accountUuid"`
+		Org     string `json:"organizationUuid"`
+		Email   string `json:"emailAddress"`
+	}
+	if json.Unmarshal(b, &a) != nil {
+		return SessionIdentity{}, false
+	}
+	return SessionIdentity{Agent: "claude", AccountID: a.Account, OrganizationID: a.Org, User: a.Email}, a.Account != "" && a.Email != ""
+}
+
+func currentSessionIdentities(codexDir string) []SessionIdentity {
+	var out []SessionIdentity
 	// Cache only the identity parse, not another copy of the credential blob.
 	current, _ := filememo.Read("session codex identity", filepath.Join(codexDir, "auth.json"), func(b []byte) ([]SessionIdentity, error) {
-		appendCodex(b)
-		ids := out
-		out = nil
-		return ids, nil
+		if id, ok := codexSessionIdentity(b); ok {
+			return []SessionIdentity{id}, nil
+		}
+		return nil, nil
 	})
 	out = append(out, current...)
 	if acct, ok := claudeProfileAccount(); ok {
 		b, _ := json.Marshal(acct)
-		appendClaude(b)
-	}
-	for _, l := range readLogins() {
-		switch l.Agent {
-		case "codex":
-			appendCodex(l.Auth)
-		case "claude":
-			appendClaude(l.Profile)
+		if id, ok := claudeSessionIdentity(b); ok {
+			out = append(out, id)
 		}
 	}
 	return out

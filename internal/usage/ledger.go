@@ -98,12 +98,19 @@ type Ledgered struct {
 // not see.
 func LedgerOf(p Period, f Filter) Ledgered {
 	since := p.Since(time.Now())
-	rows, sum, agents, providers := ledgerWith(since, f, Load(time.Time{}), LogCalls(since))
+	gatewaySince := since
+	if !since.IsZero() {
+		gatewaySince = since.Add(-24 * time.Hour)
+	} // calls ending across the period boundary
+	rows, sum, agents, providers := ledgerWith(since, f, Load(gatewaySince), LogCalls(since))
 	return Ledgered{rows, sum, agents, providers}
 }
 
 // Filtered narrows one snapshot without reloading either log or repricing rows.
 func (l Ledgered) Filtered(f Filter) Ledgered {
+	if f == (Filter{}) {
+		return l
+	}
 	out := Ledgered{Rows: []Row{}, Agents: l.Agents, Providers: l.Providers}
 	for _, r := range l.Rows {
 		if f.keeps(r.Record) {
@@ -186,7 +193,7 @@ func gatewayMatches(recs []Record, logs []sessions.Call) map[int]bool {
 	candidates := map[int][]int{}
 	counts := map[int]int{}
 	for j, c := range logs {
-		if matched[j] || c.Session == "" || c.Input+c.Output+c.CacheRead+c.CacheWrite == 0 {
+		if matched[j] || c.Session == "" {
 			continue
 		}
 		for _, i := range bySession[c.Session] {
@@ -194,6 +201,15 @@ func gatewayMatches(recs []Record, logs []sessions.Call) map[int]bool {
 			if used[i] || c.RequestID != "" && r.RequestID != "" {
 				continue
 			}
+			// Empty successes carry too little evidence. Failed calls may have
+			// zero tokens, but both sources must agree that the call failed.
+			if c.Input+c.Output+c.CacheRead+c.CacheWrite == 0 && (c.Error == "" || !r.Failed()) {
+				continue
+			}
+			if (c.Error != "") != r.Failed() {
+				continue
+			}
+
 			if AgentOf(r.Agent) != c.Agent || r.Input != c.Input || r.Output != c.Output || r.CacheRead != c.CacheRead || r.CacheWrite != c.CacheWrite {
 				continue
 			}
@@ -216,7 +232,7 @@ func gatewayMatches(recs []Record, logs []sessions.Call) map[int]bool {
 func ledgerWith(since time.Time, f Filter, recs []Record, logs []sessions.Call) (rows []Row, sum Totals, agents, providers []string) {
 	renamed := provider.Renamed()
 	priceOf := pricer()
-	rows = []Row{}
+	rows = make([]Row, 0, len(recs)+len(logs))
 	agents, providers = []string{}, []string{}
 	matched := gatewayMatches(recs, logs)
 	identities := newSessionResolver(logs)
@@ -294,7 +310,7 @@ func pricer() func(Record) *catalog.Price {
 var CSVHeader = []string{"time", "agent", "requested_model", "provider", "host", "model", "served_model", "swapped",
 	"effort", "input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens", "reasoning_tokens",
 	"cost_usd", "duration_ms", "ttft_ms", "status", "error", "session", "kind",
-	"request_id", "endpoint", "error_message", "error_type", "source", "session_provider", "session_account"}
+	"request_id", "endpoint", "error_message", "error_type", "source", "rejected", "session_provider", "session_account"}
 
 // WriteCSV writes rows as CSV, a header first: times in RFC 3339 with
 // their offset, the cost in USD at list price (empty when unknown), error
@@ -316,7 +332,7 @@ func WriteCSV(w io.Writer, rows []Row) error {
 		cw.Write([]string{r.Time.Format(time.RFC3339), r.Agent, r.Requested, r.Provider, r.Host, r.Model, r.Served,
 			strconv.FormatBool(r.Swapped), r.Effort, n(r.Input), n(r.Output), n(r.CacheWrite), n(r.CacheRead), n(r.Reasoning),
 			cost, strconv.FormatInt(r.Millis, 10), ttft, n(r.Status), strconv.FormatBool(r.Failed()), r.Session, r.Kind,
-			r.RequestID, r.Endpoint, r.Error, r.ErrType, r.Source, r.SessionProvider, r.SessionAccount})
+			r.RequestID, r.Endpoint, r.Error, r.ErrType, r.Source, strconv.FormatBool(r.IsRejected()), r.SessionProvider, r.SessionAccount})
 	}
 	cw.Flush()
 	return cw.Error()

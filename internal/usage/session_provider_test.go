@@ -19,22 +19,21 @@ func TestCodexSessionAttributionRequiresRecordedIdentity(t *testing.T) {
 	r := &sessionResolver{identities: []provider.SessionIdentity{
 		{Agent: "codex", AccountID: "a-old", UserID: "u-old", User: "old@example.com"},
 		{Agent: "codex", AccountID: "a-now", UserID: "u-now", User: "now@example.com"},
-	}, providers: map[string]codexSessionProvider{"custom": {BaseURL: "https://api.openai.com/v1"}, "relay": {BaseURL: "https://relay.example.com"},
-		"chatgpt": {RequiresOpenAIAuth: true}, "oauth-relay": {BaseURL: "https://relay.example.com", RequiresOpenAIAuth: true}, "bare": {}}}
+	}, builtinOpenAI: true}
 	for _, tc := range []struct {
 		name string
 		call sessions.Call
 		want sessionAttribution
 	}{
 		{"official metadata", sessions.Call{Agent: "codex", Upstream: "openai", AccountID: "a-old", UserID: "u-old"}, sessionAttribution{provider: SessionOpenAIProvider, account: "old@example.com"}},
-		{"named provider at OpenAI's address", sessions.Call{Agent: "codex", Upstream: "custom", AccountID: "a-old", UserID: "u-old"}, sessionAttribution{provider: SessionOpenAIProvider, account: "old@example.com"}},
-		{"named provider on the ChatGPT sign-in, no address", sessions.Call{Agent: "codex", Upstream: "chatgpt", AccountID: "a-old", UserID: "u-old"}, sessionAttribution{provider: SessionOpenAIProvider, account: "old@example.com"}},
+		{"named provider never establishes historical route", sessions.Call{Agent: "codex", Upstream: "custom", AccountID: "a-old", UserID: "u-old"}, sessionAttribution{provider: UnknownProvider, account: "old@example.com"}},
+		{"named provider on the ChatGPT sign-in, no address", sessions.Call{Agent: "codex", Upstream: "chatgpt", AccountID: "a-old", UserID: "u-old"}, sessionAttribution{provider: UnknownProvider, account: "old@example.com"}},
 		{"ChatGPT sign-in sent to a relay", sessions.Call{Agent: "codex", Upstream: "oauth-relay", AccountID: "a-old", UserID: "u-old"}, sessionAttribution{provider: UnknownProvider, account: "old@example.com"}},
 		{"named provider with neither address nor sign-in", sessions.Call{Agent: "codex", Upstream: "bare"}, sessionAttribution{provider: UnknownProvider}},
 		{"named provider no longer configured", sessions.Call{Agent: "codex", Upstream: "gone"}, sessionAttribution{provider: UnknownProvider}},
 		{"third party despite OAuth login", sessions.Call{Agent: "codex", Upstream: "relay", AccountID: "a-old", UserID: "u-old"}, sessionAttribution{provider: UnknownProvider, account: "old@example.com"}},
-		{"older file is not current account", sessions.Call{Agent: "codex", Upstream: "custom"}, sessionAttribution{provider: SessionOpenAIProvider}},
-		{"another user", sessions.Call{Agent: "codex", Upstream: "custom", AccountID: "a-old", UserID: "u-other"}, sessionAttribution{provider: SessionOpenAIProvider}},
+		{"older file is not current account", sessions.Call{Agent: "codex", Upstream: "custom"}, sessionAttribution{provider: UnknownProvider}},
+		{"another user", sessions.Call{Agent: "codex", Upstream: "custom", AccountID: "a-old", UserID: "u-other"}, sessionAttribution{provider: UnknownProvider}},
 		{"unrecorded provider", sessions.Call{Agent: "codex", AccountID: "a-now", UserID: "u-now"}, sessionAttribution{provider: UnknownProvider, account: "now@example.com"}},
 		{"provider without account", sessions.Call{Agent: "codex", Upstream: "openai"}, sessionAttribution{provider: SessionOpenAIProvider}},
 	} {
@@ -57,6 +56,7 @@ func TestCodexSessionAttributionRequiresRecordedIdentity(t *testing.T) {
 
 func TestDesktopSessionAccountMetadata(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
@@ -100,6 +100,7 @@ func TestDesktopSessionAccountMetadata(t *testing.T) {
 
 func TestLedgerResolvesOAuthIdentityAndExportsIt(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
@@ -115,10 +116,10 @@ func TestLedgerResolvesOAuthIdentityAndExportsIt(t *testing.T) {
 	os.WriteFile(filepath.Join(sessions.CodexDir(), "config.toml"), []byte("[model_providers.custom]\nrequires_openai_auth = true\n"), 0600)
 	call := sessions.Call{Time: time.Now(), Agent: "codex", Model: "gpt-6-sol", Upstream: "custom", AccountID: "a", UserID: "u", Tokens: sessions.Tokens{Input: 10, Output: 2}}
 	rows, sum, _, providers := ledgerWith(time.Time{}, Filter{}, nil, []sessions.Call{call})
-	if len(rows) != 1 || rows[0].Provider != SessionOpenAIProvider || rows[0].Host != "" || rows[0].SessionAccount != "matched@example.com" || sum.Calls != 1 || len(providers) != 1 {
+	if len(rows) != 1 || rows[0].Provider != UnknownProvider || rows[0].Host != "" || rows[0].SessionAccount != "matched@example.com" || sum.Calls != 1 || len(providers) != 1 {
 		t.Fatalf("ledger attribution %+v", rows)
 	}
-	filtered, _, _, _ := ledgerWith(time.Time{}, Filter{Provider: SessionOpenAIProvider}, nil, []sessions.Call{call})
+	filtered, _, _, _ := ledgerWith(time.Time{}, Filter{Provider: UnknownProvider}, nil, []sessions.Call{call})
 	if len(filtered) != 1 {
 		t.Fatal("provider filter lost attributed session")
 	}
@@ -127,13 +128,14 @@ func TestLedgerResolvesOAuthIdentityAndExportsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, err := csv.NewReader(&out).ReadAll()
-	if err != nil || len(data) != 2 || data[1][3] != SessionOpenAIProvider || data[1][4] != "" || data[1][len(data[1])-2] != "custom" || data[1][len(data[1])-1] != "matched@example.com" {
+	if err != nil || len(data) != 2 || data[1][3] != UnknownProvider || data[1][4] != "" || data[1][len(data[1])-2] != "custom" || data[1][len(data[1])-1] != "matched@example.com" {
 		t.Fatal("CSV lost the resolved provider/account")
 	}
 }
 
 func TestModelsNeverEstablishProviderOrAccount(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
@@ -189,9 +191,13 @@ func TestSessionCallsOfMagpiesAccountsAreItsProviders(t *testing.T) {
 			{Agent: "codex", AccountID: "a-mine", UserID: "u-mine", User: "mine@example.com"},
 			{Agent: "claude", AccountID: account, OrganizationID: org, User: "claude@example.com"},
 		},
-		signedIn:  map[string]string{"codex": "codex", "claude": "claude"},
-		providers: map[string]codexSessionProvider{"custom": {RequiresOpenAIAuth: true}, "relay": {BaseURL: "https://relay.example.com", RequiresOpenAIAuth: true}},
-		desktop:   map[string]desktopSessionIdentity{},
+		signedIn:      map[string]string{"codex": "codex", "claude": "claude"},
+		builtinOpenAI: true,
+		accounts: []provider.SessionIdentity{
+			{Agent: "codex", AccountID: "a-mine", UserID: "u-mine", User: "mine@example.com"},
+			{Agent: "claude", AccountID: account, OrganizationID: org, User: "claude@example.com"},
+		},
+		desktop: map[string]desktopSessionIdentity{},
 		bySession: map[string][]desktopSessionIdentity{
 			"mine":     {{account: account, org: org, email: "claude@example.com", official: true}},
 			"other":    {{account: account, org: "33333333-3333-4333-8333-333333333333", email: "team@example.com", official: true}},
@@ -203,8 +209,8 @@ func TestSessionCallsOfMagpiesAccountsAreItsProviders(t *testing.T) {
 		call sessions.Call
 		want sessionAttribution
 	}{
-		{"Codex on magpie's account", sessions.Call{Agent: "codex", Upstream: "custom", AccountID: "a-mine", UserID: "u-mine"}, sessionAttribution{provider: "codex", user: "mine@example.com", account: "mine@example.com"}},
-		{"Codex on another account", sessions.Call{Agent: "codex", Upstream: "custom", AccountID: "a-other"}, sessionAttribution{provider: SessionOpenAIProvider}},
+		{"Codex on magpie's account", sessions.Call{Agent: "codex", Upstream: "openai", AccountID: "a-mine", UserID: "u-mine"}, sessionAttribution{provider: "codex", user: "mine@example.com", account: "mine@example.com"}},
+		{"Codex on another account", sessions.Call{Agent: "codex", Upstream: "openai", AccountID: "a-other"}, sessionAttribution{provider: SessionOpenAIProvider}},
 		{"Codex with no account recorded", sessions.Call{Agent: "codex", Upstream: "openai"}, sessionAttribution{provider: SessionOpenAIProvider}},
 		{"magpie's account through a relay", sessions.Call{Agent: "codex", Upstream: "relay", AccountID: "a-mine", UserID: "u-mine"}, sessionAttribution{provider: UnknownProvider, account: "mine@example.com"}},
 		{"Claude Desktop on magpie's account", sessions.Call{Agent: "claude-desktop", Session: "mine"}, sessionAttribution{provider: "claude", user: "claude@example.com"}},
@@ -219,13 +225,14 @@ func TestSessionCallsOfMagpiesAccountsAreItsProviders(t *testing.T) {
 	}
 	// magpie signed out of Codex: the vendor, not a provider it doesn't have
 	r.signedIn = map[string]string{}
-	if got := r.resolve(sessions.Call{Agent: "codex", Upstream: "custom", AccountID: "a-mine", UserID: "u-mine"}); got.provider != SessionOpenAIProvider {
+	if got := r.resolve(sessions.Call{Agent: "codex", Upstream: "openai", AccountID: "a-mine", UserID: "u-mine"}); got.provider != SessionOpenAIProvider {
 		t.Fatalf("signed out, got %+v", got)
 	}
 }
 
 func TestLedgerTellsCodexSessionCallsAsMagpiesCodex(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
@@ -242,8 +249,8 @@ func TestLedgerTellsCodexSessionCallsAsMagpiesCodex(t *testing.T) {
 	at := time.Now()
 	gateway := []Record{{Time: at.Add(-time.Minute), Agent: "opencode", Provider: "codex", Host: "mine@example.com", Model: "gpt-6-sol", Input: 5, Output: 1, Status: 200}}
 	logs := []sessions.Call{
-		{Time: at, Agent: "codex", Model: "gpt-6-sol", Upstream: "custom", AccountID: "a", UserID: "u", Tokens: sessions.Tokens{Input: 10, Output: 2}},
-		{Time: at, Agent: "codex", Model: "gpt-6-sol", Upstream: "custom", AccountID: "someone-else", Tokens: sessions.Tokens{Input: 7, Output: 1}},
+		{Time: at, Agent: "codex", Model: "gpt-6-sol", Upstream: "openai", AccountID: "a", UserID: "u", Tokens: sessions.Tokens{Input: 10, Output: 2}},
+		{Time: at, Agent: "codex", Model: "gpt-6-sol", Upstream: "openai", AccountID: "someone-else", Tokens: sessions.Tokens{Input: 7, Output: 1}},
 	}
 	rows, _, _, providers := ledgerWith(time.Time{}, Filter{}, gateway, logs)
 	if len(rows) != 3 || !slices.Equal(providers, []string{"codex", SessionOpenAIProvider}) {

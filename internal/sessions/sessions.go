@@ -89,18 +89,19 @@ const Limit = 200
 
 // state is what one file's parse has come to, enough to read on from Off.
 type state struct {
-	Calls  *callFile         `json:"calls,omitempty"`
-	Size   int64             `json:"size"`
-	Mod    int64             `json:"mod"` // unix nanoseconds
-	Off    int64             `json:"off"` // after the last whole line read
-	ID     string            `json:"id,omitempty"`
-	Cwd    string            `json:"cwd,omitempty"`
-	Title  string            `json:"title,omitempty"`
-	Named  string            `json:"named,omitempty"` // the agent's own title for it
-	First  string            `json:"first,omitempty"` // the first message, when no prompt looked typed
-	Start  time.Time         `json:"start"`
-	Last   time.Time         `json:"last"`
-	Models map[string]Tokens `json:"models,omitempty"`
+	Head     string            `json:"head,omitempty"`
+	HeadSize int               `json:"head_size,omitempty"`
+	Size     int64             `json:"size"`
+	Mod      int64             `json:"mod"` // unix nanoseconds
+	Off      int64             `json:"off"` // after the last whole line read
+	ID       string            `json:"id,omitempty"`
+	Cwd      string            `json:"cwd,omitempty"`
+	Title    string            `json:"title,omitempty"`
+	Named    string            `json:"named,omitempty"` // the agent's own title for it
+	First    string            `json:"first,omitempty"` // the first message, when no prompt looked typed
+	Start    time.Time         `json:"start"`
+	Last     time.Time         `json:"last"`
+	Models   map[string]Tokens `json:"models,omitempty"`
 	// Days is Models again, split by the local date each message was
 	// written on: a session that runs past midnight counts on both days.
 	Days map[string]*day `json:"days,omitempty"`
@@ -415,7 +416,8 @@ func CachePath() string { return filepath.Join(filepath.Dir(catalog.CachePath())
 // 5: again, for the prompts and replies a day, which an early 4 left out
 // 6: per-call metadata and continuation share the session file scan
 // 7: Codex's recorded provider and creator identity
-const cacheVersion = 7
+// 8: keep only summaries here; request metadata has per-file shards.
+const cacheVersion = 8
 
 type cacheFile struct {
 	Version int               `json:"version"`
@@ -692,6 +694,7 @@ func pricer() func(string) *catalog.Price {
 
 // Reset forgets the kept parses, in memory only.
 func Reset() {
+	resetCalls()
 	mu.Lock()
 	defer mu.Unlock()
 	saved()
@@ -845,13 +848,15 @@ func parse(f file, old *state) *state {
 	case "grok":
 		return parseGrok(f)
 	}
+	headBytes := headOf(f.path)
 	var s *state
-	if old != nil && f.size >= old.Size && old.Off <= f.size {
+	if old != nil && f.size >= old.Size && old.Off <= f.size && sameHead(headBytes, old.Head, old.HeadSize) {
 		s = old.clone()
 	} else {
 		s = &state{}
 	}
 	s.Size, s.Mod = f.size, f.mod.UnixNano()
+	s.Head, s.HeadSize = hashHead(headBytes), len(headBytes)
 	line := claudeLine
 	switch f.agent {
 	case "codex":
@@ -865,35 +870,15 @@ func parse(f file, old *state) *state {
 	if f.agent == "codex" {
 		line = codexBody
 	}
-	supported := f.agent == "claude" || f.agent == "claude-desktop" || f.agent == "codex"
-	if supported {
-		s.Calls = prepareCalls(f, s.Calls)
-		if s.Calls.Off != s.Off {
-			s = &state{Size: f.size, Mod: f.mod.UnixNano(), Calls: prepareCalls(f, nil)}
-		}
-		head = func(b []byte) bool {
-			want := f.agent != "codex" || codexHead(s, b, f.main)
-			return callHead(s.Calls, b) || want
-		}
+	if f.agent == "codex" {
+		head = func(b []byte) bool { return codexHead(s, b, f.main) }
 	}
-	off, err := scanAt(f.path, s.Off, head, func(b []byte, start, end int64) bool {
+	off, err := scanAt(f.path, s.Off, head, func(b []byte, _, _ int64) bool {
 		line(s, b, f.main)
-		if supported {
-			st := s.Calls
-			st.At, st.End = start, end
-			if f.agent == "codex" {
-				codexCallLine(st, b)
-			} else {
-				claudeCallLine(st, b)
-			}
-		}
 		return true
 	})
 	if err == nil {
 		s.Off = off
-	}
-	if supported {
-		s.Calls.Off, s.Calls.Size, s.Calls.Mod = s.Off, f.size, f.mod.UnixNano()
 	}
 	if f.agent == "workbuddy" && s.Cwd == "" {
 		workbuddyMeta(s, f.path)

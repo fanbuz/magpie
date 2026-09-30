@@ -151,6 +151,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.deepEqual(await p.locator("#panelUsage .led-rank .rk-nm").allTextContents(), ["Claude", "Relay"]);
       assert.equal((await p.locator("#panelUsage .sess-pick").textContent()).trim(), w.all);
       assert.deepEqual(await p.locator("#panelUsage .pu-card .segs .opt").allTextContents(), w.metrics);
+      // Labels in the 440px panel must be readable, not clipped by ellipsis.
+      assert(await p.locator("#panelUsage .pu-tot .blk").first().locator(".sub").evaluate(e =>
+        e.scrollWidth <= e.clientWidth + 1 && e.scrollHeight <= e.clientHeight + 1 && getComputedStyle(e).textOverflow !== "ellipsis"), "token input/output is fully visible");
       // nothing runs out of the panel
       const over = await p.evaluate(() => [...document.querySelectorAll("#panelUsage *")].filter((e) => e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).overflow === "visible" && e.children.length === 0 && e.tagName !== "text").length);
       assert.equal(over, 0, "an element wider than itself");

@@ -8,7 +8,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -108,52 +107,25 @@ func Append(r Record) {
 // IsRejected also recognizes local rejections written before the explicit flag.
 func (r Record) IsRejected() bool { return r.Rejected || r.Provider == "" && r.Status >= 400 }
 
-var logCache struct {
-	path string
-	info os.FileInfo
-	off  int64
-	rows []Record
-}
-
-// Load reuses the append-only log snapshot and decodes only complete new lines.
-// A truncated, replaced or rewritten file resets the snapshot.
+// Load streams complete records from the log. Historical request bodies are
+// not retained by a global cache after the caller finishes with this snapshot.
 func Load(since time.Time) []Record {
 	mu.Lock()
-	defer mu.Unlock()
 	f, err := os.Open(Path())
+	mu.Unlock()
 	if err != nil {
-		logCache.path = ""
-		logCache.rows = nil
 		return nil
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil
-	}
-	if logCache.path != Path() || logCache.info == nil || !os.SameFile(logCache.info, info) || info.Size() < logCache.info.Size() || info.Size() == logCache.info.Size() && !info.ModTime().Equal(logCache.info.ModTime()) {
-		logCache.off, logCache.rows = 0, nil
-	}
-	if info.Size() != logCache.off {
-		if _, err := f.Seek(logCache.off, io.SeekStart); err == nil {
-			reader := bufio.NewReader(f)
-			for {
-				b, err := reader.ReadBytes('\n')
-				if err != nil {
-					break
-				} // leave an unfinished line for the next read
-				logCache.off += int64(len(b))
-				var r Record
-				if json.Unmarshal(b, &r) == nil {
-					logCache.rows = append(logCache.rows, r)
-				}
-			}
-		}
-	}
-	logCache.path, logCache.info = Path(), info
-	out := make([]Record, 0, len(logCache.rows))
-	for _, r := range logCache.rows {
-		if since.IsZero() || !r.Time.Before(since) {
+	var out []Record
+	reader := bufio.NewReaderSize(f, 64<<10)
+	for {
+		b, err := reader.ReadBytes('\n')
+		if err != nil {
+			break
+		} // an unfinished line is left for the next read
+		var r Record
+		if json.Unmarshal(b, &r) == nil && (since.IsZero() || !r.Time.Before(since)) {
 			out = append(out, r)
 		}
 	}
@@ -472,7 +444,7 @@ type Via struct {
 func Vias(since time.Time) map[string][]Via {
 	out := map[string][]Via{}
 	for _, r := range Load(since) {
-		if r.Session == "" || r.Model == "" {
+		if r.IsRejected() || r.Session == "" || r.Model == "" {
 			continue
 		}
 		k := AgentOf(r.Agent) + "|" + r.Session

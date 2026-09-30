@@ -364,6 +364,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const classic = await chromium.launch({ channel: "chromium", ignoreDefaultArgs: ["--hide-scrollbars"] });
         try {
           const c = await open("en", "light", { variant: "many", ctx: await classic.newContext({ viewport: { width: 1180, height: 760 }, reducedMotion: "reduce" }) });
+          await c.p.addStyleTag({ content: "*::-webkit-scrollbar { width: 14px; height: 14px; } *::-webkit-scrollbar-thumb { background: #888; }" });
           assert(await c.p.locator("#view-usage").evaluate(() => { const d = document.createElement("div"); d.style.cssText = "width:50px;height:50px;overflow:scroll"; document.body.append(d); const w = d.offsetWidth - d.clientWidth; d.remove(); return w > 0; }), "this Chromium draws scrollbars");
           assert.equal(await c.p.locator("#ledRank").evaluate((r) => r.offsetWidth - r.clientWidth), 0, "no scrollbar on the ranking where the system draws one");
           assert.deepEqual(c.errors, []);

@@ -239,7 +239,7 @@ func TestCallsSince(t *testing.T) {
 	if len(cs) != 1 || cs[0].Tokens.Input != 3 {
 		t.Fatalf("since 150s: %+v", cs)
 	}
-	if cache[old] != nil {
+	if callCache[old] != nil {
 		t.Fatal("a file written before since was read")
 	}
 	// a file written after it has its calls before it left out
@@ -271,13 +271,13 @@ func TestCallsIncremental(t *testing.T) {
 	if cs := Calls(time.Time{}); len(cs) != 3 {
 		t.Fatalf("first read: %+v", cs)
 	}
-	st := cache[cc].Calls
+	st := callCache[cc]
 	if st == nil || st.Off == 0 {
 		t.Fatal("the file's read was not kept")
 	}
 
 	// a repeat with nothing written reads nothing
-	if cs := Calls(time.Time{}); len(cs) != 3 || cache[cc].Calls != st {
+	if cs := Calls(time.Time{}); len(cs) != 3 || callCache[cc] != st {
 		t.Fatalf("repeat: %+v", cs)
 	}
 
@@ -289,7 +289,7 @@ func TestCallsIncremental(t *testing.T) {
 	if len(cs) != 5 {
 		t.Fatalf("after appending: %+v", cs)
 	}
-	if cache[cc].Calls == st {
+	if callCache[cc] == st {
 		t.Fatal("a file that grew did not publish a new snapshot")
 	}
 	var claude, codex []Call
@@ -335,7 +335,7 @@ func TestCallsIncremental(t *testing.T) {
 
 	// a file gone takes its calls
 	os.Remove(rollout)
-	if cs := Calls(time.Time{}); len(cs) != 4 || len(cache) != 1 {
+	if cs := Calls(time.Time{}); len(cs) != 4 || len(callCache) != 1 {
 		t.Fatalf("after removing: %+v", cs)
 	}
 }
