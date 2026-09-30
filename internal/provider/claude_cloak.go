@@ -7,6 +7,7 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -54,25 +55,64 @@ func compareClaudeVersion(a, b string) int {
 	return 0
 }
 
+// claudeVersionWait is how long a caller waits for `claude --version` before
+// the version it has stands in, and claudeVersionTimeout how long the CLI is
+// given at all. On Omarchy `claude` is a mise wrapper that installs or
+// updates Claude Code before it answers, which can take minutes or never
+// end; waited for with no limit, and with the lock held, it kept the
+// Providers and Gateway pages (whose first look fetches the Claude
+// account's models) and every Claude request waiting with it.
+var (
+	claudeVersionWait    = 3 * time.Second
+	claudeVersionTimeout = time.Minute
+	claudeVersionAsking  chan struct{} // closed when the CLI has answered; nil when it isn't being asked
+)
+
 // claudeClaimedVersion follows the locally installed auto-updating CLI, with a
 // verified floor for machines where it cannot be found.
 func claudeClaimedVersion() string {
 	claudeIdentityMu.Lock()
-	defer claudeIdentityMu.Unlock()
-	if time.Since(claudeVersionAt) < 10*time.Minute {
-		return claudeVersion
-	}
-	claudeVersionAt = time.Now()
-	if path := claudeExecutable(); path != "" {
-		if out, err := proc.Command(path, "--version").Output(); err == nil {
-			if installed := claudeSemverRE.FindString(string(out)); installed != "" && compareClaudeVersion(installed, claudeVersionFloor) > 0 {
-				claudeVersion = installed
-			} else {
-				claudeVersion = claudeVersionFloor
-			}
+	done := claudeVersionAsking
+	if done == nil && time.Since(claudeVersionAt) >= 10*time.Minute {
+		claudeVersionAt = time.Now()
+		if path := claudeExecutable(); path != "" {
+			done = make(chan struct{})
+			claudeVersionAsking = done
+			go askClaudeVersion(path, done)
 		}
 	}
+	// only the first few seconds of an ask are waited for: after that the
+	// version there is serves until the CLI answers
+	wait := time.Until(claudeVersionAt.Add(claudeVersionWait))
+	claudeIdentityMu.Unlock()
+	if done != nil && wait > 0 {
+		select {
+		case <-done:
+		case <-time.After(wait):
+		}
+	}
+	claudeIdentityMu.Lock()
+	defer claudeIdentityMu.Unlock()
 	return claudeVersion
+}
+
+// askClaudeVersion runs `claude --version` and takes its answer, closing
+// done when it is in.
+func askClaudeVersion(path string, done chan struct{}) {
+	ctx, cancel := context.WithTimeout(context.Background(), claudeVersionTimeout)
+	defer cancel()
+	out, err := proc.CommandContext(ctx, path, "--version").Output()
+	claudeIdentityMu.Lock()
+	defer claudeIdentityMu.Unlock()
+	if err == nil {
+		if installed := claudeSemverRE.FindString(string(out)); installed != "" && compareClaudeVersion(installed, claudeVersionFloor) > 0 {
+			claudeVersion = installed
+		} else {
+			claudeVersion = claudeVersionFloor
+		}
+	}
+	claudeVersionAsking = nil
+	close(done)
 }
 
 func claudeUserAgent() string {
