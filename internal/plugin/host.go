@@ -400,6 +400,7 @@ func Plugins(ctx context.Context) ([]Loaded, error) {
 // FetchRequest is a request a provider's plugin makes.
 type FetchRequest struct {
 	Provider string            `json:"provider"`
+	Account  string            `json:"account,omitempty"` // the provider's first when ""
 	Model    string            `json:"model"`
 	NPM      string            `json:"npm"`
 	URL      string            `json:"url"`

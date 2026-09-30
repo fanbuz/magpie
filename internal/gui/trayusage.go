@@ -136,11 +136,53 @@ func trayUsageCards(ctx context.Context, ids []string) []provider.SubscriptionQu
 func trayPick(cards []provider.SubscriptionQuota, ids []string) []provider.SubscriptionQuota {
 	var out []provider.SubscriptionQuota
 	for _, id := range ids {
+		if pid, ok := strings.CutSuffix(id, trayInUse); ok {
+			if q, ok := trayInUseCard(cards, pid); ok {
+				out = append(out, q)
+			}
+			continue
+		}
 		if i := slices.IndexFunc(cards, func(q provider.SubscriptionQuota) bool { return trayCardID(q) == id }); i >= 0 {
 			out = append(out, cards[i])
 		}
 	}
 	return out
+}
+
+// trayInUse ends a card id that follows a subscription's account in use
+// ("claude|*") rather than naming one: with several accounts, the one the
+// gateway goes to first is the one worth watching, whichever it is now.
+const trayInUse = "|*"
+
+// trayInUseAccount is the account of an agent's the gateway goes to first;
+// a var for tests.
+var trayInUseAccount = provider.InUseLogin
+
+// trayInUseCard is the card of the provider's account in use, named with
+// the account so the tooltip says which it is; the provider's first card
+// when magpie can't tell (the account in use first among them).
+func trayInUseCard(cards []provider.SubscriptionQuota, pid string) (provider.SubscriptionQuota, bool) {
+	var mine []provider.SubscriptionQuota
+	for _, q := range cards {
+		if q.Provider == pid {
+			mine = append(mine, q)
+		}
+	}
+	if len(mine) == 0 {
+		return provider.SubscriptionQuota{}, false
+	}
+	q := mine[0]
+	if len(mine) > 1 {
+		if user := trayInUseAccount(pid); user != "" {
+			if i := slices.IndexFunc(mine, func(q provider.SubscriptionQuota) bool { return strings.EqualFold(q.User, user) }); i >= 0 {
+				q = mine[i]
+			}
+		}
+	}
+	if q.User != "" {
+		q.Name += " · " + q.User
+	}
+	return q, true
 }
 
 // trayCell is a card as the Mac's menu bar draws it: its logo, and its

@@ -64,6 +64,7 @@ func All() []*Agent {
 		gemini(home),
 		agy(home),
 		opencode(home, cfg),
+		openChamber(home, cfg),
 		mimocode(home, cfg),
 		pi(home),
 		omo(home),
@@ -376,27 +377,26 @@ func openCodeLike(id, name, icon, bin, dir, auth string, ua []string, aliases ..
 		}
 	}
 	get := func(k string) string { v, _ := edit.GetJSON(path, k); return v }
+	// whether a model the file names, or one OpenChamber sends to the
+	// OpenCode it runs on this config, is one of magpie's: magpie's
+	// provider has to stay
+	onMagpie := func() bool {
+		return usesMagpie(get("model"), get("small_model")) || id == "opencode" && openChamberOnMagpie()
+	}
 	set := func(key string) func(string) error {
 		return func(v string) error {
 			if v == "" {
 				if err := edit.DelJSON(path, key); err != nil {
 					return err
 				}
-				if usesMagpie(get("model"), get("small_model")) {
+				if onMagpie() {
 					return nil
 				}
 				return edit.DelJSON(path, "provider."+magpieID)
 			}
-			if ref, ok := strings.CutPrefix(v, magpieID+"/"); ok && isMagpie(ref) {
-				// a provider of the file's own already sends this model to
-				// magpie: name it there, rather than add a second list of
-				// the same models under magpie's
-				if own := ownGatewayProvider(path, ref); own != "" {
-					return edit.SetJSON(path, edit.KV{Path: key, Value: own + "/" + ref})
-				}
-				if err := edit.SetJSON(path, edit.KV{Path: "provider." + magpieID, Value: provider()}); err != nil {
-					return err
-				}
+			v, err := openCodeRef(path, id, v)
+			if err != nil {
+				return err
 			}
 			return edit.SetJSON(path, edit.KV{Path: key, Value: v})
 		}
@@ -415,7 +415,7 @@ func openCodeLike(id, name, icon, bin, dir, auth string, ua []string, aliases ..
 		Sync: func() error {
 			// a model of magpie's chosen, but its provider gone from the
 			// file: put it back, or the agent has nothing to send it to
-			if _, ok := edit.GetJSON(path, "provider."+magpieID); !ok && usesMagpie(get("model"), get("small_model")) {
+			if _, ok := edit.GetJSON(path, "provider."+magpieID); !ok && onMagpie() {
 				return edit.SetJSON(path, edit.KV{Path: "provider." + magpieID, Value: provider()})
 			}
 			return syncJSON(path, "provider."+magpieID, provider)
@@ -425,6 +425,22 @@ func openCodeLike(id, name, icon, bin, dir, auth string, ua []string, aliases ..
 			{Key: "small", Label: "small", Get: jsonGet(path, "small_model"), Set: set("small_model"), Options: opts("small")},
 		},
 	}
+}
+
+// openCodeRef is the value that makes the OpenCode config at path (agent
+// id's, whose catalog magpie's provider there lists) send model v. One of
+// magpie's goes to a provider of the file's own that already sends it to
+// magpie, named there rather than in a second list of the same models, else
+// to magpie's provider, put in the file; any other is v as it is.
+func openCodeRef(path, id, v string) (string, error) {
+	ref, ok := strings.CutPrefix(v, magpieID+"/")
+	if !ok || !isMagpie(ref) {
+		return v, nil
+	}
+	if own := ownGatewayProvider(path, ref); own != "" {
+		return own + "/" + ref, nil
+	}
+	return v, edit.SetJSON(path, edit.KV{Path: "provider." + magpieID, Value: magpieProviderJSONFor("opencode", id)})
 }
 
 // ownGatewayProvider is the provider in an OpenCode config, other than
@@ -471,8 +487,22 @@ func sameGateway(base string) bool {
 
 func opencode(home, cfg string) *Agent {
 	return openCodeLike("opencode", "OpenCode", "opencode", "opencode",
-		filepath.Join(cfg, "opencode"), filepath.Join(home, ".local", "share", "opencode", "auth.json"),
+		openCodeDir(cfg), filepath.Join(home, ".local", "share", "opencode", "auth.json"),
 		[]string{"opencode"}, "oc")
+}
+
+// openCodeDir is the folder OpenCode reads its user config from:
+// $OPENCODE_CONFIG_DIR when set, else $XDG_CONFIG_HOME/opencode (cfg).
+// OpenCode 2, the one OpenChamber bundles (#321), reads that folder in place
+// of the other; OpenCode 1 reads both, the variable's last, so what magpie
+// writes there wins in either.
+func openCodeDir(cfg string) string {
+	if d := strings.TrimSpace(os.Getenv("OPENCODE_CONFIG_DIR")); d != "" {
+		if abs, err := filepath.Abs(d); err == nil {
+			return abs
+		}
+	}
+	return filepath.Join(cfg, "opencode")
 }
 
 // mimocode is MiMo Code, the CLI, and the engine inside Xiaomi MiMo, the

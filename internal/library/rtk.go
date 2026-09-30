@@ -412,7 +412,7 @@ func dropBlock(path, open, close string) error {
 
 func writeOrRemove(path, s string) error {
 	if strings.TrimSpace(s) == "" {
-		return os.Remove(path)
+		return edit.Remove(path)
 	}
 	return edit.WriteAtomic(path, []byte(s))
 }

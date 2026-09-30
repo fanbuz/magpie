@@ -543,7 +543,7 @@ func Delete(id string) error {
 		// a plugin's sign-in is magpie's own: removing it signs out
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		return plugin.SignOut(ctx, p.Account.plugin.ID)
+		return plugin.SignOut(ctx, p.Account.plugin.ID, "")
 	}
 	if _, ok := find(Accounts(), id); ok {
 		f := load()

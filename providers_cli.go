@@ -849,6 +849,10 @@ func fetchedFrom(p provider.Provider) string {
 // serving (agent.Reseat).
 func printMoved(moved []agent.Move) {
 	for _, m := range moved {
+		if m.Error != "" {
+			fmt.Println("!", m.String())
+			continue
+		}
 		fmt.Println(green.Render("✓"), "moved", m.String())
 	}
 }

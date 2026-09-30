@@ -31,7 +31,7 @@ export const FakePlugin = async ({ client }) => ({
           method: "code",
           callback: async (code) =>
             code === "good"
-              ? { type: "success", refresh: "r-" + (inputs.team ?? "none"), access: "stale", expires: 0, accountId: "me@fake" }
+              ? { type: "success", refresh: "r-" + (inputs.team ?? "none"), access: "stale", expires: 0, accountId: (inputs.team ?? "me") + "@fake" }
               : { type: "failed" },
         }),
       },
@@ -42,7 +42,7 @@ export const FakePlugin = async ({ client }) => ({
       async fetch(url, init) {
         let a = await getAuth()
         if (a.type === "oauth" && a.expires < Date.now()) {
-          a = { ...a, access: "fresh", expires: Date.now() + 3600e3 }
+          a = { ...a, access: "fresh-" + a.refresh, expires: Date.now() + 3600e3 }
           await client.auth.set({ path: { id: "fakeco" }, body: a })
         }
         const h = new Headers(init.headers)

@@ -151,6 +151,7 @@ func TestSyncCatalogRewritesAgentLists(t *testing.T) {
 func TestSyncCatalogAgesCodexCache(t *testing.T) {
 	home := syncHome(t)
 	dir := filepath.Join(home, ".codex")
+	writeFile(t, filepath.Join(dir, "auth.json"), `{"tokens":{"access_token":"x","id_token":"x.e30.x"}}`)
 	writeFile(t, filepath.Join(dir, "config.toml"), "model = \"relay/glm-4.6\"\nopenai_base_url = \""+codexGatewayURL()+"\"\n")
 	cache := filepath.Join(dir, "models_cache.json")
 	writeFile(t, cache, `{"fetched_at":"2026-09-25T10:00:00Z","etag":"W/\"v1\"","client_version":"0.155.1","models":[{"slug":"gpt-5.5"}]}`)

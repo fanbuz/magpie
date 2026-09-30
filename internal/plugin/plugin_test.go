@@ -87,21 +87,21 @@ func TestFakePlugin(t *testing.T) {
 		t.Fatalf("Validate = %q", e)
 	}
 	in := map[string]string{"where": "work", "team": "blue"}
-	a, err := Authorize(ctx, "fakeco", 1, in)
+	a, err := Authorize(ctx, "fakeco", 1, in, NewAccount)
 	if err != nil || a.Method != "code" || !strings.Contains(a.URL, "where=work") {
 		t.Fatalf("Authorize = %+v, %v", a, err)
 	}
 	if _, err := Finish(ctx, a.Session, "bad"); err != ErrFailed {
 		t.Fatalf("a bad code: %v", err)
 	}
-	a, _ = Authorize(ctx, "fakeco", 1, in)
-	if got, err := Finish(ctx, a.Session, "good"); err != nil || got != "fakeco" {
-		t.Fatalf("Finish = %q, %v", got, err)
+	a, _ = Authorize(ctx, "fakeco", 1, in, NewAccount)
+	if got, err := Finish(ctx, a.Session, "good"); err != nil || got != (Saved{"fakeco", "fakeco"}) {
+		t.Fatalf("Finish = %+v, %v", got, err)
 	}
 	var saved map[string]map[string]any
 	b, _ := os.ReadFile(AuthPath())
 	json.Unmarshal(b, &saved)
-	if saved["fakeco"]["type"] != "oauth" || saved["fakeco"]["refresh"] != "r-blue" || saved["fakeco"]["accountId"] != "me@fake" {
+	if saved["fakeco"]["type"] != "oauth" || saved["fakeco"]["refresh"] != "r-blue" || saved["fakeco"]["accountId"] != "blue@fake" {
 		t.Fatalf("saved %v", saved)
 	}
 	if fi, _ := os.Stat(AuthPath()); fi.Mode().Perm() != 0o600 {
@@ -111,7 +111,7 @@ func TestFakePlugin(t *testing.T) {
 		t.Fatal("not signed in")
 	}
 
-	o, err := LoaderOptions(ctx, "fakeco")
+	o, err := LoaderOptions(ctx, "fakeco", "")
 	if err != nil || o.BaseURL != srv.URL+"/v1" || !o.Fetch || o.APIKey != "dummy" {
 		t.Fatalf("LoaderOptions = %+v, %v", o, err)
 	}
@@ -135,12 +135,12 @@ func TestFakePlugin(t *testing.T) {
 	h := seen[len(seen)-1]
 	// the plugin refreshed the stale token and saved it; the chat.headers
 	// hook added its header; the plugin saw the provider's models
-	if h.Get("Authorization") != "Bearer fresh" || h.Get("X-Plugin-Model") != "fake-1" || h.Get("X-Models") != "fake-1,fake-claude,fake-gemini" {
+	if h.Get("Authorization") != "Bearer fresh-r-blue" || h.Get("X-Plugin-Model") != "fake-1" || h.Get("X-Models") != "fake-1,fake-claude,fake-gemini" {
 		t.Fatalf("headers = %v", h)
 	}
 	b, _ = os.ReadFile(AuthPath())
 	json.Unmarshal(b, &saved)
-	if saved["fakeco"]["access"] != "fresh" {
+	if saved["fakeco"]["access"] != "fresh-r-blue" {
 		t.Fatalf("refresh not saved: %v", saved)
 	}
 
@@ -156,7 +156,7 @@ func TestFakePlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := SignOut(ctx, "fakeco"); err != nil || SignedIn("fakeco") {
+	if err := SignOut(ctx, "fakeco", ""); err != nil || SignedIn("fakeco") {
 		t.Fatalf("SignOut: %v", err)
 	}
 	if err := SetOff(abs, true); err != nil {
@@ -164,5 +164,93 @@ func TestFakePlugin(t *testing.T) {
 	}
 	if ps := Cached(); len(ps) != 0 {
 		t.Fatalf("a plugin turned off still lists %+v", ps)
+	}
+}
+
+// A provider is signed in to more than once: each account is kept apart,
+// its requests made with its own sign-in and its refreshes saved to it; a
+// sign-in to an account already there replaces it.
+func TestPluginAccounts(t *testing.T) {
+	sandbox(t)
+	var auths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auths = append(auths, r.Header.Get("Authorization"))
+		fmt.Fprint(w, "{}")
+	}))
+	defer srv.Close()
+	t.Setenv("FAKE_BASE", srv.URL+"/v1")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	abs, _ := filepath.Abs("testdata/fake/index.js")
+	if _, err := Add(ctx, abs); err != nil {
+		t.Fatal(err)
+	}
+	signIn := func(team string) Saved {
+		t.Helper()
+		a, err := Authorize(ctx, "fakeco", 1, map[string]string{"where": "work", "team": team}, NewAccount)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := Finish(ctx, a.Session, "good")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	blue, red := signIn("blue"), signIn("red")
+	if blue.Account != "fakeco" || red.Provider != "fakeco" || !strings.HasPrefix(red.Account, "fakeco#") {
+		t.Fatalf("accounts %+v %+v", blue, red)
+	}
+	ps, err := Providers(ctx)
+	if err != nil || len(ps) != 1 || len(ps[0].Accounts) != 2 || ps[0].Accounts[0].AccountID != "blue@fake" || ps[0].Accounts[1] != (Account{Key: red.Account, Type: "oauth", AccountID: "red@fake"}) {
+		t.Fatalf("Providers = %+v, %v", ps, err)
+	}
+	if c := Cached(); len(c) != 1 || len(c[0].Accounts) != 2 || c[0].Accounts[1].Key != red.Account || c[0].AccountID != "blue@fake" {
+		t.Fatalf("Cached = %+v", c)
+	}
+
+	fetch := func(account string) {
+		t.Helper()
+		res, err := Fetch(ctx, FetchRequest{Provider: "fakeco", Account: account, Model: "fake-1", URL: srv.URL + "/v1/chat/completions", Method: "POST", Body: []byte(`{}`)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.ReadAll(res.Body)
+		res.Body.Close()
+	}
+	fetch(red.Account)
+	fetch("")
+	if len(auths) != 2 || auths[0] != "Bearer fresh-r-red" || auths[1] != "Bearer fresh-r-blue" {
+		t.Fatalf("sent %v", auths)
+	}
+	var saved map[string]map[string]any
+	b, _ := os.ReadFile(AuthPath())
+	json.Unmarshal(b, &saved)
+	if saved[red.Account]["access"] != "fresh-r-red" || saved["fakeco"]["access"] != "fresh-r-blue" || len(saved) != 2 {
+		t.Fatalf("saved %v", saved)
+	}
+
+	// red again: the same account, its sign-in replaced
+	if again := signIn("red"); again != red {
+		t.Fatalf("signed in again as %+v, not %+v", again, red)
+	}
+	b, _ = os.ReadFile(AuthPath())
+	saved = nil
+	json.Unmarshal(b, &saved)
+	if len(saved) != 2 || saved[red.Account]["access"] != "stale" {
+		t.Fatalf("after signing in again %v", saved)
+	}
+
+	if err := SignOut(ctx, "fakeco", red.Account); err != nil {
+		t.Fatal(err)
+	}
+	if c := Cached(); len(c) != 1 || len(c[0].Accounts) != 1 || c[0].Accounts[0].Key != "fakeco" {
+		t.Fatalf("after signing red out %+v", c)
+	}
+	// with the host stopped, too
+	signIn("green")
+	Restart()
+	if err := SignOut(ctx, "fakeco", ""); err != nil || SignedIn("fakeco") {
+		t.Fatalf("SignOut all: %v", err)
 	}
 }

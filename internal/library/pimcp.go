@@ -364,7 +364,7 @@ func piMove(from, to string, serversOnly bool) {
 				delete(doc, key)
 			}
 		}
-		if len(doc) == 0 {
+		if len(doc) == 0 && !edit.IsLink(from) { // a linked one stays, emptied
 			os.Remove(from)
 		}
 	}

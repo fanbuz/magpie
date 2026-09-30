@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/proc"
 )
 
@@ -455,6 +456,10 @@ func saveKiro(c kiroCred) {
 }
 
 func writeFileAtomic(path string, b []byte) error {
+	path, err := edit.Target(path) // a symlink stays, its target written
+	if err != nil {
+		return err
+	}
 	tmp := path + ".magpie-tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err

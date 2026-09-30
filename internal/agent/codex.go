@@ -21,8 +21,8 @@ import (
 	"github.com/yetone/magpie/internal/provider"
 )
 
-// Codex talks the OpenAI Responses API. Signed in (ChatGPT or an API key),
-// it is routed through magpie with `openai_base_url` alone: Codex keeps its
+// Codex talks the OpenAI Responses API. Signed in to ChatGPT, it is
+// routed through magpie with `openai_base_url` alone: Codex keeps its
 // built-in OpenAI provider and sign-in, so its own models, its threads
 // (listed per provider) and the Codex app's model picker stay as they are,
 // and magpie's gateway passes its own models through to OpenAI while it
@@ -30,9 +30,14 @@ import (
 // OpenAI's in /model. Not signed in, the built-in provider can't run, and
 // magpie is a provider of its own: a [model_providers.magpie] table,
 // `model_provider = "magpie"`, and a model catalog file for /model. So it
-// is too for a ChatGPT account that has used its allowance up, which the
-// Codex app won't send anything for, whoever serves the model, and when
-// the user asks for it (the sign-in field's api): the Codex app is then in
+// is too for Codex signed in with an API key, often one a relay issued:
+// Codex then never asks for the model list (its models manager skips the
+// fetch for an API key), so its picker was the models it was built with
+// and the one set, magpie's others missing, and the built-in ones went to
+// OpenAI with that key (#322). So it is too for a ChatGPT account that
+// has used its allowance up, which the Codex app won't send anything for,
+// whoever serves the model, and when the user asks for it (the sign-in
+// field's api): the Codex app is then in
 // its API state rather than signed in to ChatGPT. The base URL is set then
 // too: a thread started on the built-in provider is opened on it again, and
 // a magpie model picked in it would otherwise go to the ChatGPT backend.
@@ -270,7 +275,7 @@ func codexIn(at place) *Agent {
 			// a ChatGPT account out of allowance keeps the Codex app from
 			// sending at all, a magpie model's request too; as a provider
 			// of Codex's own, magpie is past that
-			if !api() && codexSignedIn(dir) && !codexUsedUp() {
+			if !api() && codexChatGPT(dir) && !codexUsedUp() {
 				if err := dropProvider(); err != nil {
 					return err
 				}
@@ -366,6 +371,12 @@ func codexIn(at place) *Agent {
 		Sync: func() error {
 			if err := failover(); err != nil {
 				return err
+			}
+			// on a magpie model by the base URL alone with no ChatGPT
+			// sign-in, as an older magpie left a Codex signed in with an
+			// API key: its picker never had magpie's models (#322)
+			if m := get("model"); isMagpie(m) && viaBase() && get("model_provider") == "" && !codexChatGPT(dir) {
+				return set(m)
 			}
 			// a table taken away before (by an older magpie) comes back
 			// while magpie is wired, for the threads that name it
@@ -716,11 +727,11 @@ func codexFailover() bool {
 	return false
 }
 
-// codexSignedIn reports whether Codex has a sign-in of its own, a ChatGPT
-// account or an API key, which its built-in OpenAI provider needs.
-func codexSignedIn(dir string) bool {
+// codexChatGPT reports whether Codex is signed in to a ChatGPT account:
+// its built-in provider then runs and asks for the model list at
+// openai_base_url. Signed in with an API key alone, it asks for none.
+func codexChatGPT(dir string) bool {
 	var a struct {
-		Key    string `json:"OPENAI_API_KEY"`
 		Tokens struct {
 			Access string `json:"access_token"`
 		} `json:"tokens"`
@@ -729,7 +740,7 @@ func codexSignedIn(dir string) bool {
 	if err != nil || json.Unmarshal(b, &a) != nil {
 		return false
 	}
-	return a.Key != "" || a.Tokens.Access != ""
+	return a.Tokens.Access != ""
 }
 
 // codexReached reads Codex's newest model request since a time — the

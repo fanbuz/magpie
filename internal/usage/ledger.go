@@ -16,6 +16,7 @@ import (
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/sessions"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // Row is one call as the ledger lists it.
@@ -293,17 +294,22 @@ func ledgerWith(since time.Time, f Filter, recs []Record, logs []sessions.Call) 
 	return rows, sum, agents, providers
 }
 
-// pricer uses one API list price per model, irrespective of subscriptions,
-// relays, account identity or an unknown route. Vendor discounts are not used.
+// pricer honors explicit provider/model prices (including provider-wide and
+// zero prices), then falls back to one maker API list price per model. Without
+// an override, subscriptions and relays use the same reference price.
 func pricer() func(Record) *catalog.Price {
-	prices := map[string]*catalog.Price{}
+	prices := map[[2]string]*catalog.Price{}
+	s := settings.Load()
 	return func(r Record) *catalog.Price {
-		k := r.Model
+		k := [2]string{r.Provider, r.Model}
 		if pr, ok := prices[k]; ok {
 			return pr
 		}
 		var pr *catalog.Price
-		v, ok := provider.MakerPrice(r.Model)
+		v, ok := provider.ConfiguredPriceIn(s, r.Provider, r.Model)
+		if !ok {
+			v, ok = provider.MakerPrice(r.Model)
+		}
 		if ok {
 			pr = &v
 		} else {
@@ -321,7 +327,7 @@ var CSVHeader = []string{"time", "agent", "requested_model", "provider", "host",
 	"request_id", "endpoint", "error_message", "error_type", "source", "rejected", "session_provider", "session_account", "session_official_login"}
 
 // WriteCSV writes rows as CSV, a header first: times in RFC 3339 with
-// their offset, the cost in USD at list price (empty when unknown), error
+// their offset, the cost in USD at the configured or maker list price (empty when unknown), error
 // "true" for a call that failed: answered with a status of 400 or more, or
 // ended by an error a session file tells.
 func WriteCSV(w io.Writer, rows []Row) error {

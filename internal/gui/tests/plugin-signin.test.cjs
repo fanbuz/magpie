@@ -3,8 +3,9 @@
 // "From plugins"; its sign-in asks the way to sign in, the method's
 // questions (a pick, then a text the plugin checks), then opens the
 // browser and takes the code its page shows; an "api" way takes a key and
-// opens the account. (The Plugins tab is plugin-market.test.cjs.) English
-// and Chinese; the API is faked here.
+// opens the account; another account is added beside it, as a built-in
+// subscription's is, and can be put first. (The Plugins tab is
+// plugin-market.test.cjs.) English and Chinese; the API is faked here.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -18,7 +19,12 @@ const plugin = { id: "fakeco", pid: "fakeco", name: "FakeCo", icon: "generic", s
     { type: "api", label: "Paste an existing FakeCo session token from another device you are signed in on" }] };
 
 function server(lang, asked) {
-  let signedIn = false;
+  const accts = []; // who is signed in, the first in use first
+  const payload = () => {
+    const providers = [{ id: "openai", name: "OpenAI", icon: "openai", preset: "openai", models: [], agents: [], key: { set: true, masked: "sk-…ab12" } }];
+    if (accts.length) providers.push({ id: "fakeco", name: "FakeCo", icon: "generic", models: [], agents: [], key: {}, account: { agent: "fakeco", agentName: "FakeCo", agentIcon: "generic", user: accts[0], logins: accts.map((user, i) => ({ user, active: i === 0, on: true })) } });
+    return { providers, presets: [], excluded: [], gateway: { running: true, window: true }, plugins: [{ ...plugin, signedIn: accts.length > 0 }] };
+  };
   return async (route) => {
     const url = new URL(route.request().url());
     const json = (data) => route.fulfill({ json: data });
@@ -26,10 +32,12 @@ function server(lang, asked) {
     if (url.pathname === "/boot.js") return route.fulfill({ contentType: "text/javascript", body: `window.bootPrefs = {lang:"${lang}",theme:"light",web:false};` });
     if (url.pathname === "/wails/runtime.js") return route.fulfill({ contentType: "text/javascript", body: "export const Window = {};" });
     if (url.pathname === "/api/state") return json({ agents: [], profiles: [], settings: { lang, theme: "light" } });
-    if (url.pathname === "/api/providers") {
-      const providers = [{ id: "openai", name: "OpenAI", icon: "openai", preset: "openai", models: [], agents: [], key: { set: true, masked: "sk-…ab12" } }];
-      if (signedIn) providers.push({ id: "fakeco", name: "FakeCo", icon: "", models: [], agents: [], key: {}, account: { agent: "fakeco", agentName: "FakeCo", agentIcon: "generic", user: "API key" } });
-      return json({ providers, presets: [], excluded: [], gateway: { running: true, window: true }, plugins: [{ ...plugin, signedIn }] });
+    if (url.pathname === "/api/providers") return json(payload());
+    if (url.pathname === "/api/login/switch") {
+      const b = body();
+      asked.push(["switch", b]);
+      accts.unshift(...accts.splice(accts.indexOf(b.user), 1));
+      return json(payload());
     }
     if (url.pathname === "/api/groups") return json({ groups: [], pools: [] });
     if (url.pathname === "/api/gateway/trace") return json({ routes: [] });
@@ -46,7 +54,7 @@ function server(lang, asked) {
     if (url.pathname === "/api/plugin-signin") {
       const b = body();
       asked.push(["signin", b]);
-      if (b.key) { signedIn = true; return json({ agent: "fakeco", state: "done", user: "FakeCo" }); }
+      if (b.key) { accts.push("API key …" + b.key); return json({ agent: "fakeco", state: "done", user: accts.at(-1) }); }
       return json({ id: "p1", agent: "fakeco", state: "waiting", url: "https://fake.test/auth", pasteCode: true, instructions: "Paste the code FakeCo shows." });
     }
     if (url.pathname === "/api/signin/p1/callback") { asked.push(["code", body()]); return route.fulfill({ status: 204 }); }
@@ -59,8 +67,8 @@ function server(lang, asked) {
 }
 
 const L = {
-  en: { section: "From plugins", how: "How do you sign in to FakeCo?", next: "Next", code: "Code", finish: "Finish sign-in", key: "FakeCo API key", signIn: "Sign in" },
-  zh: { section: "来自插件", how: "用哪种方式登录 FakeCo？", next: "下一步", code: "验证码", finish: "完成登录", key: "FakeCo API Key", signIn: "登录" },
+  en: { section: "From plugins", how: "How do you sign in to FakeCo?", next: "Next", code: "Code", finish: "Finish sign-in", key: "FakeCo API key", signIn: "Sign in", add: "Add another FakeCo account", first: "Make first", note: "The gateway uses the first. Tick more" },
+  zh: { section: "来自插件", how: "用哪种方式登录 FakeCo？", next: "下一步", code: "验证码", finish: "完成登录", key: "FakeCo API Key", signIn: "登录", add: "添加另一个 FakeCo 账号", first: "设为首选", note: "网关优先用第一个账号。多勾选几个" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -128,6 +136,24 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await box.locator("button", { hasText: w.signIn }).click();
         await page.waitForFunction(() => editing === "fakeco");
         assert.deepEqual(asked.filter(([k]) => k === "signin").pop()[1], { provider: "fakeco", method: 0, inputs: {}, key: "k1" });
+
+        // another account, beside the first: the editor adds it, lists
+        // both, and puts the second first when asked
+        const ed = page.locator("#modal .editor");
+        const add = ed.locator(".accts .acc.add", { hasText: w.add });
+        await add.waitFor();
+        assert.match(await ed.innerText(), new RegExp(w.note));
+        await add.click();
+        await ed.locator(".signing button", { hasText: "API key" }).first().click();
+        await ed.getByLabel(w.key).fill("k2");
+        await ed.locator(".signing button", { hasText: w.signIn }).click();
+        const rows = ed.locator(".accts .acc:not(.add)");
+        await page.waitForFunction(() => document.querySelectorAll("#modal .editor .accts .acc:not(.add)").length === 2);
+        assert.deepEqual(await rows.locator(".n").allInnerTexts(), ["API key …k1", "API key …k2"]);
+        if (process.env.ARTIFACT_DIR) await ed.locator(".accts").screenshot({ path: path.join(process.env.ARTIFACT_DIR, `plugin-accounts-${engine}-${lang}.png`) });
+        await rows.nth(1).locator("button", { hasText: w.first }).click();
+        await page.waitForFunction(() => document.querySelector("#modal .editor .accts .acc .n")?.textContent === "API key …k2");
+        assert.deepEqual(asked.filter(([k]) => k === "switch").pop()[1], { agent: "fakeco", user: "API key …k2" });
 
         assert.deepEqual(errors, []);
       });

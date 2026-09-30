@@ -3,6 +3,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/yetone/magpie/internal/provider"
@@ -130,5 +131,49 @@ func TestModelKey(t *testing.T) {
 	}
 	if modelKey("gpt-5") == modelKey("gpt-5-mini") {
 		t.Error("gpt-5 = gpt-5-mini")
+	}
+}
+
+// An agent that can't be moved (its config unwritable) doesn't fail the
+// change, which is made already: the others are moved and it is a move with
+// its error. An error here kept a removed provider's editor open in the
+// panel, the provider still listed, and a second Remove said "no provider".
+func TestReseatUnmovable(t *testing.T) {
+	home := reseatHome(t)
+	c, h := mustFind(t, "claude"), mustFind(t, "hermes")
+	mustApply(t, c, "model", "cop/only-here")
+	mustApply(t, h, "model", "magpie/cop/only-here")
+	dir := filepath.Join(home, ".hermes")
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	if f, err := os.Create(filepath.Join(dir, "probe")); err == nil {
+		f.Close()
+		t.Skip("a read-only folder is writable here (root?)")
+	}
+	os.Chmod(filepath.Join(dir, "config.yaml"), 0o444)
+
+	moves, err := Reseat(func() error { return provider.Delete("cop") })
+	if err != nil {
+		t.Fatalf("the provider is removed, but Reseat said: %v", err)
+	}
+	if _, err := provider.Find("cop"); err == nil {
+		t.Fatal("cop still there")
+	}
+	if got := c.Field("model").Get(); got != "" {
+		t.Errorf("claude not moved: %q", got)
+	}
+	var stuck *Move
+	for i, m := range moves {
+		if m.Agent == "Hermes Agent" {
+			stuck = &moves[i]
+		}
+	}
+	if len(moves) != 2 || stuck == nil || stuck.Error == "" || stuck.To != "" || stuck.From != "cop/only-here" {
+		t.Fatalf("moves: %+v", moves)
+	}
+	if s := stuck.String(); !strings.Contains(s, "not moved") {
+		t.Errorf("String: %q", s)
 	}
 }

@@ -35,11 +35,19 @@ func TestPluginProvider(t *testing.T) {
 	}
 	var mu sync.Mutex
 	var got []seen
+	limited := "" // the Authorization answered 429
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		mu.Lock()
 		got = append(got, seen{r.URL.RequestURI(), r.Header.Get("Authorization"), r.Header.Get("X-Plugin-Model"), string(b)})
+		out := limited != "" && r.Header.Get("Authorization") == limited
 		mu.Unlock()
+		if out {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(429)
+			fmt.Fprint(w, `{"error":{"message":"rate limited"}}`)
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		switch {
 		case r.URL.Path == "/v1/chat/completions":
@@ -77,7 +85,7 @@ func TestPluginProvider(t *testing.T) {
 	if _, err := provider.Find("fakeco"); err == nil {
 		t.Fatal("fakeco is a provider before it is signed in to")
 	}
-	if _, err := plugin.APIKey(ctx, "fakeco", 0, nil, "k1"); err != nil {
+	if _, err := plugin.APIKey(ctx, "fakeco", 0, nil, "k1", plugin.NewAccount); err != nil {
 		t.Fatal(err)
 	}
 	p, err := provider.Find("fakeco")
@@ -112,7 +120,25 @@ func TestPluginProvider(t *testing.T) {
 		}
 	}
 
-	if err := plugin.SignOut(ctx, "fakeco"); err != nil {
+	// a second account: the first rate limited, a request goes on the second
+	if _, err := provider.PluginAPIKey(ctx, "fakeco", 0, nil, "k2"); err != nil {
+		t.Fatal(err)
+	}
+	if ls := provider.Logins("fakeco"); len(ls) != 2 || !ls[1].On {
+		t.Fatalf("accounts %+v", ls)
+	}
+	mu.Lock()
+	limited = "Bearer k1"
+	mu.Unlock()
+	code, body := postAs(t, s, "", `{"model":"fakeco/fake-1","messages":[{"role":"user","content":"hello"}]}`)
+	mu.Lock()
+	last := got[len(got)-1]
+	mu.Unlock()
+	if code != 200 || !strings.Contains(body, "hi from chat") || last.auth != "Bearer k2" {
+		t.Fatalf("with the first account limited: %d %s, upstream saw %+v", code, body, last)
+	}
+
+	if err := plugin.SignOut(ctx, "fakeco", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := provider.Find("fakeco"); err == nil {

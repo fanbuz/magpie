@@ -12,6 +12,7 @@ import (
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/sessions"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // The ledger lists a period's calls newest first, each with the model
@@ -429,4 +430,100 @@ func TestLedgerLogModels(t *testing.T) {
 			t.Errorf("%s answered as %s is the same model", c[0], c[1])
 		}
 	}
+}
+
+// A call is counted at the price the user set for that provider and model,
+// all four token tiers included: the ledger is where a wrong price becomes a
+// wrong number, and a tier left at the catalogue's price would not show in
+// the input and output columns alone.
+func TestLedgerUsesTheStatedPrice(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755)
+	os.WriteFile(catalog.CachePath(), []byte(`{"openai":{"id":"openai","models":{"sol":{"id":"sol",`+
+		`"cost":{"input":2,"output":8,"cache_read":0.5,"cache_write":2.5}}}}}`), 0o644)
+	if err := provider.Save(provider.Provider{ID: "relay", Name: "Relay", Key: "k", Chat: "https://relay.example/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	// all four parts distinct from the catalogue's, so a tier counted at the
+	// catalogue's price instead would move the total
+	if err := settings.Save(settings.Settings{ModelPrices: map[string]settings.ModelPrice{
+		"relay/sol": {Input: new(float64(0.2)), Output: new(float64(1)),
+			CacheRead: new(float64(0.05)), CacheWrite: new(float64(0.25))},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Dir(Path()), 0o755)
+	Append(Record{Time: time.Now(), Agent: "codex", Provider: "relay", Host: "relay.example",
+		Model: "sol", Input: 1000, Output: 100, CacheRead: 2000, CacheWrite: 400, Status: 200})
+
+	rows, sum, _ := Ledger(Month, Filter{})
+	if len(rows) != 1 || !rows[0].Priced {
+		t.Fatalf("rows %+v", rows)
+	}
+	// (1000*0.2 + 100*1 + 2000*0.05 + 400*0.25) / 1e6
+	const want = 0.0005
+	if math.Abs(rows[0].Cost-want) > 1e-12 || math.Abs(sum.Cost-want) > 1e-12 {
+		t.Fatalf("row cost %v, total %v; want %v", rows[0].Cost, sum.Cost, want)
+	}
+}
+
+// Overrides are isolated by provider and refresh cached pages when changed.
+func TestLedgerConfiguredPricesAndRefresh(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	catalog.Reset()
+	t.Cleanup(catalog.Reset)
+	os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755)
+	os.WriteFile(catalog.CachePath(), []byte(`{"openai":{"models":{"sol":{"id":"sol","cost":{"input":2,"output":8}}}}}`), 0o644)
+	price := func(v float64) settings.ModelPrice {
+		return settings.ModelPrice{Input: new(v), Output: new(v), CacheRead: new(v), CacheWrite: new(v)}
+	}
+	cfg := settings.Settings{ModelPrices: map[string]settings.ModelPrice{"a/sol": price(0), "a/*": price(9), "b/*": price(3)}}
+	if err := settings.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Dir(Path()), 0o755)
+	for _, id := range []string{"a", "b", "unknown"} {
+		Append(Record{Time: time.Now(), Provider: id, Model: "sol", Input: 1000000, Status: 200})
+	}
+	check := func(want map[string]float64) {
+		t.Helper()
+		rows, sum, _ := Ledger(Month, Filter{})
+		page := QueryPage(Month, Filter{}, 0, 20)
+		for _, got := range [][]Row{rows, page.Rows} {
+			if len(got) != 3 {
+				t.Fatalf("rows: %+v", got)
+			}
+			for _, r := range got {
+				if !r.Priced || r.Cost != want[r.Provider] {
+					t.Fatalf("%s priced=%v cost=%v want=%v", r.Provider, r.Priced, r.Cost, want[r.Provider])
+				}
+			}
+		}
+		total := want["a"] + want["b"] + want["unknown"]
+		if sum.Cost != total || page.Sum.Cost != total {
+			t.Fatalf("totals: ledger=%v page=%v want=%v", sum.Cost, page.Sum.Cost, total)
+		}
+	}
+	check(map[string]float64{"a": 0, "b": 3, "unknown": 2})
+	cfg.ModelPrices["a/sol"] = price(4)
+	if err := settings.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	check(map[string]float64{"a": 4, "b": 3, "unknown": 2})
+	delete(cfg.ModelPrices, "a/sol")
+	if err := settings.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	check(map[string]float64{"a": 9, "b": 3, "unknown": 2})
+	delete(cfg.ModelPrices, "a/*")
+	if err := settings.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	check(map[string]float64{"a": 2, "b": 3, "unknown": 2})
 }

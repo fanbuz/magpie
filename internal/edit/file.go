@@ -22,8 +22,14 @@ func Read(path string) ([]byte, error) {
 }
 
 // WriteAtomic writes data to path via a temp file + rename so a crash can
-// never leave a half-written config behind. File mode is preserved.
+// never leave a half-written config behind. File mode is preserved. When
+// path is a symlink (a config kept in a dotfiles repo) the file it points
+// at is written and the link stays.
 func WriteAtomic(path string, data []byte) error {
+	path, err := Target(path)
+	if err != nil {
+		return err
+	}
 	mode := fs.FileMode(0o644)
 	if st, err := os.Stat(path); err == nil {
 		mode = st.Mode().Perm()
@@ -59,6 +65,52 @@ func WriteAtomic(path string, data []byte) error {
 	return nil
 }
 
+// Target is the file a write to path should replace: path itself, or,
+// when path is a symlink, the file at the end of its links — the path it
+// names even when nothing is there yet. Renaming over the link instead
+// would turn it into a file of its own and leave its target as it was.
+func Target(path string) (string, error) {
+	if p, err := filepath.EvalSymlinks(path); err == nil {
+		return p, nil
+	}
+	p := path
+	for range 255 {
+		fi, err := os.Lstat(p)
+		if err != nil || fi.Mode()&fs.ModeSymlink == 0 {
+			return p, nil
+		}
+		dest, err := os.Readlink(p)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(dest) {
+			// not Join: its cleaning would take a ".." past a linked folder
+			dest = filepath.Dir(p) + string(filepath.Separator) + dest
+		}
+		p = dest
+	}
+	return "", fmt.Errorf("%s: too many links", path)
+}
+
+// IsLink reports whether path is a symlink.
+func IsLink(path string) bool {
+	fi, err := os.Lstat(path)
+	return err == nil && fi.Mode()&fs.ModeSymlink != 0
+}
+
+// Remove takes away a file magpie has emptied. A symlink stays and the
+// file it points at is emptied instead, when there is one: deleting the
+// link would leave the old text in its target.
+func Remove(path string) error {
+	if !IsLink(path) {
+		return os.Remove(path)
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil // points at nothing: nothing to empty
+	}
+	return WriteAtomic(path, nil)
+}
+
 // Atomically runs fn, which may write the files at paths in several steps,
 // and puts each of them back as it was — its bytes and mode, or its absence
 // — when fn fails, so an edit that fails part way leaves no file half made.
@@ -74,6 +126,9 @@ func Atomically(fn func() error, paths ...string) error {
 	for _, p := range paths {
 		st, err := os.Stat(p)
 		if errors.Is(err, fs.ErrNotExist) {
+			if t, err := Target(p); err == nil {
+				p = t // a link to nothing yet stays, only what fn made goes
+			}
 			before = append(before, saved{path: p})
 			continue
 		}

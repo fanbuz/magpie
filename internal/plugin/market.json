@@ -38,8 +38,6 @@
       "summary": { "en": "Claude Pro and Max with your Claude account.", "zh": "用 Claude 账号使用 Claude Pro / Max。" } },
     { "package": "@servoy/opencode-kiro-auth", "name": "Kiro", "icon": "kiro-color", "providers": ["kiro"],
       "summary": { "en": "Claude models on your AWS Kiro plan.", "zh": "用 AWS Kiro 套餐使用 Claude 模型。" } },
-    { "package": "@cognitionai/opencode-devin", "name": "Devin by Cognition", "icon": "devin", "providers": ["devin"],
-      "summary": { "en": "Cognition's own plugin: sign in with Devin and use Devin's AI gateway.", "zh": "Cognition 官方插件：登录 Devin，使用 Devin 的 AI 网关。" } },
     { "package": "opencode-qoder-bridge", "name": "Qoder (Agent SDK)", "icon": "qoder", "providers": ["qoder"],
       "summary": { "en": "Qoder through the official Qoder Agent SDK.", "zh": "通过官方 Qoder Agent SDK 使用 Qoder。" } }
   ]

@@ -25,6 +25,7 @@ import (
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/sessions"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 type RequestPage struct {
@@ -197,7 +198,8 @@ func queryPage(p Period, f Filter, offset, limit int, readSource func(sessions.C
 	})
 	ids, _ := json.Marshal(provider.SessionIdentities(sessions.CodexDir()))
 	renamed, _ := json.Marshal(provider.Renamed())
-	meta := fmt.Sprintf("%s|%s|%s|%s", ids, renamed, statKey(provider.Path()), statKey(catalog.CachePath()))
+	prices, _ := json.Marshal(settings.Load().ModelPrices)
+	meta := fmt.Sprintf("%s|%s|%s|%s|%s", ids, renamed, prices, statKey(provider.Path()), statKey(catalog.CachePath()))
 	h := sha256.New()
 	for _, root := range sessions.DesktopDataDirs() {
 		for _, kind := range []string{"local-agent-mode-sessions", "claude-code-sessions"} {

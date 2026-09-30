@@ -83,6 +83,7 @@ type Account struct {
 	// plugin is set on a plugin's provider (plugins.go), and transport
 	// carries its requests: the plugin's fetch.
 	plugin    *plugin.Provider
+	pluginKey string // the account's key in plugin-auth.json
 	transport func(req *http.Request) (*http.Response, error)
 }
 

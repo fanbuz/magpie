@@ -258,8 +258,12 @@ func (s *Server) codexUpstream(w http.ResponseWriter, r *http.Request, rest stri
 		// left to the transport, the reply comes back plain for the usage in it
 		req.Header.Del("Accept-Encoding")
 		if res, err = s.client.Do(req); err != nil {
-			writeError(w, provider.Responses, 502, "OpenAI: "+err.Error())
-			end(502, "OpenAI: "+err.Error(), 0, 0)
+			msg := "OpenAI: " + err.Error()
+			if rest == "/responses" {
+				msg = codexUnreached(modelOf(body), err)
+			}
+			writeError(w, provider.Responses, 502, msg)
+			end(502, msg, 0, 0)
 			return
 		}
 		if rest != "/responses" || tries >= 3 || (res.StatusCode != 400 && res.StatusCode != 404) {
@@ -407,8 +411,6 @@ func withoutItem(body []byte, id string) ([]byte, bool) {
 	return b, err == nil
 }
 
-// apiKey reports whether Codex signed in with an API key rather than a
-// ChatGPT account.
 // codexKeyRefused says why a model of Codex's own failed with 401: what
 // OpenAI said, and what to do about it.
 func codexKeyRefused(msg []byte) string {
@@ -427,6 +429,18 @@ func codexKeyRefused(msg []byte) string {
 		"or sign Codex in with ChatGPT, or with an OpenAI API key"
 }
 
+// codexUnreached says why a model of Codex's own failed with 502: OpenAI,
+// where it goes with Codex's own sign-in, couldn't be reached — often from
+// a Codex whose only sign-in is a relay's key, whose own models it still
+// lists (#322) — and what to do about it.
+func codexUnreached(model string, err error) string {
+	return "OpenAI can't be reached (" + err.Error() + "). " + model + " is one of Codex's own models, " +
+		"which goes to OpenAI with Codex's own sign-in: pick one of magpie's models in Codex " +
+		"(provider/model, or set it in magpie's Agents view), or let Codex reach OpenAI"
+}
+
+// apiKey reports whether Codex signed in with an API key rather than a
+// ChatGPT account.
 func apiKey(h http.Header) bool {
 	return strings.HasPrefix(strings.TrimPrefix(h.Get("Authorization"), "Bearer "), "sk-")
 }

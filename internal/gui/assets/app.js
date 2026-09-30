@@ -3654,7 +3654,7 @@ function drawEditor(p, presetID) {
     // the sign-in belongs to the agent; magpie only borrows it
     const a = p.account;
     if (subOf(a.agent)) {
-      ed.append(...field(t("Accounts"), renderAccounts(a), p.routing ? t("Tick every account to use; Routing says how requests spread over them.") : subOf(a.agent).single ? t("{agent} keeps one account; the gateway runs it for every request. Signing in to another replaces it.", { agent: a.agentName }) : subOf(a.agent).own ? t("The gateway uses the first. Tick more and it moves on to the next when the one before it is out of quota. {agent} itself stays signed in as it is.", { agent: a.agentName }) : t("{agent} signs in to the first. Tick more and the gateway moves on to the next when the one before it is out of quota. Sessions already running keep theirs until restarted.", { agent: a.agentName })));
+      ed.append(...field(t("Accounts"), renderAccounts(a), p.routing ? t("Tick every account to use; Routing says how requests spread over them.") : subOf(a.agent).single ? t("{agent} keeps one account; the gateway runs it for every request. Signing in to another replaces it.", { agent: a.agentName }) : subOf(a.agent).plugin ? t("The gateway uses the first. Tick more and it moves on to the next when the one before it is out of quota.") : subOf(a.agent).own ? t("The gateway uses the first. Tick more and it moves on to the next when the one before it is out of quota. {agent} itself stays signed in as it is.", { agent: a.agentName }) : t("{agent} signs in to the first. Tick more and the gateway moves on to the next when the one before it is out of quota. Sessions already running keep theirs until restarted.", { agent: a.agentName })));
       if ((a.logins || []).filter((l) => l.active || l.on).length > 1) ed.append(...renderRouting(p));
     } else {
       const acct = el("div", "acct");
@@ -4797,7 +4797,7 @@ const subOf = (agent) => SUBS.find((x) => x.agent === agent) || pluginSubs().fin
 // magpie, signs in and carries the requests.
 function pluginSubs() {
   return (providers.plugins || []).map((x) => ({
-    agent: x.id, pid: x.pid, name: x.name, icon: x.icon, plugin: x, own: true, single: true,
+    agent: x.id, pid: x.pid, name: x.name, icon: x.icon, plugin: x, own: true,
     get plans() { return t("from the plugin {spec}", { spec: x.spec }); },
   }));
 }
@@ -5164,12 +5164,19 @@ function renderSigning(sub) {
   }
   box.append(tt);
   if (signing.url) {
+    // the link itself, to select or copy into another browser or profile
+    // than the one magpie opened it in
+    const link = el("span", "signlink");
+    const u = el("code", "", signing.url);
+    u.title = t("Open it in another browser or profile: copy it there");
+    const cp = copyBtn(signing.url, t("Sign-in link"));
+    cp.title = t("Copy link");
+    link.append(u, cp);
+    tt.append(link);
     const acts = el("span", "acts");
     const open = el("button", "link", t("Open again"));
     open.onclick = () => api("open", { url: signing.url }).catch(() => {});
-    const cp = el("button", "link", t("Copy link"));
-    cp.onclick = () => copy(signing.url, t("Sign-in link"), cp);
-    acts.append(open, cp);
+    acts.append(open);
     tt.append(acts);
   }
   if (signing.pasteCallback || signing.pasteCode) {
@@ -5888,6 +5895,19 @@ async function providerAction(action, body, okMsg, base = "provider/") {
     renderAgents();
     saidMoved(okMsg);
   } catch (e) {
+    // a Remove may have gone through before what failed: the list as it is
+    // now, and the editor of a provider gone closes, rather than stay open
+    // on it for a second Remove to say there is no such provider
+    if (action === "delete" && typeof editing === "string") {
+      try {
+        providers = await api("providers");
+        if (!providers.providers.some((p) => p.id === editing)) {
+          editing = null; draft = null;
+          renderProviders();
+          return status(e.message, "err");
+        }
+      } catch { /* the error below says enough */ }
+    }
     if (!editorError(e.message, "err")) status(e.message, "err");
     document.querySelector(".editor .busy")?.classList.remove("busy");
   }
@@ -5897,13 +5917,17 @@ async function providerAction(action, body, okMsg, base = "provider/") {
 // took away (a provider switched off or removed, the last account signed
 // out: #200), each to the same model elsewhere or back to its default.
 function saidMoved(okMsg) {
+  // one magpie couldn't move (its file unwritable) is still on the model
+  // gone, and the change made all the same
+  let stuck = false;
   const moved = (providers.moved || []).map((m) => {
     const who = m.field === "model" ? m.agent : m.agent + " " + m.field;
+    if (m.error) { stuck = true; return t("{agent} is still on {model}, which magpie no longer serves: {error}", { agent: who, model: m.from, error: m.error }); }
     return m.to ? t("{agent} moved to {model}", { agent: who, model: m.to })
       : t("{agent} is back on its default", { agent: who });
   });
   const msg = [okMsg, ...moved].filter(Boolean).join(" · ");
-  if (msg) status(msg, "ok", moved.length ? 9000 : undefined);
+  if (msg) status(msg, stuck ? "warn" : "ok", stuck ? 12000 : moved.length ? 9000 : undefined);
 }
 
 // editorError shows what went wrong inside the open provider editor, by its
@@ -9434,6 +9458,9 @@ function importForm() {
 // trayCardID names a Usage page card as settings.TrayUsage does: its
 // provider, and the account when there is one.
 const trayCardID = (q) => q.user ? q.provider + "|" + q.user : q.provider;
+// IN_USE ends the id of a card that follows the subscription's account in
+// use, the one the gateway goes to first, rather than naming one
+const IN_USE = "|*";
 
 // renderTrayUsage: the subscriptions and plans whose windows show beside
 // the tray icon, side by side. The cards are the Usage page's, asked for
@@ -9455,7 +9482,7 @@ function renderTrayUsage(s, keep) {
   const pill = el("button", "proto pick" + (ids.length ? " set" : ""));
   pill.type = "button";
   const paint = () => {
-    const card = (quotas || []).find((q) => trayCardID(q) === ids[0]);
+    const card = (quotas || []).find((q) => trayCardID(q) === ids[0] || q.provider + IN_USE === ids[0]);
     pill.replaceChildren(el("span", "", !ids.length ? t("Off") : ids.length > 1 ? t("{n} subscriptions", { n: ids.length })
       : card ? card.name : ids[0].split("|")[0]), svg(CHEV, 11, 1.6));
   };
@@ -9466,11 +9493,17 @@ function renderTrayUsage(s, keep) {
     if (pill.classList.contains("open")) return closeProtoMenu();
     if (!quotas) { pill.classList.add("busy"); await loadQuotas(); pill.classList.remove("busy"); paint(); }
     const cards = (quotas || []).filter((q) => !q.error && (q.windows?.length || q.balance));
-    const opts = [{ v: "", name: "Off", note: "" },
-      ...cards.map((q) => ({ v: trayCardID(q), name: q.name, note: [q.plan, q.user].filter(Boolean).join(" · ") }))];
+    const opts = [{ v: "", name: "Off", note: "" }];
+    for (const q of cards) {
+      // a subscription with several accounts: the one in use, whichever
+      // it is now, before each by name
+      if (q.user && !opts.some((o) => o.v === q.provider + IN_USE) && cards.filter((c) => c.provider === q.provider).length > 1)
+        opts.push({ v: q.provider + IN_USE, name: q.name, note: "Account in use" });
+      opts.push({ v: trayCardID(q), name: q.name, note: [q.plan, q.user].filter(Boolean).join(" · ") });
+    }
     // one ticked that isn't there now (signed out, or not answering) stays
     // to be unticked
-    for (const id of ids) if (!opts.some((o) => o.v === id)) opts.push({ v: id, name: id.split("|")[0], note: id.split("|")[1] || "" });
+    for (const id of ids) if (!opts.some((o) => o.v === id)) opts.push({ v: id, name: id.split("|")[0], note: id.endsWith(IN_USE) ? "Account in use" : id.split("|")[1] || "" });
     if (!cards.length) opts.push({ v: "\x00", name: "No subscriptions yet", note: "Sign in to one, or add a plan's key, and it shows on the Usage page" });
     openProtoMenu(pill, opts, ids, (trayUsages) => savePrefs({ ...keep, trayUsages }), "Shown beside the icon");
   };

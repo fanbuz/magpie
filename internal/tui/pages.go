@@ -185,6 +185,10 @@ func reseatCmd(change func() error, done string) tea.Cmd {
 			return flashMsg{text: err.Error()}
 		}
 		for _, mv := range moved {
+			if mv.Error != "" {
+				done += "; " + mv.String()
+				continue
+			}
 			done += "; moved " + mv.String()
 		}
 		return flashMsg{text: done, ok: true}

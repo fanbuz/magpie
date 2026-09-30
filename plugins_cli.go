@@ -90,7 +90,7 @@ func pluginCmd(args []string) error {
 		if err != nil {
 			return err
 		}
-		if err := plugin.SignOut(ctx, pp.ID); err != nil {
+		if err := plugin.SignOut(ctx, pp.ID, ""); err != nil {
 			return err
 		}
 		fmt.Println(green.Render("✓"), "signed out of", pp.Name)
@@ -234,17 +234,17 @@ func pluginLogin(ctx context.Context, name, method string) error {
 			fmt.Println(msg)
 		}
 	}
-	var saved string
+	var saved plugin.Saved
 	if pp.Methods[m].Type == "api" {
 		key, err := secret("key", pp.Name+" API key: ", false)
 		if err != nil {
 			return err
 		}
-		if saved, err = plugin.APIKey(ctx, pp.ID, m, inputs, key); err != nil {
+		if saved, err = plugin.APIKey(ctx, pp.ID, m, inputs, key, plugin.NewAccount); err != nil {
 			return err
 		}
 	} else {
-		a, err := plugin.Authorize(ctx, pp.ID, m, inputs)
+		a, err := plugin.Authorize(ctx, pp.ID, m, inputs, plugin.NewAccount)
 		if err != nil {
 			return err
 		}
@@ -271,7 +271,7 @@ func pluginLogin(ctx context.Context, name, method string) error {
 			return err
 		}
 	}
-	fmt.Println(green.Render("✓"), "signed in to", pp.Name, muted.Render("· its models are "+provider.PluginID(saved)+"/<model>"))
+	fmt.Println(green.Render("✓"), "signed in to", pp.Name, muted.Render("· its models are "+provider.PluginID(saved.Provider)+"/<model>"))
 	return nil
 }
 

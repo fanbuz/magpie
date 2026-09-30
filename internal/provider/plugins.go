@@ -53,12 +53,13 @@ func PluginOf(id string) (plugin.Provider, bool) {
 	return plugin.Provider{}, false
 }
 
-// pluginAccounts are the plugins' providers signed in to.
+// pluginAccounts are the plugins' providers signed in to, each as its
+// first account.
 func pluginAccounts() []Provider {
 	var out []Provider
 	for _, pp := range plugin.Cached() {
-		if pp.SignedIn {
-			out = append(out, pluginProvider(pp))
+		if ls := pluginLogins(pp); len(ls) > 0 {
+			out = append(out, pluginProvider(pp, ls[0].acct, ls[0].User))
 		}
 	}
 	return out
@@ -144,17 +145,15 @@ func pluginCatalog(pp plugin.Provider) []catalog.Model {
 	return out
 }
 
-func pluginProvider(pp plugin.Provider) Provider {
+// pluginProvider is the provider as one of its accounts, user as the
+// accounts list names it.
+func pluginProvider(pp plugin.Provider, acct plugin.Account, user string) Provider {
 	id := PluginID(pp.ID)
 	name := pp.Name
 	if name == "" {
 		name = pp.ID
 	}
-	user := pp.AccountID
-	if user == "" {
-		user = map[string]string{"api": "API key", "oauth": "Signed in"}[pp.AuthType]
-	}
-	a := &Account{Agent: "plugin", User: user, Stream: true, plugin: &pp}
+	a := &Account{Agent: "plugin", User: user, Stream: true, plugin: &pp, pluginKey: acct.Key}
 	a.models = func() []catalog.Model {
 		if cur, ok := PluginOf(id); ok {
 			return pluginCatalog(cur)
@@ -174,8 +173,8 @@ func pluginProvider(pp plugin.Provider) Provider {
 		return nil, fmt.Errorf("%s's plugin no longer lists it", name)
 	}
 	a.sign = func(ctx context.Context, req *http.Request, body []byte) error { return nil }
-	a.transport = func(req *http.Request) (*http.Response, error) { return pluginFetch(pp, req) }
-	p := Provider{ID: id, Name: name, Account: a}
+	a.transport = func(req *http.Request) (*http.Response, error) { return pluginFetch(pp, acct.Key, req) }
+	p := Provider{ID: id, Name: name, Icon: plugin.Icon(pp.Spec, pp.ID), Account: a}
 	for _, m := range pp.Models {
 		switch pluginProtocol(pp.ID, m) {
 		case Chat:
@@ -206,7 +205,7 @@ func (p Provider) pluginAPIs(model string) []Protocol {
 // pluginFetch sends a request the gateway made for a plugin's provider
 // through the plugin: to the base URL its loader gave (else the model's,
 // the provider's, the AI SDK package's), with what the loader adds.
-func pluginFetch(pp plugin.Provider, req *http.Request) (*http.Response, error) {
+func pluginFetch(pp plugin.Provider, account string, req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
 	var body []byte
 	if req.Body != nil {
@@ -246,7 +245,7 @@ func pluginFetch(pp plugin.Provider, req *http.Request) (*http.Response, error) 
 	if api != model && !codeAssist {
 		body = withModel(body, api)
 	}
-	o, err := plugin.LoaderOptions(ctx, pp.ID)
+	o, err := plugin.LoaderOptions(ctx, pp.ID, account)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +272,7 @@ func pluginFetch(pp plugin.Provider, req *http.Request) (*http.Response, error) 
 		}
 	}
 	return plugin.Fetch(ctx, plugin.FetchRequest{
-		Provider: pp.ID, Model: api, NPM: m.NPM, URL: url, Method: req.Method,
+		Provider: pp.ID, Account: account, Model: api, NPM: m.NPM, URL: url, Method: req.Method,
 		Headers: h, Body: body, Session: req.Header.Get(ConversationHeader),
 	})
 }

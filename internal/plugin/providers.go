@@ -6,6 +6,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/yetone/magpie/internal/settings"
@@ -50,6 +52,19 @@ type Provider struct {
 	AuthType  string   `json:"authType"`
 	AccountID string   `json:"accountId"`
 	Models    []Model  `json:"models"`
+	// Accounts are the accounts signed in to it, the one kept under its
+	// own id first; SignedIn, AuthType and AccountID are that one's.
+	Accounts []Account `json:"accounts"`
+}
+
+// Account is one account a provider is signed in to: Key is where
+// plugin-auth.json keeps it (the provider's id, else id#slot).
+type Account struct {
+	Key       string `json:"key"`
+	Type      string `json:"type"`
+	AccountID string `json:"accountId"`
+	// Hint tells an account with no id from another: the end of its key.
+	Hint string `json:"hint,omitempty"`
 }
 
 var (
@@ -120,14 +135,12 @@ func Cached() []Provider {
 		if !on[p.Spec] {
 			continue
 		}
-		a, ok := auth[p.ID]
-		p.SignedIn = ok
+		p.Accounts = accountsOf(auth, p.ID)
+		p.SignedIn = len(p.Accounts) > 0
 		p.AuthType = ""
-		if ok {
-			p.AuthType = a.Type
-			if a.AccountID != "" {
-				p.AccountID = a.AccountID
-			}
+		if p.SignedIn {
+			p.AuthType = p.Accounts[0].Type
+			p.AccountID = p.Accounts[0].AccountID
 		}
 		out = append(out, p)
 	}
@@ -150,6 +163,52 @@ func Cached() []Provider {
 type storedAuth struct {
 	Type      string `json:"type"`
 	AccountID string `json:"accountId"`
+	Email     string `json:"email"`
+	Key       string `json:"key"`
+	Metadata  struct {
+		Email string `json:"email"`
+	} `json:"metadata"`
+}
+
+// ProviderOf is the provider an account key is one of.
+func ProviderOf(key string) string {
+	id, _, _ := strings.Cut(key, "#")
+	return id
+}
+
+// accountsOf are provider's accounts in auth, as the host lists them.
+func accountsOf(auth map[string]storedAuth, provider string) []Account {
+	var out []Account
+	for k, a := range auth {
+		if ProviderOf(k) != provider {
+			continue
+		}
+		who := firstNonEmpty(a.AccountID, a.Metadata.Email, a.Email)
+		acct := Account{Key: k, Type: a.Type, AccountID: who}
+		if a.Type == "api" && len(a.Key) >= 12 {
+			acct.Hint = a.Key[len(a.Key)-4:]
+		}
+		out = append(out, acct)
+	}
+	slices.SortFunc(out, func(a, b Account) int {
+		switch {
+		case a.Key == provider:
+			return -1
+		case b.Key == provider:
+			return 1
+		}
+		return strings.Compare(a.Key, b.Key)
+	})
+	return out
+}
+
+func firstNonEmpty(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func readAuth() map[string]storedAuth {
@@ -162,8 +221,7 @@ func readAuth() map[string]storedAuth {
 
 // SignedIn is whether a plugin sign-in is kept for provider.
 func SignedIn(provider string) bool {
-	_, ok := readAuth()[provider]
-	return ok
+	return len(accountsOf(readAuth(), provider)) > 0
 }
 
 // Prompt is a question a sign-in method asks before it starts.
@@ -214,52 +272,66 @@ type Authorization struct {
 	Method       string `json:"method"`
 }
 
-// Authorize begins an OAuth sign-in.
-func Authorize(ctx context.Context, provider string, method int, inputs map[string]string) (Authorization, error) {
+// NewAccount is the account a sign-in goes to when it is a new one: the
+// provider's own id while nothing is kept there. A sign-in to an account
+// already signed in replaces that one's instead.
+const NewAccount = "new"
+
+// Authorize begins an OAuth sign-in to account (a key, or NewAccount).
+func Authorize(ctx context.Context, provider string, method int, inputs map[string]string, account string) (Authorization, error) {
 	var a Authorization
-	err := Call(ctx, "authorize", map[string]any{"provider": provider, "method": method, "inputs": inputs}, &a)
+	err := Call(ctx, "authorize", map[string]any{"provider": provider, "method": method, "inputs": inputs, "account": account}, &a)
 	return a, err
+}
+
+// Saved is where a sign-in was kept: the provider (a plugin may sign in
+// to another than asked) and the account's key.
+type Saved struct {
+	Provider string `json:"provider"`
+	Account  string `json:"account"`
 }
 
 // ErrFailed is a sign-in the plugin says failed.
 var ErrFailed = errors.New("the sign-in failed")
 
 // Finish waits for an OAuth sign-in to finish: an "auto" one on its own,
-// a "code" one with the code pasted back. It gives the provider the
-// sign-in was saved for.
-func Finish(ctx context.Context, session, code string) (string, error) {
+// a "code" one with the code pasted back. It gives where the sign-in was
+// saved.
+func Finish(ctx context.Context, session, code string) (Saved, error) {
 	var r struct {
-		OK       bool   `json:"ok"`
-		Provider string `json:"provider"`
+		OK bool `json:"ok"`
+		Saved
 	}
 	if err := Call(ctx, "callback", map[string]any{"session": session, "code": code}, &r); err != nil {
-		return "", err
+		return Saved{}, err
 	}
 	if !r.OK {
-		return "", ErrFailed
+		return Saved{}, ErrFailed
 	}
-	return r.Provider, nil
+	return r.Saved, nil
 }
 
-// APIKey signs in with a key, as an "api" method does.
-func APIKey(ctx context.Context, provider string, method int, inputs map[string]string, key string) (string, error) {
+// APIKey signs in to account (a key, or NewAccount) with a key, as an
+// "api" method does.
+func APIKey(ctx context.Context, provider string, method int, inputs map[string]string, key, account string) (Saved, error) {
 	var r struct {
-		OK       bool   `json:"ok"`
-		Provider string `json:"provider"`
+		OK bool `json:"ok"`
+		Saved
 	}
-	if err := Call(ctx, "apiKey", map[string]any{"provider": provider, "method": method, "inputs": inputs, "key": key}, &r); err != nil {
-		return "", err
+	if err := Call(ctx, "apiKey", map[string]any{"provider": provider, "method": method, "inputs": inputs, "key": key, "account": account}, &r); err != nil {
+		return Saved{}, err
 	}
 	if !r.OK {
-		return "", ErrFailed
+		return Saved{}, ErrFailed
 	}
-	return r.Provider, nil
+	return r.Saved, nil
 }
 
-// SignOut forgets the provider's sign-in.
-func SignOut(ctx context.Context, provider string) error {
+// SignOut forgets one account of the provider's, every one when account
+// is "".
+func SignOut(ctx context.Context, provider, account string) error {
 	if Running() {
-		return Call(ctx, "signOut", map[string]any{"provider": provider}, nil)
+		return Call(ctx, "signOut", map[string]any{"provider": provider, "account": account}, nil)
 	}
 	var m map[string]json.RawMessage
 	b, err := os.ReadFile(AuthPath())
@@ -269,7 +341,11 @@ func SignOut(ctx context.Context, provider string) error {
 	if err := json.Unmarshal(b, &m); err != nil {
 		return err
 	}
-	delete(m, provider)
+	for k := range m {
+		if k == account || account == "" && ProviderOf(k) == provider {
+			delete(m, k)
+		}
+	}
 	b, _ = json.MarshalIndent(m, "", "  ")
 	if err := os.WriteFile(AuthPath(), append(b, '\n'), 0o600); err != nil {
 		return err
@@ -293,24 +369,26 @@ var (
 	optGen   int64
 )
 
-// LoaderOptions runs the provider's auth loader (once per sign-in and
-// host) and gives what it returned.
-func LoaderOptions(ctx context.Context, provider string) (Options, error) {
+// LoaderOptions runs the provider's auth loader for account (once per
+// sign-in and host) and gives what it returned; account "" is the
+// provider's first.
+func LoaderOptions(ctx context.Context, provider, account string) (Options, error) {
+	ck := provider + "\x00" + account
 	optMu.Lock()
 	if optGen != generation.Load() {
 		optCache, optGen = map[string]Options{}, generation.Load()
 	}
-	o, ok := optCache[provider]
+	o, ok := optCache[ck]
 	optMu.Unlock()
 	if ok {
 		return o, nil
 	}
-	if err := Call(ctx, "load", map[string]any{"provider": provider}, &o); err != nil {
+	if err := Call(ctx, "load", map[string]any{"provider": provider, "account": account}, &o); err != nil {
 		return Options{}, err
 	}
 	optMu.Lock()
 	if optGen == generation.Load() {
-		optCache[provider] = o
+		optCache[ck] = o
 	}
 	optMu.Unlock()
 	return o, nil
