@@ -42,8 +42,6 @@ func SetLoginOn(agent, user string, on bool) error {
 		return setCommandCodeLoginOn(user, on)
 	case "qoder":
 		return setSideLoginOn("qoder", user, on, qoderLogins())
-	case "dimagent":
-		return setDimAgentLoginOn(user, on)
 	case "zed":
 		return setZedLoginOn(user, on)
 	case "factory":
@@ -141,9 +139,6 @@ func (p Provider) AlsoOn() []Provider {
 	}
 	if p.Account != nil && p.Account.Agent == "qoder" {
 		return qoderAlsoOn()
-	}
-	if p.Account != nil && p.Account.Agent == "dimagent" {
-		return dimagentAlsoOn()
 	}
 	if p.Account != nil && p.Account.Agent == "zed" {
 		return zedAlsoOn()

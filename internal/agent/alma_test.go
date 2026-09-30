@@ -59,6 +59,9 @@ func (f *fakeAlma) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, p := range f.providers {
 			ms, _ := p["models"].([]any)
 			for _, m := range ms {
+				if o, ok := m.(map[string]any); ok {
+					m = o["id"]
+				}
 				out = append(out, map[string]any{"id": p["id"].(string) + ":" + m.(string), "name": m, "provider": p["name"], "providerId": p["id"]})
 			}
 		}
@@ -266,6 +269,64 @@ func TestAlma(t *testing.T) {
 	}
 	if len(f.providers) != 1 || f.providers[0]["id"] != "own" || f.settings["chat"].(map[string]any)["defaultModel"] != "" {
 		t.Fatalf("providers: %v settings: %v", f.providers, f.settings)
+	}
+}
+
+// A provider whose models Alma lists as the models themselves, not their
+// ids, is read as their ids: one such provider left every one of Alma's
+// unread, Alma shown as not set with "json: cannot unmarshal object into
+// Go struct field almaProvider.models of type string".
+func TestAlmaModelObjects(t *testing.T) {
+	syncHome(t)
+	f := startAlma(t)
+	a := alma()
+	if err := os.MkdirAll(a.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.providers = append(f.providers, map[string]any{"id": "relay", "name": "Relay Test", "type": "custom", "baseURL": "https://relay.example/v1",
+		"enabled": true, "models": []any{map[string]any{"id": "gpt-5.5", "name": "gpt-5.5", "enabled": true, "isManual": true,
+			"capabilityOverrides": map[string]any{"reasoning": true, "reasoningLevels": []any{"medium", "xhigh"}}}}})
+	fl := a.Field("model")
+	var ref string
+	for _, o := range fl.Options(a.Values()) {
+		if o.Ref != "" {
+			ref = o.Ref
+			break
+		}
+	}
+	if ref == "" {
+		t.Fatal("no magpie model offered")
+	}
+	if err := a.Apply("model", "magpie/"+ref); err != nil {
+		t.Fatal(err)
+	}
+	if got := fl.Get(); got != "magpie/"+ref {
+		t.Fatalf("get: %q", got)
+	}
+	// magpie's own listed as objects too, the same ones: nothing to write
+	var mine map[string]any
+	for _, p := range f.providers {
+		if p["name"] == "magpie" {
+			mine = p
+		}
+	}
+	var objs []any
+	for _, id := range mine["models"].([]any) {
+		objs = append(objs, map[string]any{"id": id, "enabled": true})
+	}
+	mine["models"] = objs
+	f.takeWrites()
+	if err := a.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.takeWrites(); len(w) != 0 {
+		t.Fatalf("sync wrote %v", w)
+	}
+	if d := a.Drift(); d != nil {
+		t.Fatalf("drift: %+v", d)
+	}
+	if r := f.provider("relay"); r["models"].([]any)[0].(map[string]any)["id"] != "gpt-5.5" {
+		t.Fatalf("relay provider: %v", r)
 	}
 }
 

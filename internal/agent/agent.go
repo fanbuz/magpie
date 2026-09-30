@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -119,13 +120,16 @@ func (a *Agent) Detected() bool {
 	if a.detect != nil {
 		return a.detect()
 	}
+	// a file where the agent keeps its folder is another tool's (a shell's
+	// ~/.dsh), and the agent can't be here: it couldn't make its folder
+	if a.Dir != "" && Taken(a.Dir) {
+		return false
+	}
 	if _, err := os.Stat(a.Path); err == nil {
 		return true
 	}
-	if a.Dir != "" {
-		if _, err := os.Stat(a.Dir); err == nil {
-			return true
-		}
+	if a.Dir != "" && isDir(a.Dir) {
+		return true
 	}
 	if a.Bin != "" {
 		if _, err := exec.LookPath(a.Bin); err == nil {
@@ -133,6 +137,21 @@ func (a *Agent) Detected() bool {
 		}
 	}
 	return false
+}
+
+// Taken reports whether something that isn't a folder is where the folder
+// p, or one it is in, would be: nothing can be written under it.
+func Taken(p string) bool {
+	for d := filepath.Clean(p); ; {
+		if st, err := os.Stat(d); err == nil {
+			return !st.IsDir()
+		}
+		up := filepath.Dir(d)
+		if up == d {
+			return false
+		}
+		d = up
+	}
 }
 
 // goProgram reports whether bin was built by Go: another tool of the same

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/yetone/magpie/internal/agent"
@@ -138,6 +139,8 @@ func targetOf(a *agent.Agent) *Target {
 	case "goose":
 		t.Instructions = filepath.Join(filepath.Dir(a.Path), ".goosehints")
 		t.MCP = &mcpFile{Path: a.Path, Format: fmtGoose}
+		// Goose finds skills in ~/.agents/skills first, its docs say
+		t.Skills = sharedSkillsDir()
 	case "cursor":
 		d := filepath.Join(h, ".cursor")
 		t.MCP = &mcpFile{Path: filepath.Join(d, "mcp.json"), Format: fmtCursor}
@@ -170,10 +173,40 @@ func targetOf(a *agent.Agent) *Target {
 		t.Instructions = filepath.Join(d, "AGENTS.md")
 		t.MCP = &mcpFile{Path: filepath.Join(d, "cli", "config.json"), Format: fmtZCode}
 		t.Skills = filepath.Join(d, "skills")
+	case "kimi":
+		// Kimi Code reads one user-wide folder of each kind, the first there
+		// is: ~/.kimi/skills, ~/.claude/skills, ~/.codex/skills — so one of
+		// its own would hide Claude Code's from it — and ~/.config/agents/
+		// skills, ~/.agents/skills (kimi_cli/skill), wherever KIMI_SHARE_DIR
+		// is; before its 1.x brand/generic split, only the first of all five.
+		// The new Kimi Code (2.x) reads its own and ~/.agents/skills only.
+		if _, legacy := agent.KimiDir(h); !legacy {
+			t.Skills = sharedSkillsDir()
+		} else if d := filepath.Join(h, ".config", "agents", "skills"); isDir(d) {
+			t.Skills = d
+		} else {
+			t.Skills = sharedSkillsDir()
+		}
+	case "cindy":
+		// Cindy keeps its user-wide skills in ~/.agents/skills
+		t.Skills = sharedSkillsDir()
+	case "commandcode", "devin", "hermes", "droid", "cline", "qoder", "qoder-cn", "grok", "workbuddy", "hanako", "fx":
+		// a skills folder in the agent's own: Command Code's ~/.commandcode,
+		// Devin's ~/.config/devin, Hermes' $HERMES_HOME, Factory's ~/.factory,
+		// Cline's $CLINE_DIR, Qoder's ~/.qoder(-cn), Grok's $GROK_HOME,
+		// WorkBuddy's ~/.workbuddy, Hanako's $HANA_HOME, fx's ~/.fx — each
+		// said by its docs or source; most read ~/.agents/skills as well
+		t.Skills = filepath.Join(a.Dir, "skills")
 	case "claude-desktop":
 		// Claude Desktop reads only commands from its file: a remote server
-		// is added in its own Connectors settings
+		// is added in its own Connectors settings. In its 3p mode (magpie's
+		// gateway, or any other) it reads the file in Claude-3p instead, so
+		// where that folder is the servers go into both: each mode finds
+		// them, a switch between the two leaves nothing behind in either
 		t.MCP = &mcpFile{Path: filepath.Join(filepath.Dir(a.Path), "claude_desktop_config.json"), Format: fmtDesktop}
+		if p := agent.DesktopConfig3p(h); p != t.MCP.Path && isDir(filepath.Dir(p)) {
+			t.MCP.Also = []string{p}
+		}
 	default:
 		return nil
 	}
@@ -187,8 +220,14 @@ func apps() []*agent.Agent {
 	if err != nil {
 		return nil
 	}
+	// Desktop only ever run in its 3p mode has no Claude folder, only
+	// Claude-3p: its file is the one there
+	dir := filepath.Join(d, "Claude")
+	if p := agent.DesktopConfig3p(home()); !isDir(dir) && isDir(filepath.Dir(p)) {
+		dir = filepath.Dir(p)
+	}
 	return []*agent.Agent{
-		{ID: "claude-desktop", Name: "Claude Desktop", Icon: "claude-color", Dir: filepath.Join(d, "Claude"), Path: filepath.Join(d, "Claude", "claude_desktop_config.json")},
+		{ID: "claude-desktop", Name: "Claude Desktop", Icon: "claude-color", Dir: dir, Path: filepath.Join(dir, "claude_desktop_config.json")},
 	}
 }
 
@@ -206,7 +245,7 @@ func Targets() []*Target {
 		if own[a.ID] {
 			continue
 		}
-		if t := targetOf(a); t != nil {
+		if t := targetOf(a); t != nil && t.open() {
 			out = append(out, t)
 		}
 	}
@@ -214,11 +253,58 @@ func Targets() []*Target {
 		if !a.Detected() {
 			continue
 		}
-		if t := targetOf(a); t != nil {
+		if t := targetOf(a); t != nil && t.open() {
 			out = append(out, t)
 		}
 	}
+	readsWith(out)
 	return out
+}
+
+// readsShared are the agents that read ~/.agents/skills as well as their
+// own folder (each one's docs or source).
+var readsShared = []string{"codex", "gemini", "opencode", "crush", "dsh", "commandcode", "devin", "droid", "cline", "grok", "fx"}
+
+// readsWith adds to each agent's SkillsAlso the agents whose folder it
+// reads skills from too: one that is the very same folder (Kimi Code's,
+// Goose's and Cindy's, all ~/.agents/skills), or ~/.agents/skills for one
+// that reads it besides its own — a skill magpie gives there once, for
+// any of them, every one of them has.
+func readsWith(ts []*Target) {
+	real := make([]string, len(ts))
+	for i, t := range ts {
+		if t.Skills != "" {
+			real[i] = realDir(t.Skills)
+		}
+	}
+	shared := realDir(sharedSkillsDir())
+	for i, t := range ts {
+		for j, o := range ts {
+			if i == j || real[i] == "" || real[j] == "" || slices.Contains(t.SkillsAlso, o.Agent.ID) {
+				continue
+			}
+			if real[j] == real[i] || real[j] == shared && slices.Contains(readsShared, t.Agent.ID) {
+				t.SkillsAlso = append(t.SkillsAlso, o.Agent.ID)
+			}
+		}
+	}
+}
+
+// open leaves out of the target each place a file stands where a folder
+// of it would be — another tool's ~/.dsh or ~/.gemini: nothing can be
+// written there, and the agent isn't reading anything from it — and says
+// whether any place is left.
+func (t *Target) open() bool {
+	if t.Instructions != "" && agent.Taken(filepath.Dir(t.Instructions)) {
+		t.Instructions, t.Override, t.Note = "", "", ""
+	}
+	if t.MCP != nil && slices.ContainsFunc(t.MCP.files(), func(p string) bool { return agent.Taken(filepath.Dir(p)) }) {
+		t.MCP, t.MCPVia = nil, ""
+	}
+	if t.Skills != "" && agent.Taken(t.Skills) {
+		t.Skills, t.SkillsAlso = "", nil
+	}
+	return t.Instructions != "" || t.MCP != nil || t.Skills != ""
 }
 
 func targetByID(id string) *Target {

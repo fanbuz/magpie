@@ -365,9 +365,20 @@ func PlanQuotas(ctx context.Context) []SubscriptionQuota {
 					plan, ws, err, team = tplan, tws, nil, true
 				}
 			}
+			// a vendor failing a while (Command Code answers billing/credits
+			// 503 at times) shows what was last read, as a subscription's
+			// card does, rather than no card or "Usage unavailable"
+			tag := keyTag("plan", j.key)
 			switch {
-			case err != nil && !j.src.sure, err == nil && len(ws) == 0:
+			case err == nil && len(ws) == 0:
 				return // a key with no plan
+			case err != nil && !j.src.sure:
+				// no plan, unless one was read before
+				q.Error = err.Error()
+				if q = keepLast(q, tag); q.AsOf != nil {
+					got[i] = &q
+				}
+				return
 			case err != nil:
 				q.Error = err.Error()
 			default:
@@ -376,6 +387,7 @@ func PlanQuotas(ctx context.Context) []SubscriptionQuota {
 					q.Until, q.Renew = zhipuTerm(ctx, zcodeRoot(j.src.url), j.key)
 				}
 			}
+			q = keepLast(q, tag)
 			got[i] = &q
 		}()
 	}

@@ -120,8 +120,9 @@ type mcpFile struct {
 	Path   string
 	Format mcpFormat
 	// Also are files given the same servers, read from Path: dsh's other
-	// profiles, pi-mcp-extension's mcp.json beside pi-mcp-adapter's file
-	// (each with the user's own fields in its entry kept).
+	// profiles, pi-mcp-extension's mcp.json beside pi-mcp-adapter's file,
+	// Claude Desktop's Claude-3p file (each with the user's own fields in
+	// its entry kept).
 	Also []string
 	// Extra are files servers are found in too, for bringing into the
 	// library, but not written: Pi's mcp.json that pi-mcp-adapter no longer
@@ -533,8 +534,9 @@ func (f *mcpFile) read() (map[string]*Server, error) {
 			out[name] = s
 		}
 	}
-	if (f.Format == fmtPi || f.Format == fmtPiNative) && err == nil {
-		// Pi's other files, the one magpie writes first winning a name
+	if (f.Format == fmtPi || f.Format == fmtPiNative || f.Format == fmtDesktop) && err == nil {
+		// Pi's (or Desktop's) other files, the one magpie writes first
+		// winning a name
 		for _, p := range append(slices.Clone(f.Also), f.Extra...) {
 			more, _ := (&mcpFile{Path: p, Format: f.Format}).read()
 			for name, s := range more {
@@ -549,7 +551,7 @@ func (f *mcpFile) read() (map[string]*Server, error) {
 
 // also is the file of each of Also, for formats written file by file.
 func (f *mcpFile) also() []*mcpFile {
-	if f.Format != fmtPi {
+	if f.Format != fmtPi && f.Format != fmtDesktop {
 		return nil
 	}
 	var out []*mcpFile
@@ -572,6 +574,16 @@ func (f *mcpFile) has(s *Server) bool {
 		}
 	}
 	return true
+}
+
+// holds says whether any file of Also has an entry by that name.
+func (f *mcpFile) holds(name string) bool {
+	for _, a := range f.also() {
+		if es, err := a.entries(); err == nil && es[name] != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // owned are the keys of an entry that say what the server is: magpie
@@ -639,7 +651,7 @@ func (f *mcpFile) put(s *Server, old map[string]any) error {
 		}
 		return nil
 	}
-	// Pi's files, all of them or none
+	// Pi's files, or Desktop's, all of them or none
 	return edit.Atomically(func() error {
 		for _, a := range f.also() {
 			es, err := a.entries()

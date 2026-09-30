@@ -92,6 +92,10 @@ func Entries(ms []catalog.Model, after int) []any {
 		// instructions into the input, neither for a model not trained on
 		// them.
 		SearchTool bool `json:"supports_search_tool"`
+		// Required from Codex 0.147 (#298: without it the whole catalog
+		// fails to load); later Codex ask for parallel calls whatever it
+		// says, so it says what they do.
+		Parallel bool `json:"supports_parallel_tool_calls"`
 	}
 	own := CacheEntries()
 	var entries []any
@@ -105,7 +109,7 @@ func Entries(ms []catalog.Model, after int) []any {
 			Instructions: Prompt, Efforts: []level{},
 			Shell: "unified_exec", Visibility: "list", InAPI: true, Priority: after + i + 1,
 			ApplyPatch: "freeform", Tools: []string{}, Modalities: []string{"text"},
-			Tiers: []tier{}, SearchTool: true,
+			Tiers: []tier{}, SearchTool: true, Parallel: true,
 		}
 		// Fast mode: a ChatGPT account's GPT model Codex has no entry for,
 		// or a group one is in, gets the tier Codex's own catalog gives its

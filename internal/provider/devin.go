@@ -473,7 +473,35 @@ func devinFamiliesCached(families []DevinFamily) {
 	devinFamiliesCache.Unlock()
 }
 
-func askDevinFamilies(ctx context.Context) ([]DevinFamily, error) { return askDevinFamiliesAt(ctx, "") }
+// askDevinFamilies is the model list as the accounts signed in give it, the
+// one in use first: an account magpie signed in is asked in its own home,
+// not the CLI's, which may be signed out (蓝猫 on Discord: with only a
+// magpie sign-in every request failed, as the family's id went to Devin
+// unturned into a variant, until `devin auth login`). The CLI's own is
+// asked last when it isn't among them, as it was before there were homes.
+func askDevinFamilies(ctx context.Context) ([]DevinFamily, error) {
+	var homes []string
+	for _, l := range devinLogins() {
+		homes = append(homes, l.Home)
+	}
+	if !slices.Contains(homes, "") {
+		homes = append(homes, "")
+	}
+	var first error
+	for _, home := range homes {
+		families, err := askDevinFamiliesAt(ctx, home)
+		if err == nil {
+			return families, nil
+		}
+		if first == nil {
+			first = err
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, first
+}
 
 // askDevinFamiliesAt is the model list of the account signed in in home
 // ("" for the CLI's own).

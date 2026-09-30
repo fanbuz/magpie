@@ -47,7 +47,16 @@ func (l *Library) sync() *Result {
 	for _, t := range all {
 		l.syncInstructions(t, b, res)
 		l.syncMCP(t, b, res)
-		l.syncSkills(t, res, all)
+	}
+	// ~/.agents/skills first: an agent that reads it too gets no second
+	// link to what is there already
+	shared := realDir(sharedSkillsDir())
+	for _, first := range []bool{true, false} {
+		for _, t := range all {
+			if (t.Skills != "" && realDir(t.Skills) == shared) == first {
+				l.syncSkills(t, res, all)
+			}
+		}
 	}
 	l.syncProjects(res)
 	res.Backup = b.dir
@@ -69,6 +78,11 @@ func (l *Library) syncMCP(t *Target, b *backups, res *Result) {
 	}
 	id := t.Agent.ID
 	a := l.applied(id)
+	// an agent given no server, with none of magpie's in it, isn't read:
+	// a file of its that can't be read is nothing the library did
+	if len(a.MCP) == 0 && !slices.ContainsFunc(l.MCP, func(s *Server) bool { return slices.Contains(s.Agents, id) }) {
+		return
+	}
 	entries, err := t.MCP.entries()
 	if err != nil {
 		res.fail(id, "mcp", err)
@@ -93,7 +107,7 @@ func (l *Library) syncMCP(t *Target, b *backups, res *Result) {
 		if s := l.server(name); s != nil && slices.Contains(s.Agents, id) && t.MCP.supports(s) == nil {
 			continue
 		}
-		if _, ok := entries[name]; ok && !write("mcp:"+name, func() error { return t.MCP.del(name) }) {
+		if _, ok := entries[name]; (ok || t.MCP.holds(name)) && !write("mcp:"+name, func() error { return t.MCP.del(name) }) {
 			mine = append(mine, name)
 		}
 	}

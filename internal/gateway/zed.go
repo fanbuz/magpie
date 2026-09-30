@@ -67,6 +67,13 @@ func zedRequest(req *Request, vendor, model string) (json.RawMessage, provider.P
 			return nil, "", err
 		}
 		delete(m, "stream")
+		if msgs, ok := m["messages"]; ok {
+			withErr, err := zedToolResults(msgs)
+			if err != nil {
+				return nil, "", err
+			}
+			m["messages"] = withErr
+		}
 		b, err := json.Marshal(m)
 		return b, provider.Anthropic, err
 	case "responses":
@@ -99,6 +106,30 @@ func zedRequest(req *Request, vendor, model string) (json.RawMessage, provider.P
 		return b, provider.CodeAssist, err
 	}
 	return nil, "", fmt.Errorf("magpie can't ask Zed's %q models", vendor)
+}
+
+// zedToolResults says is_error on every tool result, false as well as true:
+// Zed's cloud refuses a tool result without it ("failed to parse Anthropic
+// request: missing field `is_error`"), which Anthropic's own API leaves out
+// when it is false, so every turn after a tool call failed.
+func zedToolResults(msgs json.RawMessage) (json.RawMessage, error) {
+	var ms []map[string]any
+	d := json.NewDecoder(bytes.NewReader(msgs))
+	d.UseNumber() // a tool's input keeps its numbers as they were
+	if err := d.Decode(&ms); err != nil {
+		return nil, err
+	}
+	for _, m := range ms {
+		parts, _ := m["content"].([]any)
+		for _, p := range parts {
+			if b, ok := p.(map[string]any); ok && b["type"] == "tool_result" {
+				if _, ok := b["is_error"]; !ok {
+					b["is_error"] = false
+				}
+			}
+		}
+	}
+	return json.Marshal(ms)
 }
 
 // askZed is a round for Zed's API.

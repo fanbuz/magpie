@@ -97,6 +97,10 @@ func readLogins() []savedLogin {
 	ls, _ := filememo.Read("logins", loginsPath(), func(b []byte) ([]savedLogin, error) {
 		var out []savedLogin
 		_ = json.Unmarshal(b, &out)
+		// DimAgent's accounts: magpie no longer signs in to it (DimAgent
+		// doesn't allow its subscription used outside its client), so one
+		// signed in before is left out, and gone from the file at its next write
+		out = slices.DeleteFunc(out, func(l savedLogin) bool { return l.Agent == "dimagent" })
 		return dedupeLogins(out), nil
 	})
 	return slices.Clone(ls) // callers change theirs
@@ -487,8 +491,6 @@ func Logins(agent string) []Login {
 		return cmdLoginList()
 	case "qoder":
 		return loginsOf(qoderLogins())
-	case "dimagent":
-		return dimagentLoginList()
 	case "zed":
 		return zedLoginList()
 	case "factory":
@@ -506,7 +508,6 @@ func Logins(agent string) []Login {
 		side = append(side, wbLoginList(wbAI)...)
 		side = append(side, cmdLoginList()...)
 		side = append(side, loginsOf(qoderLogins())...)
-		side = append(side, dimagentLoginList()...)
 		side = append(side, zedLoginList()...)
 		side = append(side, factoryLoginList()...)
 		side = append(side, mimoLoginList()...)
@@ -561,8 +562,6 @@ func SwitchLogin(agent, user string) error {
 		return switchCommandCodeLogin(user)
 	case "qoder":
 		return switchSideLogin("qoder", user, qoderLogins())
-	case "dimagent":
-		return switchDimAgentLogin(user)
 	case "zed":
 		return switchZedLogin(user)
 	case "factory":
@@ -703,8 +702,6 @@ func ForgetLogin(agent, user string) error {
 		return forgetCommandCodeLogin(user)
 	case "qoder":
 		return forgetQoderLogin(user)
-	case "dimagent":
-		return forgetDimAgentLogin(user)
 	case "zed":
 		return forgetZedLogin(user)
 	case "factory":

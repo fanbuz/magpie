@@ -23,6 +23,8 @@ var byFamily = []struct{ prefix, icon string }{
 	{"qwen", "qwen-color"}, {"qwq", "qwen-color"},
 	{"mistral", "mistral-color"}, {"codestral", "mistral-color"}, {"devstral", "mistral-color"}, {"magistral", "mistral-color"},
 	{"minimax", "minimax-color"},
+	{"mimo", "mimocode"}, {"xiaomi", "mimocode"},
+	{"step", "stepfun-color"},
 }
 
 // providerIcon is the logo of a models.dev provider itself, which for one
@@ -57,3 +59,7 @@ func modelIcon(catalogID, modelID string) string {
 	}
 	return ""
 }
+
+// ModelIcon is the logo of a model's maker, known by its id's (or name's)
+// family alone; "" when it isn't one of them.
+func ModelIcon(model string) string { return modelIcon("", model) }

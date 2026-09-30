@@ -35,7 +35,6 @@ const I18N = {
     "Current": "在用",
     "{agent} is set to it, so it stays": "{agent} 正在用它，所以不能隐藏",
     "New models are shown": "新模型默认显示",
-    "Show all again": "恢复全部显示",
     "{n} hidden": "已隐藏 {n} 个",
     "{n} hidden agents": "已隐藏的 Agent（{n} 个）",
     "Show {n} more ({h} hidden)": "显示其余 {n} 个（含 {h} 个已隐藏）",
@@ -238,7 +237,6 @@ const I18N = {
 
     // providers
     "Qoder has no public API for this; magpie signs requests as its desktop client would, which Qoder may treat as third-party use and act on. Use an account you can afford to lose.": "Qoder 没有公开的 API；magpie 会按照其桌面客户端的方式签发请求，Qoder 可能将其视为第三方使用并采取措施。请用一个丢了也不心疼的账号。",
-    "DimAgent serves this API to its own desktop client; magpie signs requests as that client would, which DimAgent may treat as third-party use and act on. Use an account you can afford to lose.": "DimAgent 只向其桌面客户端提供这个 API；magpie 会按照该客户端的方式签发请求，DimAgent 可能将其视为第三方使用并采取措施。请用一个丢了也不心疼的账号。",
     "Zed serves these models to its own editor; magpie signs requests as the editor would, which Zed may treat as third-party use and act on. Use an account you can afford to lose.": "Zed 只向自己的编辑器提供这些模型；magpie 会按照编辑器的方式签发请求，Zed 可能将其视为第三方使用并采取措施。请用一个丢了也不心疼的账号。",
     "Factory serves these models to its own Droid CLI; magpie signs requests as Droid would, which Factory may treat as third-party use and act on. Use an account you can afford to lose.": "Factory 只向自己的 Droid CLI 提供这些模型；magpie 会按照 Droid 的方式签发请求，Factory 可能将其视为第三方使用并采取措施。请用一个丢了也不心疼的账号。",
     "A Go plan account is used through Command Code's private interface, which Command Code may treat as a breach of its terms and ban the account for. Pro, Max and the other plans use its Provider API. Use a Go account you can afford to lose.": "Go 套餐的账号要通过 Command Code 的私有接口使用，Command Code 可能将其视为违反服务条款并封禁该账号。Pro、Max 等其他套餐走的是它的 Provider API。请用一个丢了也不心疼的 Go 账号。",

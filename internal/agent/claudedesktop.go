@@ -79,6 +79,14 @@ func desktopDirs(goos, home string, getenv func(string) string) (string, string)
 	return filepath.Join(d, "Claude"), filepath.Join(d, "Claude-3p")
 }
 
+// DesktopConfig3p is the claude_desktop_config.json Claude Desktop reads in
+// its 3p mode: there its whole userData is Claude-3p, its MCP servers too
+// (%LOCALAPPDATA%\Claude-3p on Windows, Claude-3p beside Claude elsewhere).
+func DesktopConfig3p(home string) string {
+	_, d := desktopDirs(runtime.GOOS, home, os.Getenv)
+	return filepath.Join(d, "claude_desktop_config.json")
+}
+
 // windowsDesktopDir is %LOCALAPPDATA%\Claude (or Claude-3p), else the first
 // folder there named Claude… (with -3p in it or not), as CC Switch finds it.
 func windowsDesktopDir(local string, threep bool) string {
@@ -121,7 +129,7 @@ func claudeDesktop(home string) *Agent {
 				if d == "" {
 					continue
 				}
-				if _, err := os.Stat(d); err == nil {
+				if isDir(d) {
 					return true
 				}
 			}

@@ -152,8 +152,8 @@ func TestProjectRefusesHomeAndUnknownAgents(t *testing.T) {
 	if _, err := AddProject(proj); err == nil {
 		t.Error("added twice")
 	}
-	if _, err := ProjectSkill(proj, "pdf", []string{"goose"}); err == nil {
-		t.Error("goose given a project skill")
+	if _, err := ProjectSkill(proj, "pdf", []string{"crush"}); err == nil {
+		t.Error("crush given a project skill")
 	}
 }
 

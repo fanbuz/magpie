@@ -135,7 +135,7 @@ func TestZedSignIn(t *testing.T) {
 	if res.StatusCode != http.StatusFound || res.Header.Get("Location") != "https://zed.test/native_app_signin_succeeded" {
 		t.Fatalf("the browser was answered %d %q", res.StatusCode, res.Header.Get("Location"))
 	}
-	done := dimagentWaitSignIn(t, st.ID)
+	done := zedWaitSignIn(t, st.ID)
 	if done.State != "done" || done.User != "octo" {
 		t.Fatalf("sign-in ended %+v", done)
 	}
@@ -202,4 +202,15 @@ func TestZedFreePlanQuota(t *testing.T) {
 	if q.Plan != "No plan" || q.Error != "" {
 		t.Fatalf("quota %+v", q)
 	}
+}
+
+func zedWaitSignIn(t *testing.T, id string) SignInState {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	st, err := WaitSignIn(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
 }

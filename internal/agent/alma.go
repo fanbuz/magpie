@@ -57,8 +57,42 @@ type almaProvider struct {
 	BaseURL string           `json:"baseURL"`
 	APIKey  string           `json:"apiKey"`
 	Enabled bool             `json:"enabled"`
-	Models  []string         `json:"models"`
+	Models  almaModelIDs     `json:"models"`
 	Known   []map[string]any `json:"availableModels"`
+}
+
+// almaModelIDs is a provider's models, the ids Alma offers. Alma keeps
+// them as ids or, for some providers, as the models themselves
+// ({"id","name","enabled","capabilityOverrides",…}), and reads either as
+// its id; so does magpie — one provider listing objects left every one
+// of Alma's unread ("cannot unmarshal object into Go struct field
+// almaProvider.models of type string"), and Alma showed as not set.
+type almaModelIDs []string
+
+func (ids *almaModelIDs) UnmarshalJSON(b []byte) error {
+	var raw []json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		*ids = nil
+		return nil
+	}
+	out := almaModelIDs{}
+	for _, r := range raw {
+		var id string
+		if json.Unmarshal(r, &id) != nil {
+			var m struct {
+				ID any `json:"id"`
+			}
+			if json.Unmarshal(r, &m) != nil || m.ID == nil {
+				continue
+			}
+			id = fmt.Sprint(m.ID)
+		}
+		if id != "" {
+			out = append(out, id)
+		}
+	}
+	*ids = out
+	return nil
 }
 
 // almaDo sends one request to Alma's API and decodes its reply into out.

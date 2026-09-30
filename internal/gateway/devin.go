@@ -370,14 +370,27 @@ func buildDevin(r *Request, uid, key string) []byte {
 
 	// the instructions go at the head of the first message, as Kiro's do:
 	// Devin turns away some agents' own in its system field (Claude Code's
-	// "You are a Claude agent, built on Anthropic's Claude Agent SDK")
-	if r.System != "" {
+	// "You are a Claude agent, built on Anthropic's Claude Agent SDK"). The
+	// tools' descriptions go there too, each tool sent with only a pointer
+	// to its own: Devin answers "an internal error occurred" to some agents'
+	// tools as they describe themselves (WorkBuddy's Read, "Reads a file
+	// from the local filesystem. You can access any file directly by using
+	// this tool."), and the same words in a message go through
+	tools := r.Tools
+	if r.ToolChoice == "none" {
+		tools = nil
+	}
+	instructions := r.System
+	if described := devinToolDescriptions(tools); described != "" {
+		instructions = joinNonEmpty(instructions, described)
+	}
+	if instructions != "" {
 		at := slices.IndexFunc(msgs, func(m devinMsg) bool { return m.role == devinUser })
 		if at < 0 {
 			msgs = slices.Insert(msgs, 0, devinMsg{role: devinUser})
 			at = 0
 		}
-		msgs[at].text = joinNonEmpty(r.System, msgs[at].text)
+		msgs[at].text = joinNonEmpty(instructions, msgs[at].text)
 	}
 
 	meta := pb{}.str(1, "devin-cli").str(2, devinCLIVersion).str(3, key).str(4, "en").
@@ -414,10 +427,12 @@ func buildDevin(r *Request, uid, key string) []byte {
 		offered[name] = true
 		out = out.bytes(10, pb{}.str(1, name).str(2, desc).bytes(3, schema))
 	}
-	if r.ToolChoice != "none" {
-		for _, t := range r.Tools {
-			tool(t.Name, t.Description, t.Schema)
+	for _, t := range tools {
+		desc := t.Description
+		if desc != "" {
+			desc = "Described under <tool name=\"" + t.Name + "\"> in <tool_descriptions>, in the instructions."
 		}
+		tool(t.Name, desc, t.Schema)
 	}
 	for _, m := range msgs {
 		for _, c := range m.calls {
@@ -427,6 +442,25 @@ func buildDevin(r *Request, uid, key string) []byte {
 		}
 	}
 	return out.str(21, uid)
+}
+
+// devinToolDescriptions is what each tool says of itself, for the
+// instructions.
+func devinToolDescriptions(tools []Tool) string {
+	var b strings.Builder
+	for _, t := range tools {
+		if t.Description == "" {
+			continue
+		}
+		if b.Len() == 0 {
+			b.WriteString("<tool_descriptions>\n")
+		}
+		b.WriteString("<tool name=\"" + t.Name + "\">\n" + strings.TrimSpace(t.Description) + "\n</tool>\n")
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return b.String() + "</tool_descriptions>"
 }
 
 func encodeDevinMsg(m devinMsg) []byte {

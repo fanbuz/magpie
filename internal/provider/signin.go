@@ -62,18 +62,16 @@ type SignInState struct {
 }
 
 type signInFlow struct {
-	mu                sync.Mutex
-	st                SignInState
-	verifier          string
-	state             string
-	redirect          string
-	srv               *http.Server
-	stop              func() // ends an agent's own login command, when that is the sign-in
-	kiro              *kiroFlow
-	dimagentDone      chan dimagentCallback
-	dimagentSubmitted bool
-	site              string // where to sign in, for an agent with more than one (ZCode: "zai" or "bigmodel")
-	done              chan struct{}
+	mu       sync.Mutex
+	st       SignInState
+	verifier string
+	state    string
+	redirect string
+	srv      *http.Server
+	stop     func() // ends an agent's own login command, when that is the sign-in
+	kiro     *kiroFlow
+	site     string // where to sign in, for an agent with more than one (ZCode: "zai" or "bigmodel")
+	done     chan struct{}
 }
 
 var signIns = struct {
@@ -266,11 +264,6 @@ func (s *signInFlow) begin() error {
 		if err := startQoderSignIn(s); err != nil {
 			return err
 		}
-	case "dimagent":
-		// DimAgent's OAuth + PKCE, on the callback port its client registered
-		if err := startDimAgentSignIn(s); err != nil {
-			return err
-		}
 	case "zed":
 		// Zed's own sign-in: zed.dev sends the browser back to a port magpie
 		// listens on, with the account's token encrypted to magpie's key
@@ -356,19 +349,16 @@ func CancelSignIn(id string) {
 }
 
 // SubmitSignInCallback finishes a browser sign-in whose callback could not
-// reach this machine. Invalid input leaves the pending sign-in open to retry.
+// reach this machine. No sign-in magpie makes now takes one (PasteCallback is
+// never set); the route and the page's field stay for one that will.
 func SubmitSignInCallback(id, raw string) error {
 	signIns.Lock()
-	s, ok := signIns.m[id]
+	_, ok := signIns.m[id]
 	signIns.Unlock()
 	if !ok {
 		return errors.New("no such sign-in")
 	}
-	got, err := dimAgentCallbackFromPaste(raw)
-	if err != nil {
-		return err
-	}
-	return s.submitDimAgentCallback(got)
+	return errors.New("this sign-in can't be finished from a pasted address")
 }
 
 // WaitSignIn blocks until a sign-in is over, for the command line.

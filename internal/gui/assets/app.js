@@ -134,9 +134,9 @@ function icon(name) {
     return e;
   }
   if (name) {
-    if (name.endsWith("-color") || name === "crush" || name === "zcode" || name === "alma" || name === "hanako" || name === "cindy" || name === "typesafe" || name === "dimagent") {
+    if (name.endsWith("-color") || name === "crush" || name === "zcode" || name === "alma" || name === "hanako" || name === "cindy" || name === "typesafe") {
       const img = el("img");
-      img.src = `icons/${name}.${name === "crush" || name === "zcode" || name === "alma" || name === "hanako" || name === "cindy" || name === "typesafe" || name === "dimagent" ? "png" : "svg"}`;
+      img.src = `icons/${name}.${name === "crush" || name === "zcode" || name === "alma" || name === "hanako" || name === "cindy" || name === "typesafe" ? "png" : "svg"}`;
       img.alt = "";
       img.draggable = false;
       e.append(img);
@@ -876,9 +876,11 @@ async function openAgentModels(a, anchor, ev) {
   tools.append(search, seg);
   const list = el("div", "am-list");
   const foot = el("div", "am-foot");
-  const reset = el("button", "am-reset", t("Show all again"));
-  reset.type = "button";
-  foot.append(el("span", "", t("New models are shown")), el("span", "sp"), reset);
+  // every one at once, the model in use aside
+  const hideAll = el("button", "am-reset am-hide", t("Hide all"));
+  const reset = el("button", "am-reset", t("Show all"));
+  hideAll.type = reset.type = "button";
+  foot.append(el("span", "", t("New models are shown")), el("span", "sp"), hideAll, el("span", "am-dot", "·"), reset);
   box.append(head, tools, list, foot);
 
   // groups as the catalog has them, routing groups first; a long one
@@ -948,7 +950,12 @@ async function openAgentModels(a, anchor, ev) {
           if (m.inUse) n.append(el("span", "am-tag", t("Current")));
           const ck = el("span", "ck");
           if (!m.hidden) ck.append(svg("m3.5 8.5 3 3 6-7", 12, 1.9));
-          r.append(n, el("span", "x", ctxShort(m.context)), ck);
+          // its maker's logo; a group whose maker isn't known shows it is
+          // a route, anything else keeps the slot empty, so the names line up
+          const lg = m.logo ? icon(m.logo) : el("span", "ic");
+          if (!m.logo && g.name === ROUTING_GROUPS) lg.append(svg(FAN, 14, 1.5));
+          lg.classList.add("lg");
+          r.append(lg, n, el("span", "x", ctxShort(m.context)), ck);
           if (m.inUse) r.setAttribute("aria-disabled", "true");
           else r.onclick = () => {
             m.hidden = !m.hidden;
@@ -965,6 +972,7 @@ async function openAgentModels(a, anchor, ev) {
     if (!list.childNodes.length) list.append(el("div", "am-none", t("No matches.")));
     list.scrollTop = top;
     reset.disabled = !models.some((m) => m.hidden);
+    hideAll.disabled = !models.some((m) => !m.hidden && !m.inUse);
   };
   q.oninput = () => { list.scrollTop = 0; draw(); };
   const view = (shown) => {
@@ -979,6 +987,11 @@ async function openAgentModels(a, anchor, ev) {
   segOn.onclick = () => view(true);
   reset.onclick = () => {
     for (const m of models) m.hidden = false;
+    save();
+    draw();
+  };
+  hideAll.onclick = () => {
+    for (const m of models) if (!m.inUse && !m.hidden) { m.hidden = true; kept.add(m.id); }
     save();
     draw();
   };
@@ -1671,6 +1684,34 @@ function switchPickerGroup(id) {
   }).catch(() => {});
 }
 
+// a rail icon's name, beside it on the right: the browser's own tooltip
+// came up under the pointer, over the icon below — Devin's name on ZCode's
+// Z, as if that were ZCode's (Elan on X). Hovering from one icon to the
+// next moves it at once; the first waits a moment, as a tooltip does.
+let railTip = null, railTipTimer = 0, railTipShownAt = 0;
+function showRailTip(b, now) {
+  clearTimeout(railTipTimer);
+  const warm = railTip?.classList.contains("on") || performance.now() - railTipShownAt < 400;
+  const show = () => {
+    if (!b.isConnected || !pick?.modelPicker) return;
+    if (!railTip) { railTip = el("div", "rail-tip"); railTip.setAttribute("role", "tooltip"); document.body.append(railTip); }
+    railTip.textContent = b.getAttribute("aria-label");
+    const r = b.getBoundingClientRect(), w = railTip.offsetWidth;
+    const right = r.right + 8 + w <= innerWidth - 4;
+    railTip.style.left = (right ? r.right + 8 : Math.max(4, r.left - 8 - w)) + "px";
+    railTip.style.top = r.top + r.height / 2 + "px";
+    railTip.classList.toggle("left", !right);
+    railTip.classList.add("on");
+    railTipShownAt = performance.now();
+  };
+  if (now || warm) show(); else railTipTimer = setTimeout(show, 450);
+}
+function hideRailTip() {
+  clearTimeout(railTipTimer);
+  if (railTip?.classList.contains("on")) { railTip.classList.remove("on"); railTipShownAt = performance.now(); }
+}
+$("#pickerRail").addEventListener("scroll", hideRailTip, { passive: true });
+
 function renderPickerRail() {
   const rail = $("#pickerRail");
   rail.hidden = !pick?.modelPicker;
@@ -1685,10 +1726,13 @@ function renderPickerRail() {
     const add = (id, title, child) => {
       const b = el("button", "rail-item");
       b.dataset.group = id;
-      b.title = title;
       b.setAttribute("aria-label", title);
       b.append(child);
-      b.onclick = () => switchPickerGroup(id);
+      b.onclick = () => { hideRailTip(); switchPickerGroup(id); };
+      b.onpointerenter = () => showRailTip(b, false);
+      b.onpointerleave = hideRailTip;
+      b.onfocus = () => { if (b.matches(":focus-visible")) showRailTip(b, true); };
+      b.onblur = hideRailTip;
       rail.append(b);
     };
     add("all", t("All models"), svg("M3 3h4v4H3zM9 3h4v4H9zM3 9h4v4H3zM9 9h4v4H9z", 15, 1.4));
@@ -1856,6 +1900,7 @@ function popGhost(pop) {
 
 function closePicker() {
   if (!pick) return;
+  hideRailTip();
   pick.groupAnimation?.cancel();
   popGhost($("#pop"));
   pick.anchor.classList.remove("open");
@@ -3532,7 +3577,10 @@ function drawEditor(p, presetID) {
     ed.append(...field(t("Endpoint"), endpoint, pr.endpointHint ? t(pr.endpointHint) : ""));
   }
 
-  const copied = !p && draft.copyOf && providers.providers.find((x) => x.id === draft.copyOf);
+  // null, not false, when there is none: false?.key is undefined, and a
+  // provider with no key read .set of it (willz: a local Ollama without a
+  // key opened no editor, its row just toggling)
+  const copied = (!p && draft.copyOf && providers.providers.find((x) => x.id === draft.copyOf)) || null;
   const key = input(draft.key || "", p?.key.set ? t("{masked} · paste a new key to replace it", { masked: p.key.masked }) : copied?.key.set ? t("{masked} · {name}'s key, or paste another", { masked: copied.key.masked, name: copied.name }) : t(pr?.noKey || p?.key.optional ? "optional for local servers" : "paste an API key"), "password");
   key.oninput = () => { draft.key = key.value; };
   key.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter" && isNew) save(); else if (e.key === "Escape") cancelEdit(); };
@@ -4562,9 +4610,6 @@ const SUBS = [
     riskNote: "Qoder has no public API for this; magpie signs requests as its desktop client would, which Qoder may treat as third-party use and act on. Use an account you can afford to lose." },
   // the devin CLI's own account is read; more are signed in beside it, each in a data folder of magpie's
   { agent: "devin", name: "Devin", icon: "devin", plans: "Pro · Enterprise", own: true },
-  // DimAgent's own subscription: the browser's sign-in at dimagent.cn, its relay serving the vendor's models
-  { agent: "dimagent", name: "DimAgent", icon: "dimagent", plans: "Credits", own: true, risk: true,
-    riskNote: "DimAgent serves this API to its own desktop client; magpie signs requests as that client would, which DimAgent may treat as third-party use and act on. Use an account you can afford to lose." },
   // Zed's hosted models (Zed Pro, its trial), signed in at zed.dev as the editor is
   { agent: "zed", name: "Zed", icon: "zed", plans: "Pro · Student · Business", own: true, risk: true,
     riskNote: "Zed serves these models to its own editor; magpie signs requests as the editor would, which Zed may treat as third-party use and act on. Use an account you can afford to lose." },
@@ -6864,7 +6909,6 @@ function drawLedRank(box, l, split, metric, picked, choose, compact) {
   if (!list.length) return;
   const sum = list.reduce((a, x) => a + ledValue(metric, x), 0) || 1;
   const leader = Math.max(1, ledValue(metric, top[0]));
-  const rows = top;
   const one = (x, color, plain) => {
     const b = el("button", "rk" + (plain ? " plain" : "") + (picked && picked === x.id ? " on" : ""));
     b.type = "button";
@@ -6897,13 +6941,12 @@ function drawLedRank(box, l, split, metric, picked, choose, compact) {
     b.onpointerleave = () => box.chart?.emphasize?.(null);
     return b;
   };
-  for (const x of rows) box.append(one(x, x.color));
-  const others = top.slice(rows.length).concat(rest);
-  if (others.length) {
-    const tot = others.reduce((acc, x) => {
+  for (const x of top) box.append(one(x, x.color));
+  if (rest.length) {
+    const tot = rest.reduce((acc, x) => {
       for (const k of ["calls", "errors", "input", "output", "cache_read", "cache_write", "cost"]) acc[k] = (acc[k] || 0) + (x[k] || 0);
       return acc;
-    }, { id: "\0other", name: t("Other ({n})", { n: others.length }) });
+    }, { id: "\0other", name: t("Other ({n})", { n: rest.length }) });
     box.append(one(tot, "var(--faint)", true));
   }
   box.scrollTop = kept;

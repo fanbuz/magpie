@@ -46,8 +46,6 @@ func LoginUsage(ctx context.Context, agent string) map[string]SubscriptionQuota 
 		logins = cmdLoginList()
 	case "qoder":
 		logins = loginsOf(qoderLogins())
-	case "dimagent":
-		logins = dimagentLoginList()
 	case "zed":
 		logins = zedLoginList()
 	case "factory":
@@ -104,9 +102,6 @@ func loginQuota(ctx context.Context, l Login) SubscriptionQuota {
 	ctx = ViaLogin(ctx, l.Agent, l.User) // asked through the account's own proxy
 	if l.Agent == "qoder" {
 		return qoderLoginQuota(ctx, l)
-	}
-	if l.Agent == "dimagent" {
-		return dimagentLoginQuota(ctx, l)
 	}
 	if l.Agent == "zed" {
 		return zedLoginQuota(ctx, l)

@@ -19,7 +19,8 @@ shared helper; a control under what it unrolls (`data-unrolls`) going down
 with it; a click that asks to go somewhere with `scrollOnPurpose(e)`;
 the room kept at the foot going as the reader scrolls back; and the wheel.
 
-`signin-callback.test.cjs` checks DimAgent's pasted callback in a narrow Chinese
+`signin-callback.test.cjs` checks a sign-in's pasted callback (the field a
+sign-in with pasteCallback shows) in a narrow Chinese
 dark window: invalid input remains editable, retry reaches the callback route,
 and a pending or accepted submission cannot be submitted twice.
 
@@ -29,6 +30,12 @@ scrolled to its end, in the tray panel (one agent open) and in the window:
 them and never back up; "Show less", and a row opened and closed, leave what
 was clicked where it is on every frame.
 
+`rail-tip.test.cjs` hovers the model picker's rail in Chromium and WebKit,
+English light and Chinese dark: an icon's name shows to its right, level with
+it and over no other icon (the browser's tooltip put Devin's name on ZCode's
+Z), moves at once to the next icon, and goes on a click, on leaving, and when
+Esc closes the picker; a rail icon focused from the keyboard is named too.
+
 `agent-models.test.cjs` opens Codex's model list from the line under its
 name, in Chromium and WebKit, English and Chinese: the line reads "Showing 8 /
 31 models" under the name, opening it moves nothing and puts it on the screen
@@ -36,7 +43,8 @@ whole, routing groups come first and OpenRouter's 24 start folded, the model
 Codex is set to can't be taken out, a click takes one out at once with the
 whole list sent and the count under the name following, a search opens a
 folded group, "Shown" keeps one just turned off till the view changes, a
-group's "Show all" comes on hover, "Show all again" sends none, and Esc or a
+group's "Show all" comes on hover, "Hide all" at the foot sends every one
+but the model in use, "Show all" there sends none, and Esc or a
 click elsewhere closes it.
 
 `gateway-fold.test.cjs` folds Connect on the Gateway page with the view
@@ -163,6 +171,13 @@ kiro-cli's own sign-in behind one of magpie's, then alone and first: its
 Remove is there both times, its title saying magpie only hides it and it
 shows again when Kiro signs in anew, and it posts login/forget; magpie's
 own account in use first has no Remove; in English and Chinese.
+
+`nokey-editor.test.cjs` opens two local Ollama providers saved with no key,
+one from the preset and one custom, as /api/providers gives them: a click
+on each row opens its editor (the key box saying one is optional) and
+nothing throws, where the row only toggled; in Chromium and WebKit, English
+and Chinese.
+
 `old-webkit.test.cjs` holds the page to Safari 15.0, the WebKit macOS 12 can
 have (#220: a regex lookbehind in app.js, a syntax error before Safari 16.4,
 left the panel with its headings and nothing working). Every script in
@@ -283,7 +298,7 @@ the app says Omarchy's bar isn't there; in English and Chinese.
 With Node.js and Playwright available:
 
 ```sh
-node --test internal/gui/tests/menu-scroll.test.cjs internal/gui/tests/click-scroll.test.cjs internal/gui/tests/panel-fold.test.cjs internal/gui/tests/panel-routing.test.cjs internal/gui/tests/gateway-fold.test.cjs internal/gui/tests/routing-kind.test.cjs internal/gui/tests/balance-fix.test.cjs internal/gui/tests/cli-update.test.cjs internal/gui/tests/login-import.test.cjs internal/gui/tests/agy-launch.test.cjs internal/gui/tests/currency.test.cjs internal/gui/tests/usage-ledger.test.cjs internal/gui/tests/update-check.test.cjs internal/gui/tests/omarchy.test.cjs internal/gui/tests/signin-callback.test.cjs internal/gui/tests/routing-steady.test.cjs internal/gui/tests/old-webkit.test.cjs internal/gui/tests/session-terminal.test.cjs internal/gui/tests/text-size.test.cjs internal/gui/tests/zcode-site.test.cjs internal/gui/tests/usage-ledger-detail.test.cjs internal/gui/tests/usage-ledger-chart.test.cjs internal/gui/tests/panel-usage.test.cjs internal/gui/tests/usage-refresh.test.cjs internal/gui/tests/usage-ledger-content.test.cjs
+node --test internal/gui/tests/menu-scroll.test.cjs internal/gui/tests/click-scroll.test.cjs internal/gui/tests/panel-fold.test.cjs internal/gui/tests/panel-routing.test.cjs internal/gui/tests/gateway-fold.test.cjs internal/gui/tests/routing-kind.test.cjs internal/gui/tests/balance-fix.test.cjs internal/gui/tests/cli-update.test.cjs internal/gui/tests/login-import.test.cjs internal/gui/tests/agy-launch.test.cjs internal/gui/tests/currency.test.cjs internal/gui/tests/usage-ledger.test.cjs internal/gui/tests/update-check.test.cjs internal/gui/tests/omarchy.test.cjs internal/gui/tests/signin-callback.test.cjs internal/gui/tests/routing-steady.test.cjs internal/gui/tests/old-webkit.test.cjs internal/gui/tests/session-terminal.test.cjs internal/gui/tests/text-size.test.cjs internal/gui/tests/zcode-site.test.cjs internal/gui/tests/usage-ledger-detail.test.cjs internal/gui/tests/usage-ledger-chart.test.cjs internal/gui/tests/panel-usage.test.cjs internal/gui/tests/usage-refresh.test.cjs internal/gui/tests/usage-ledger-content.test.cjs internal/gui/tests/rail-tip.test.cjs
 ```
 
 If Playwright is installed outside the repository, set `NODE_PATH` to the
@@ -312,10 +327,3 @@ with a known session creator. Unknown gateway providers retain their own label.
 Creator emails and recorded provider IDs appear separately in request details.
 Third-party OpenCode gateway calls retain the actual relay. These regressions
 run in Chromium and WebKit, English and Chinese.
-
-## Request review and performance
-
-[Usage request review and ablation](usage-review.md) records the current behavior,
-measured tradeoffs, regression coverage and reproduction commands for PR 239.
-`usage-ablation.py` runs the reviewed baseline, final code and individual negative
-controls sequentially on synthetic data.

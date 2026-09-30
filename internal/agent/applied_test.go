@@ -135,6 +135,11 @@ func TestDriftUnwiredEveryAgent(t *testing.T) {
 		if a.Check == nil || a.Launch != nil {
 			continue
 		}
+		// a WSL agent's files live in the distro, beyond the sandbox home:
+		// picking a model here writes the user's real configs
+		if a.WSL != "" {
+			continue
+		}
 		t.Run(a.ID, func(t *testing.T) {
 			// the field that takes one of magpie's models
 			var f Field

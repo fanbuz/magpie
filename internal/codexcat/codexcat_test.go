@@ -90,6 +90,24 @@ func TestCodexCatalogToolSearch(t *testing.T) {
 	}
 }
 
+// Codex 0.147 refuses a catalog whose entries don't say whether a model
+// takes parallel tool calls (#298), and later Codex ask for them anyway.
+func TestCodexCatalogParallelToolCalls(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var got struct {
+		Models []map[string]any `json:"models"`
+	}
+	json.Unmarshal(Catalog([]catalog.Model{{ID: "fake/m1", Name: "m1"}, {ID: "group/auto", Name: "auto"}}), &got)
+	if len(got.Models) != 2 {
+		t.Fatalf("%v", got)
+	}
+	for _, e := range got.Models {
+		if e["supports_parallel_tool_calls"] != true {
+			t.Errorf("%v: supports_parallel_tool_calls = %v", e["slug"], e["supports_parallel_tool_calls"])
+		}
+	}
+}
+
 // Fast mode is offered for a ChatGPT account's GPT models, with Codex's own
 // tiers when it lists the model, and for no one else's.
 func TestCodexCatalogServiceTiers(t *testing.T) {

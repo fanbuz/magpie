@@ -5,7 +5,7 @@ const path = require("node:path");
 const { test } = require("node:test");
 const { chromium } = require("playwright");
 
-test("DimAgent callback input retries errors and submits only once", async (t) => {
+test("A pasted sign-in callback retries errors and submits only once", async (t) => {
   const browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || "chromium" });
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 420, height: 640 } });
@@ -42,11 +42,11 @@ test("DimAgent callback input retries errors and submits only once", async (t) =
   await page.goto("http://magpie.test/");
   await page.waitForFunction(() => state.settings.lang === "zh");
   await page.evaluate(() => {
-    signing = { id: "test-flow", agent: "dimagent", state: "waiting", url: "http://vendor.test/oauth", pasteCallback: true };
+    signing = { id: "test-flow", agent: "vendor", state: "waiting", url: "http://vendor.test/oauth", pasteCallback: true };
     const host = document.createElement("div");
     host.style.width = "100%";
     host.style.cssText += "position:fixed;inset:0 auto auto 0;z-index:1000;";
-    host.append(renderSigning({ name: "DimAgent", agent: "dimagent" }));
+    host.append(renderSigning({ name: "Vendor", agent: "vendor" }));
     document.body.append(host);
   });
   const input = page.getByRole("textbox", { name: "回调 URL" });

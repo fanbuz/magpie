@@ -556,19 +556,20 @@ func piLike(at place, id, name, dir string) *Agent {
 			},
 			{
 				// Pi's startup thinking level, the same list its /thinking offers;
-				// Pi clamps it to what the model supports.
+				// Pi clamps it to what the model supports. Only this field is
+				// written, and only when it changed: rebuilding providers.magpie
+				// here replaced model fields a person had edited, such as a
+				// contextWindow. Picking the model, and the catalog sync, still
+				// refresh the provider.
 				Key: "effort", Label: "thinking",
 				Get: func() string { v, _ := get("defaultThinkingLevel"); return v },
 				Set: func(v string) error {
+					cur, _ := get("defaultThinkingLevel")
+					if v == cur {
+						return nil
+					}
 					if v == "" {
 						return edit.DelJSON(path, "defaultThinkingLevel")
-					}
-					if p, _ := get("defaultProvider"); p == magpieID {
-						// older magpie entries lacked "reasoning", which Pi needs
-						// before it will think at all
-						if err := writeMagpie(); err != nil {
-							return err
-						}
 					}
 					return set(edit.KV{Path: "defaultThinkingLevel", Value: v})
 				},
@@ -595,7 +596,7 @@ func goose(home, cfg string) *Agent {
 		// a goose on PATH may be pressly's database migration tool, a Go
 		// program; Block's goose is Rust, so a Go goose is not the agent
 		detect: func() bool {
-			if _, err := os.Stat(filepath.Dir(path)); err == nil {
+			if isDir(filepath.Dir(path)) {
 				return true
 			}
 			bin, err := exec.LookPath("goose")

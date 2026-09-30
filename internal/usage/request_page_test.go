@@ -143,6 +143,56 @@ func TestCompactPageMatchesLedger(t *testing.T) {
 	}
 }
 
+func TestRequestPageModelRankingKeepsAlternatives(t *testing.T) {
+	pageHome(t)
+	now := time.Now()
+	records := []Record{
+		{Time: now, Provider: "a", Agent: "codex", Model: "gpt-5", Input: 10},
+		{Time: now, Provider: "a", Agent: "codex", Model: "gpt-5-mini", Input: 20},
+		{Time: now, Provider: "b", Agent: "codex", Model: "other-provider", Input: 30},
+		{Time: now, Provider: "a", Agent: "claude", Model: "other-agent", Input: 40},
+		{Time: now, Provider: "a", Agent: "codex", Model: "rejected-model", Rejected: true},
+	}
+	gateway := &rowChunk{}
+	all := Ledgered{}
+	for i, r := range records {
+		row := Row{Record: r}
+		gateway.add(row, "", int64(i), false)
+		all.Rows = append(all.Rows, row)
+	}
+	f := Filter{Provider: "a", Agent: "codex", Model: "gpt-5"}
+	for name, page := range map[string]RequestPage{
+		"compact": buildRequestPage(Today, f, 0, 100, gateway, nil),
+		"ledger":  pageFromLedger(Today, f, 0, 100, all),
+	} {
+		t.Run(name, func(t *testing.T) {
+			models := map[string]int{}
+			for _, share := range page.By["model"] {
+				models[share.ID] = share.Calls
+			}
+			if want := map[string]int{"gpt-5": 1, "gpt-5-mini": 1}; !reflect.DeepEqual(models, want) {
+				t.Fatalf("model ranking = %v, want %v", models, want)
+			}
+			if page.Total != 1 || len(page.Rows) != 1 || page.Rows[0].Model != "gpt-5" || page.Sum.Calls != 1 || page.Sum.Input != 10 {
+				t.Fatalf("selected model no longer filters rows and totals: %+v", page)
+			}
+			var calls, tokens int
+			for _, point := range page.Series {
+				calls += point.Calls
+				tokens += point.Input
+			}
+			if calls != 1 || tokens != 10 {
+				t.Fatalf("selected model no longer filters the chart: calls=%d input=%d", calls, tokens)
+			}
+			for _, dimension := range []string{"provider", "agent"} {
+				if shares := page.By[dimension]; len(shares) != 1 || shares[0].Calls != 1 {
+					t.Fatalf("%s ranking ignored the model filter: %+v", dimension, shares)
+				}
+			}
+		})
+	}
+}
+
 func TestQueryPageSourceAndIdentityInvalidation(t *testing.T) {
 	pageHome(t)
 	sessionAuth(t, sessions.CodexDir(), "a", "u", "one@example.com")

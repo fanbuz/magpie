@@ -815,9 +815,6 @@ func Accounts() []Provider {
 	if p, ok := qoderAccount(); ok {
 		out = append(out, p)
 	}
-	if p, ok := dimagentAccount(); ok {
-		out = append(out, p)
-	}
 	if p, ok := zedAccount(); ok {
 		out = append(out, p)
 	}

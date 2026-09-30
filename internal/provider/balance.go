@@ -754,7 +754,8 @@ func KeyBalances(ctx context.Context) []SubscriptionQuota {
 			} else {
 				q.Balance = amount
 			}
-			out[i] = q
+			// the vendor failing a while shows the balance last read
+			out[i] = keepLast(q, keyTag("balance", j.p.Key))
 		}()
 	}
 	wg.Wait()

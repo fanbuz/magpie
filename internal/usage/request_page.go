@@ -672,6 +672,9 @@ func buildRequestPage(p Period, f Filter, offset, limit int, gateway *rowChunk, 
 			if d == "agent" {
 				g.Agent = ""
 			}
+			if d == "model" {
+				g.Model = ""
+			}
 			if !g.keeps(r.Record) {
 				continue
 			}
@@ -773,6 +776,9 @@ func pageFromLedger(p Period, f Filter, offset, limit int, all Ledgered) Request
 		}
 		if d == "agent" {
 			g.Agent = ""
+		}
+		if d == "model" {
+			g.Model = ""
 		}
 		out.By[d] = Breakdown(all.Filtered(g).Rows, d)
 	}

@@ -2,9 +2,11 @@ package gateway
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -626,11 +628,13 @@ func codexInput(body []byte, magpieModel bool) (_ []byte, compact bool) {
 	b, _ := json.Marshal(out)
 	q["input"] = b
 	if compact {
-		// the summary is text; a tool call would be no summary
+		// the summary is text; a tool call would be no summary. Otherwise
+		// it goes as Codex asks for its own summary, streamed with its
+		// tool_choice: a relay in front of the ChatGPT backend turns away
+		// one that isn't ("invalid codex request", #292)
 		delete(q, "tools")
-		delete(q, "tool_choice")
-		delete(q, "parallel_tool_calls")
-		q["stream"] = json.RawMessage("false")
+		q["tool_choice"] = json.RawMessage(`"auto"`)
+		q["parallel_tool_calls"] = json.RawMessage("false")
 	}
 	nb, err := json.Marshal(q)
 	if err != nil {
@@ -659,18 +663,8 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 		w.Write(rec.body.Bytes())
 		return
 	}
-	var res struct {
-		ID     string `json:"id"`
-		Output []struct {
-			Type    string `json:"type"`
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"output"`
-		Usage json.RawMessage `json:"usage"`
-	}
-	if err := json.Unmarshal(rec.body.Bytes(), &res); err != nil {
+	res, err := compactReply(rec.body.Bytes())
+	if err != nil {
 		writeError(w, provider.Responses, 502, "compaction: "+err.Error())
 		return
 	}
@@ -713,6 +707,72 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+type compactOutput struct {
+	Type    string `json:"type"`
+	Content []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
+}
+
+type compactResult struct {
+	ID     string          `json:"id"`
+	Output []compactOutput `json:"output"`
+	Usage  json.RawMessage `json:"usage"`
+	Error  *struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// compactReply reads the summary's reply, a Responses stream as Codex asks
+// for it or a response as a whole: the items from output_item.done (the
+// ChatGPT backend's completed response lists none), usage from completed.
+func compactReply(b []byte) (compactResult, error) {
+	var res compactResult
+	t := bytes.TrimSpace(b)
+	if len(t) > 0 && t[0] == '{' {
+		err := json.Unmarshal(t, &res)
+		return res, err
+	}
+	var items []compactOutput
+	var failed string
+	readSSE(bytes.NewReader(b), func(_, data string) error {
+		var ev struct {
+			Type     string         `json:"type"`
+			Item     compactOutput  `json:"item"`
+			Response *compactResult `json:"response"`
+			Message  string         `json:"message"` // an error event's
+		}
+		if json.Unmarshal([]byte(data), &ev) != nil {
+			return nil
+		}
+		if ev.Response != nil && ev.Response.ID != "" {
+			res.ID = ev.Response.ID
+		}
+		switch ev.Type {
+		case "response.output_item.done":
+			items = append(items, ev.Item)
+		case "response.completed", "response.incomplete":
+			if ev.Response != nil {
+				res.Output, res.Usage = ev.Response.Output, ev.Response.Usage
+			}
+		case "response.failed", "error":
+			failed = cmp.Or(ev.Message, "the model failed")
+			if ev.Response != nil && ev.Response.Error != nil && ev.Response.Error.Message != "" {
+				failed = ev.Response.Error.Message
+			}
+		}
+		return nil
+	})
+	if failed != "" {
+		return res, errors.New(failed)
+	}
+	if len(items) > 0 {
+		res.Output = items
+	}
+	return res, nil
 }
 
 // recorder keeps a reply for a second look.

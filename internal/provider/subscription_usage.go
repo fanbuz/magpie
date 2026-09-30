@@ -255,9 +255,6 @@ func fetchSubscriptionUsage() []SubscriptionQuota {
 	if !hidden["qoder"] {
 		fetches = append(fetches, perLogin(via("qoder"), loginsOf(qoderLogins()), "Qoder", "qoder")...)
 	}
-	if !hidden["dimagent"] {
-		fetches = append(fetches, perLogin(via("dimagent"), dimagentLoginList(), "DimAgent", "dimagent")...)
-	}
 	if !hidden["zed"] {
 		fetches = append(fetches, perLogin(via("zed"), zedLoginList(), "Zed", "zed")...)
 	}

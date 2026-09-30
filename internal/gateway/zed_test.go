@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -208,5 +209,45 @@ func TestZedRequestShapes(t *testing.T) {
 	}
 	if _, _, err := zedRequest(req, "mystery", "m"); err == nil {
 		t.Error("an unknown provider was written")
+	}
+}
+
+// Zed's cloud wants is_error on each tool result, false too, or every turn
+// after a tool call is refused (yetone/magpie-releases#9).
+func TestZedToolResultSaysIsError(t *testing.T) {
+	req := &Request{Model: "m", MaxTokens: 10, Messages: []Message{
+		{Role: "user", Parts: []Part{{Kind: Text, Text: "run echo hi"}}},
+		{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: "toolu_1", Name: "bash", Args: json.RawMessage(`{"command":"echo hi","n":12345678901234567890}`)}}},
+		{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: "toolu_1", Text: "hi"}, {Kind: ToolResult, CallID: "toolu_2", Text: "no", IsError: true}}},
+	}}
+	raw, _, err := zedRequest(req, "anthropic", "claude-sonnet-5-5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Messages []struct {
+			Content []map[string]any `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	var errs []any
+	for _, m := range got.Messages {
+		for _, b := range m.Content {
+			if b["type"] == "tool_result" {
+				v, ok := b["is_error"]
+				if !ok {
+					t.Errorf("tool result without is_error: %v", b)
+				}
+				errs = append(errs, v)
+			}
+		}
+	}
+	if !bytes.Contains(raw, []byte(`12345678901234567890`)) {
+		t.Errorf("a tool input number changed: %s", raw)
+	}
+	if len(errs) != 2 || errs[0] != false || errs[1] != true {
+		t.Errorf("is_error: %v in %s", errs, raw)
 	}
 }

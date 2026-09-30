@@ -55,8 +55,8 @@ function fixture(lang) {
 }
 
 const W = {
-  en: { entry: "Showing 8 / 31 models", after: "Showing 7 / 31 models", all: "All 31 models", title: "Codex's model list", current: "Current", shown: "Shown", reset: "Show all again", showAll: "Show all" },
-  zh: { entry: "显示 8 / 31 个模型", after: "显示 7 / 31 个模型", all: "全部 31 个模型", title: "Codex 的模型列表", current: "在用", shown: "已显示", reset: "恢复全部显示", showAll: "全部显示" },
+  en: { entry: "Showing 8 / 31 models", after: "Showing 7 / 31 models", all: "All 31 models", title: "Codex's model list", current: "Current", shown: "Shown", hideAll: "Hide all", one: "Showing 1 / 31 models", showAll: "Show all" },
+  zh: { entry: "显示 8 / 31 个模型", after: "显示 7 / 31 个模型", all: "全部 31 个模型", title: "Codex 的模型列表", current: "在用", shown: "已显示", hideAll: "全部隐藏", one: "显示 1 / 31 个模型", showAll: "全部显示" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -146,12 +146,25 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.equal(await gh.locator(".am-all").evaluate((e) => getComputedStyle(e).opacity), "1");
       assert.equal(await gh.locator(".am-all").innerText(), w.showAll);
 
+      // every one hidden at once, but the one in use
+      const hideAll = pop.locator(".am-hide"), showAll = pop.locator(".am-reset:not(.am-hide)");
+      assert.equal(await hideAll.innerText(), w.hideAll);
+      assert.equal(await showAll.innerText(), w.showAll);
+      await hideAll.click();
+      await page.waitForTimeout(150);
+      assert.equal(fx.posts.at(-1).length, 30);
+      assert(!fx.posts.at(-1).includes("openai/gpt-5.5"));
+      assert.equal((await entry.innerText()).trim(), w.one);
+      assert(await hideAll.isDisabled());
+      assert.equal(await pop.locator(".am-g").nth(1).locator(".c").innerText(), "1 / 6");
+
       // back to all shown
-      await pop.locator(".am-reset").click();
+      await showAll.click();
       await page.waitForTimeout(150);
       assert.deepEqual(fx.posts.at(-1), []);
       assert.equal((await entry.innerText()).trim(), w.all);
-      assert(await pop.locator(".am-reset").isDisabled());
+      assert(await showAll.isDisabled());
+      assert(!(await hideAll.isDisabled()));
 
       // Esc closes it; so does a click elsewhere
       await page.keyboard.press("Escape");

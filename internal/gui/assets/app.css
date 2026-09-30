@@ -1127,6 +1127,11 @@ body.window .foot { padding-left: 18px; }
 .rail-item.on { color: var(--fg); background: transparent; }
 .rail-item .ic { width: 16px; height: 16px; transition: transform 220ms cubic-bezier(.22, 1, .36, 1); }
 .rail-item.on .ic { transform: scale(1.04); }
+/* a rail icon's name, drawn beside it (renderPickerRail's showRailTip) */
+.rail-tip { position: fixed; z-index: 31; top: 0; left: 0; transform: translate(-3px, -50%); padding: 3px 8px; border-radius: 6px; background: var(--fg); color: var(--bg); font-size: 11.5px; font-weight: 500; line-height: 16px; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; pointer-events: none; opacity: 0; visibility: hidden; box-shadow: 0 2px 8px rgba(0, 0, 0, .18); transition: opacity 90ms ease-out, transform 140ms cubic-bezier(.22, 1, .36, 1), visibility 0s 90ms; }
+.rail-tip.left { transform: translate(3px, -50%); }
+.rail-tip.on { opacity: 1; visibility: visible; transform: translate(0, -50%); transition: opacity 90ms ease-out, transform 140ms cubic-bezier(.22, 1, .36, 1); }
+@media (prefers-reduced-motion: reduce) { .rail-tip, .rail-tip.on { transition: none; } }
 .rail-sep { width: 24px; height: 1px; margin: 2px 0; background: var(--line-2); flex: none; }
 .pop ul { list-style: none; overflow-y: auto; padding: 5px; min-width: 0; flex: 1 1 auto; contain: paint; }
 .pop li {
@@ -2029,6 +2034,9 @@ body.window .row.agent .who.with-models { flex-wrap: wrap; row-gap: 0; }
 .am-mr { display: flex; align-items: center; gap: 10px; width: calc(100% - 4px); height: 32px; margin: 0 2px; padding: 0 12px; border: 0; border-radius: 8px; background: none; color: var(--fg); font: inherit; font-size: 13px; text-align: left; cursor: pointer; transition: background-color .12s; }
 .am-mr:hover { background: var(--pill); }
 .am-mr:focus-visible { outline: 1.5px solid var(--accent); outline-offset: -1.5px; }
+.am-mr .lg { flex: none; }
+.am-mr .lg > svg { color: var(--muted); }
+.am-mr.off .lg { opacity: .45; }
 .am-mr .n { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color .15s; }
 .am-mr .x { flex: none; font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .am-mr .ck { flex: none; display: inline-flex; justify-content: center; width: 16px; color: var(--accent); }
@@ -2043,3 +2051,4 @@ body.window .row.agent .who.with-models { flex-wrap: wrap; row-gap: 0; }
 .am-reset { border: 0; background: none; padding: 2px 4px; border-radius: 5px; color: var(--fg-2); font: inherit; font-size: 11.5px; cursor: pointer; }
 .am-reset:hover:not(:disabled) { color: var(--accent); }
 .am-reset:disabled { color: var(--faint); cursor: default; }
+.am-dot { color: var(--faint); }

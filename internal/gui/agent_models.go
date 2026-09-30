@@ -22,13 +22,16 @@ type modelCountJSON struct {
 
 // agentModelJSON is a model an agent may be shown, as the list draws it.
 type agentModelJSON struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	Group   string   `json:"group"` // its provider's name, or "Routing groups"
-	Icon    string   `json:"icon,omitempty"`
-	Icons   []string `json:"icons,omitempty"`
-	Context int      `json:"context,omitempty"`
-	Hidden  bool     `json:"hidden,omitempty"`
+	ID    string   `json:"id"`
+	Name  string   `json:"name"`
+	Group string   `json:"group"` // its provider's name, or "Routing groups"
+	Icon  string   `json:"icon,omitempty"`
+	Icons []string `json:"icons,omitempty"`
+	// Logo is its maker's: known by the model's family, or its provider's
+	// when that is the maker; "" when neither says
+	Logo    string `json:"logo,omitempty"`
+	Context int    `json:"context,omitempty"`
+	Hidden  bool   `json:"hidden,omitempty"`
 	// InUse: the agent is set to it, so it can't be taken out
 	InUse bool `json:"inUse,omitempty"`
 }
@@ -87,8 +90,18 @@ func agentModelList(a *agent.Agent) []agentModelJSON {
 		if m.Name == "" {
 			m.Name = e.Model
 		}
+		m.Logo = agent.ModelIcon(e.Model)
 		if e.Group != "" {
+			// a group's first member says nothing of the others: known by
+			// the name it was given, or its id
 			m.Group, m.Icons = agent.RoutingGroups, e.Icons
+			if m.Logo = agent.ModelIcon(m.Name); m.Logo == "" {
+				m.Logo = agent.ModelIcon(e.Group)
+			}
+		} else if m.Logo == "" {
+			if p := provider.Preset(e.Provider.Preset); p != nil && p.Kind == provider.KindVendor {
+				m.Logo = e.Provider.Icon
+			}
 		}
 		out = append(out, m)
 	}

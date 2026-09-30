@@ -6,6 +6,8 @@ package provider
 // A reading that comes back replaces it at once.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -39,6 +41,14 @@ func lastQuotasPath() string { return filepath.Join(filepath.Dir(Path()), "quota
 // passing is an error that says nothing about the account: the vendor
 // rate limiting, failing or out of reach. A sign-in gone bad is not one.
 var passing = regexp.MustCompile(`(?i)rate.?limit|too many requests|429|internal server error|bad gateway|service unavailable|gateway timeout|deadline exceeded|timeout|timed out|connection (refused|reset)|no such host|network is unreachable|EOF|asks again`)
+
+// keyTag names a key's card among the last readings, by what it is (a
+// plan's windows, a balance) and a digest of the key, never the key: a
+// key's card has no user to go by.
+func keyTag(kind, key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return kind + " " + hex.EncodeToString(sum[:8])
+}
 
 // keepLast is q, or the last reading of its account when q failed in
 // passing; a good reading is kept for next time.
