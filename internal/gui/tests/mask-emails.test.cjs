@@ -80,7 +80,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           await main.locator("#usageMask").click();
           await masked(main, true); await masked(panel, true);
           await panel.evaluate(() => { delete document.hidden; document.dispatchEvent(new Event("visibilitychange")); });
-          assert.equal(await main.locator("#usageMask [data-t]").textContent(), lang === "zh" ? "隐私模式已开启" : "Privacy mode on");
+          assert.equal(await main.locator("#usageMask").getAttribute("aria-label"), lang === "zh" ? "隐私模式已开启" : "Privacy mode on");
           await noEmail(main, "#subscriptionUsage"); await noEmail(panel, "#panelQuota"); await noEmail(main, "#sample");
           assert.equal(await main.locator("#sample").getAttribute("title"), "••••••••@••••.•••");
           assert.doesNotMatch(await main.locator("#sample").getAttribute("aria-label"), /demo|example/);
