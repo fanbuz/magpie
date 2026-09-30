@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -19,16 +20,31 @@ type traceJSON struct {
 
 // mainView is the tab the window is asked to open on, as the page's view
 // parameter: the Routing page on one request (req, its id) when the tray
-// panel's Routing tab asks for it. Anything but an id is dropped.
+// panel's Routing tab asks for it, or the Usage page's Requests on one
+// provider or agent when its Usage tab does. Anything but an id, or a name
+// of the kind a provider or an agent has, is dropped.
 func mainView(q url.Values) string {
 	view := q.Get("view")
-	if req := q.Get("req"); view == "routing" && req != "" {
-		if id, err := strconv.ParseInt(req, 10, 64); err == nil && id > 0 {
+	switch view {
+	case "routing":
+		if id, err := strconv.ParseInt(q.Get("req"), 10, 64); err == nil && id > 0 {
 			view += "&req=" + strconv.FormatInt(id, 10)
+		}
+	case "usage":
+		if q.Get("tab") == "requests" {
+			view += "&tab=requests"
+		}
+		for _, k := range []string{"provider", "agent"} {
+			if v := q.Get(k); mainName.MatchString(v) {
+				view += "&" + k + "=" + url.QueryEscape(v)
+			}
 		}
 	}
 	return view
 }
+
+// mainName is the id of a provider or an agent.
+var mainName = regexp.MustCompile(`^[A-Za-z0-9._@:/ -]{1,80}$`)
 
 // traceRoutes serves the routing trace for the Gateway view to play: it
 // waits up to 25 s for something to change after the seq it is given, so

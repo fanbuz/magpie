@@ -146,8 +146,13 @@ type Event struct {
 	MsgID  string
 	Model  string
 	Stop   string // stop | length | tool | filter
-	Usage  Usage
-	Hits   []Hit
+	// Code: for KError, the kind of error as its source names it (Claude
+	// Code's rate_limit, server_error…); RequestID: the vendor's id for the
+	// request the event is of, when it is known by then
+	Code      string
+	RequestID string
+	Usage     Usage
+	Hits      []Hit
 }
 
 // Usage counts tokens.
@@ -160,6 +165,11 @@ type Usage struct {
 	// Served: the model the vendor's reply says answered, when it named
 	// one — which may not be the one it was asked for
 	Served string `json:"served,omitempty"`
+	// RequestID: the id the vendor gave the request, from its reply's
+	// headers (Claude Code's own for a subscription); ErrType: what a
+	// failed request's error body called the error
+	RequestID string `json:"request_id,omitempty"`
+	ErrType   string `json:"err_type,omitempty"`
 }
 
 // prompt is every token the prompt came to, as OpenAI's and Gemini's
@@ -188,6 +198,12 @@ func (u *Usage) add(v Usage) {
 	if v.Served != "" {
 		u.Served = v.Served
 	}
+	if v.RequestID != "" {
+		u.RequestID = v.RequestID
+	}
+	if v.ErrType != "" {
+		u.ErrType = v.ErrType
+	}
 }
 
 // Result is a whole reply, for non-streaming clients.
@@ -205,6 +221,9 @@ type collector struct {
 	res  Result
 	args strings.Builder // arguments of the open tool call
 	err  string
+	// the error's status and kind, as its event gave them
+	errStatus int
+	errCode   string
 }
 
 func (c *collector) last(k Kind) *Part {
@@ -258,8 +277,9 @@ func (c *collector) add(ev Event) {
 		c.res.Stop = ev.Stop
 	case KUsage:
 		c.res.Usage.add(ev.Usage)
+		c.res.Usage.add(Usage{RequestID: ev.RequestID})
 	case KError:
-		c.err = ev.Text
+		c.err, c.errStatus, c.errCode = ev.Text, ev.Status, ev.Code
 	case KSearch:
 		c.closeTool()
 		c.res.Parts = append(c.res.Parts, Part{Kind: Search, Text: ev.Text, Hits: ev.Hits})

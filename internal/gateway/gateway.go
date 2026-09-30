@@ -660,6 +660,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		call.ResponseBody = capture.body.text()
 		call.ResponseTruncated = capture.body.truncated
 	}
+	// a request turned away before any provider was asked is in the log
+	// as the failure it was, with the reason
+	turnedAway := func() {
+		finishCapture()
+		call.Millis = time.Since(start).Milliseconds()
+		s.record(call)
+		rec := usage.Record{Time: start, Agent: call.Agent, Provider: call.Provider, Model: call.Model, Requested: call.Model,
+			Millis: call.Millis, Status: call.Status, Rejected: true, Session: sessionOf(r.Header), NativeSession: nativeSessionOf(r.Header), Kind: call.Kind, Endpoint: endpointOf(r, from, "")}
+		failedWith(&rec, call.Status, call.Error, "")
+		usage.Append(rec)
+	}
 	// a model's id without a provider in it that names a routing group is
 	// the group's, as "group/<id>" is, rather than one provider's that
 	// serves it: the Routing view shows the group it went to
@@ -678,8 +689,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		if off, isOff := provider.SwitchedOff(asked); isOff {
 			call.Error = "provider switched off"
 			writeError(w, from, 404, switchedOff(off, call.Model))
-			finishCapture()
-			s.record(call)
+			turnedAway()
 			return
 		}
 		msg := fmt.Sprintf("magpie knows no model %q", call.Model)
@@ -689,16 +699,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			msg += "; add a provider in magpie first"
 		}
 		writeError(w, from, 404, msg)
-		finishCapture()
-		s.record(call)
+		turnedAway()
 		return
 	}
 	if p.Decides() {
 		// Jev answers questions about a message, not the message
 		call.Status, call.Error = 400, "a decision model"
 		writeError(w, from, 400, fmt.Sprintf("%s only decides a routing group's model and effort; it holds no conversation", call.Model))
-		finishCapture()
-		s.record(call)
+		turnedAway()
 		return
 	}
 	// a routing group's rules pick the member that goes first, looked at
@@ -756,8 +764,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			if err != nil {
 				call.Status, call.Error = 502, "image not described"
 				writeError(w, from, 502, fmt.Sprintf("model %q can't see images, and %s couldn't describe the image for it: %v", call.Model, see, err))
-				finishCapture()
-				s.record(call)
+				turnedAway()
 				return
 			}
 			body = seen
@@ -775,8 +782,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		if currentImage {
 			call.Status, call.Error = 400, "model does not support image input"
 			writeError(w, from, 400, fmt.Sprintf("model %q does not support image input", call.Model))
-			finishCapture()
-			s.record(call)
+			turnedAway()
 			return
 		}
 	}
@@ -805,8 +811,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	if len(cands) == 0 {
 		call.Status, call.Error = 404, "no member ready"
 		writeError(w, from, 404, fmt.Sprintf("none of %s's models is ready", call.Model))
-		finishCapture()
-		s.record(call)
+		turnedAway()
 		return
 	}
 	// the conversation stays with who answered it last, while its
@@ -875,8 +880,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			if len(cands) == 0 {
 				call.Status, call.Error = 400, "model does not support image input"
 				writeError(w, from, 400, fmt.Sprintf("model %q does not support image input", call.Model))
-				finishCapture()
-				s.record(call)
+				turnedAway()
 				return
 			}
 		}
@@ -1090,11 +1094,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	})
 	s.record(call)
 	if call.To != "" {
-		usage.Append(usage.Record{Time: start, Agent: call.Agent, Provider: call.Provider, Host: where, Model: model,
+		rec := usage.Record{Time: start, Agent: call.Agent, Provider: call.Provider, Host: where, Model: model,
 			Requested: call.Model, Served: call.Usage.Served,
 			Input: call.Usage.Input, Output: call.Usage.Output, CacheRead: call.Usage.CacheRead,
 			CacheWrite: call.Usage.CacheWrite, Reasoning: call.Usage.Reasoning, Effort: sent, Millis: call.Millis, Status: call.Status,
-			TTFT: call.TTFT, FirstText: call.FirstText, Session: sessionOf(r.Header), Kind: call.Kind})
+			TTFT: call.TTFT, FirstText: call.FirstText, Session: sessionOf(r.Header), NativeSession: nativeSessionOf(r.Header), Kind: call.Kind,
+			RequestID: call.Usage.RequestID, Endpoint: endpointOf(r, from, call.To)}
+		failedWith(&rec, call.Status, call.Error, call.Usage.ErrType)
+		usage.Append(rec)
 	}
 }
 
@@ -1384,12 +1391,14 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		}
 	}
 	defer res.Body.Close()
+	u.RequestID = requestID(res.Header)
 	if res.StatusCode >= 400 {
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 		msg := p.Name + ": " + provider.APIError(b, res.Status)
 		if wrongEndpoint(res.StatusCode, b) {
 			s.markUnfit(p.ID, model, proto)
 			if len(s.usable(p, model)) > 0 {
+				u.RequestID = "" // another endpoint answers, with its own id
 				return res.StatusCode, msg, false
 			}
 		}
@@ -1397,6 +1406,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			markOpenRouterSharedPool(w)
 		}
 		keepRetry(w.Header(), res.Header, b)
+		u.ErrType = provider.ErrorType(b)
 		return writeError(w, proto, res.StatusCode, msg), msg, true
 	}
 	rd, sse := eventStream(res)
@@ -1686,6 +1696,7 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 		return writeError(w, from, 502, p.Name+": "+err.Error()), err.Error()
 	}
 	defer res.Body.Close()
+	u.RequestID = requestID(res.Header)
 	if res.StatusCode >= 400 {
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 		msg := p.Name + ": " + provider.APIError(b, res.Status)
@@ -1693,6 +1704,7 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 			markOpenRouterSharedPool(w)
 		}
 		keepRetry(w.Header(), res.Header, b)
+		u.ErrType = provider.ErrorType(b)
 		return writeError(w, from, res.StatusCode, msg), msg
 	}
 	dec := decoder(actual)
@@ -2000,6 +2012,16 @@ func sessionOf(in http.Header) string {
 				v = v[:128]
 			}
 			return v
+		}
+	}
+	return ""
+}
+
+// nativeSessionOf keeps the client session even when magpie's header overrides it.
+func nativeSessionOf(in http.Header) string {
+	for _, h := range sessionHeaders {
+		if v := strings.TrimSpace(in.Get(h)); v != "" {
+			return v[:min(len(v), 128)]
 		}
 	}
 	return ""

@@ -972,7 +972,7 @@ function fit(extra = 0, glide) {
   const body = document.body, tab = body.dataset.ptab;
   delete body.dataset.ptab;
   // extra is only ever the agents' (a row opening, the scroll unrolling)
-  const tallest = Math.max($("#agents").offsetHeight + extra, $("#panelQuota").offsetHeight, $("#panelRouting").offsetHeight);
+  const tallest = Math.max($("#agents").offsetHeight + extra, $("#panelQuota").offsetHeight, $("#panelRouting").offsetHeight, $("#panelUsage").offsetHeight);
   if (tab) body.dataset.ptab = tab;
   const h = $(".top").offsetHeight + $("#ptabs").offsetHeight + tallest + $(".foot").offsetHeight + 4;
   if (h === fit.last) return;
@@ -5524,9 +5524,10 @@ function planSpan(q) {
   return s;
 }
 
-// The tray panel is three tabs over the one page: the agents, the allowances
-// of every subscription and key (the "usage" tab, as it was named before)
-// and the gateway's latest requests (routing.js draws those). The saved
+// The tray panel is four tabs over the one page: the agents, the allowances
+// of every subscription and key (the "usage" tab, as it was named before),
+// what the requests add up to (the "stats" tab, the window's Requests made
+// small) and the gateway's latest requests (routing.js draws those). The saved
 // profiles open from Profiles at the Agents tab's foot, over the list (a tab
 // of their own was one too many). The tab is remembered.
 const profBtn = $("#profBtn"), profBox = $(".profiles");
@@ -5578,6 +5579,9 @@ function setPanelTab(tab) {
   slide(tabs, "ptabs");
   panelAge();
   window.panelRoutingShown?.();
+  // the tab remembered is drawn as the page loads, before what the tab is drawn with,
+  // further down, is set: a microtask later, when all of it is
+  queueMicrotask(panelUseShown);
   fit();
 }
 if (mode === "panel") {
@@ -5602,6 +5606,147 @@ if (mode === "panel") {
     void th?.offsetWidth;
     th?.classList.remove("still");
   }).observe(tabs);
+}
+
+// The panel's Usage tab: what the requests of a period add up to — four
+// totals, a small chart of them by the hour or day, and who they were of —
+// as the window's Requests draws it, from the same answer (a page of one row
+// is all the panel asks for). A provider picked lists only its requests, and
+// the chart then tells its models apart. A click on someone in the ranking
+// picks them; "Open Usage" takes the window to their requests.
+let panelUse = null; // the answer for the period, and provider, shown
+let panelUsePeriod = "today", panelUseProvider = "", panelUseMetric = "tokens";
+try {
+  const p = localStorage.getItem("magpie.panelUsePeriod"), m = localStorage.getItem("magpie.panelUseMetric");
+  if (["today", "7d", "30d"].includes(p)) panelUsePeriod = p;
+  if (["tokens", "cost", "calls"].includes(m)) panelUseMetric = m;
+} catch {}
+let panelUseAt = 0;
+const PANEL_USE_PERIODS = [["today", "Today"], ["7d", "7 days"], ["30d", "30 days"]];
+
+async function loadPanelUse() {
+  if (mode !== "panel") return;
+  const q = new URLSearchParams({ period: panelUsePeriod, limit: "1" });
+  if (panelUseProvider) q.set("provider", panelUseProvider);
+  const want = q.toString();
+  panelUseAt = performance.now();
+  // what is shown stays, dimmed, till the answer comes: the panel doesn't
+  // shrink to a skeleton and lose where it was scrolled to
+  $("#panelUsage").classList.add("pu-loading");
+  try {
+    const l = await api("usage/requests?" + want);
+    const now = new URLSearchParams({ period: panelUsePeriod, limit: "1" });
+    if (panelUseProvider) now.set("provider", panelUseProvider);
+    if (now.toString() !== want) return; // another period or provider was picked meanwhile
+    panelUse = l;
+    $("#panelUsage").classList.remove("pu-loading");
+    if (panelTab === "stats") renderPanelUse();
+  } catch (e) {
+    $("#panelUsage").classList.remove("pu-loading");
+    throw e;
+  }
+}
+// the tab is shown: what it has is drawn, and read again if it is old
+function panelUseShown() {
+  if (mode !== "panel" || panelTab !== "stats") return;
+  renderPanelUse();
+  if (!panelUse || performance.now() - panelUseAt > 5e3) loadPanelUse().catch(() => {});
+}
+if (mode === "panel") {
+  // requests come while it is looked at
+  setInterval(() => { if (panelTab === "stats" && !document.hidden) loadPanelUse().catch(() => {}); }, 10e3);
+}
+
+function renderPanelUse() {
+  const box = $("#panelUsage");
+  if (mode !== "panel" || !box) return;
+  const v = $("#view-agents"), keep = v.scrollTop;
+  const l = panelUse;
+  box.hidden = false;
+  const bar = el("div", "pu-bar");
+  const per = el("div", "segs");
+  for (const [id, name] of PANEL_USE_PERIODS) {
+    const b = el("button", "opt" + (id === panelUsePeriod ? " on" : ""), t(name));
+    b.onclick = () => {
+      if (id === panelUsePeriod) return;
+      panelUsePeriod = id;
+      try { localStorage.setItem("magpie.panelUsePeriod", id); } catch {}
+      renderPanelUse();
+      loadPanelUse().catch(() => {});
+    };
+    per.append(b);
+  }
+  const pick = el("button", "sess-pick");
+  pick.type = "button";
+  const opts = (l?.providers || []).map((p) => ({ v: p.id, name: t(p.name), note: "" }));
+  if (panelUseProvider && l && !opts.some((o) => o.v === panelUseProvider)) panelUseProvider = "";
+  sessPick(pick, "All providers", panelUseProvider, opts, "Provider", (id) => { panelUseProvider = id; renderPanelUse(); loadPanelUse().catch(() => {}); });
+  const open = el("button", "text", t("Open Usage"));
+  open.type = "button";
+  open.onclick = (e) => {
+    api("window/main?" + new URLSearchParams({ view: "usage", tab: "requests", ...(panelUseProvider ? { provider: panelUseProvider } : {}) }), {});
+    e.currentTarget.blur();
+  };
+  bar.append(per, pick, el("span", "grow"), open);
+  const out = [bar, el("p", "usage-note", t("Gateway and session-log calls; local rejections excluded from totals."))];
+  if (!l) {
+    out.push(el("span", "skeleton pu-sk"), el("span", "skeleton pu-sk"));
+  } else if (!l.total) {
+    const none = el("div", "pu-none");
+    none.append(el("b", "", t(panelUseProvider || panelUsePeriod !== "today" ? "No requests here" : "No requests today")), t("Every request an agent sends to magpie, and every call the agents' own session files record, is counted here."));
+    out.push(none);
+  } else {
+    const prompt = l.input + l.cache_write + l.cache_read;
+    const tot = el("div", "pu-tot");
+    const blk = (label, value, sub, cls, subCls) => {
+      const b = el("div", "blk");
+      b.append(el("span", "k", t(label)), el("span", "v" + (cls ? " " + cls : ""), value));
+      if (sub) b.append(el("span", "sub" + (subCls ? " " + subCls : ""), sub));
+      tot.append(b);
+    };
+    blk("Tokens", ledShort(allTokens(l)), t("{a} in · {b} out", { a: ledShort(l.input), b: ledShort(l.output) }));
+    blk("Requests", ledNum(l.calls), l.errors ? t("{n} failed", { n: ledNum(l.errors) }) : t("none failed"), "", l.errors ? "bad" : "");
+    const c = fmtCost(l);
+    blk("Cost", c ? "≈" + c : "—", l.unpriced ? t("{n} unpriced", { n: l.unpriced }) : t("list price"), c ? "cost" : "");
+    blk("Cache hit rate", prompt ? Math.round((100 * l.cache_read) / prompt) + "%" : "—", t("of the prompt"));
+    const card = el("div", "pu-card");
+    const head = el("div", "led-bar");
+    const met = el("div", "segs");
+    for (const [id, name] of LED_METRICS) {
+      const b = el("button", "opt" + (id === panelUseMetric ? " on" : ""), t(name));
+      b.onclick = () => {
+        if (id === panelUseMetric) return;
+        panelUseMetric = id;
+        try { localStorage.setItem("magpie.panelUseMetric", id); } catch {}
+        renderPanelUse();
+      };
+      met.append(b);
+    }
+    head.append(met);
+    // one provider's chart tells its models apart; all of them, the providers
+    const split = panelUseProvider ? "model" : "provider";
+    const chart = el("div", "led-chart"), rank = el("div", "led-rank");
+    card.append(head, chart, rank);
+    out.push(tot, card);
+    box.replaceChildren(...out);
+    slide(per, "puPeriod");
+    slide(met, "puMetric");
+    drawLedColumns(chart, l, split, panelUseMetric, true);
+    rank.chart = chart;
+    drawLedRank(rank, l, split, panelUseMetric, "", (x) => {
+      if (split !== "provider") return; // a model is not a way in: the picker has the providers
+      panelUseProvider = x.id;
+      renderPanelUse();
+      loadPanelUse().catch(() => {});
+    }, true);
+    if (v.scrollTop !== keep) v.scrollTop = keep;
+    fit();
+    return;
+  }
+  box.replaceChildren(...out);
+  slide(per, "puPeriod");
+  if (v.scrollTop !== keep) v.scrollTop = keep;
+  fit();
 }
 
 // The Usage tab: accounts under their vendor, each window a ring with its
@@ -6037,12 +6182,20 @@ function renderUsage() {
 // server pages it (/api/usage/requests) and saves it whole as CSV.
 
 let ledger = null; // the page shown: { rows, offset, total, agents, …totals }
-let ledOffset = 0, ledAgent = "", ledFailed = false, ledQuery = "";
+let ledOffset = 0, ledAgent = "", ledProvider = "", ledFailed = false, ledQuery = "";
 const LED_PAGE = 100;
+// the chart's metric, and what it tells apart; remembered
+let ledMetric = "tokens", ledSplit = "provider";
+try {
+  const m = localStorage.getItem("magpie.ledMetric"), b = localStorage.getItem("magpie.ledSplit");
+  if (["tokens", "cost", "calls"].includes(m)) ledMetric = m;
+  if (["provider", "agent", "model"].includes(b)) ledSplit = b;
+} catch {}
 
 function ledParams(extra) {
   const q = new URLSearchParams({ period });
   if (ledAgent) q.set("agent", ledAgent);
+  if (ledProvider) q.set("provider", ledProvider);
   if (ledFailed) q.set("failed", "1");
   if (ledQuery.trim()) q.set("q", ledQuery.trim());
   if (extra) for (const k in extra) q.set(k, extra[k]);
@@ -6096,6 +6249,461 @@ function ledServed(r) {
   return k;
 }
 
+// a request that failed: told by its status, or, for one read from a
+// session file, which records none, by the error that ended it
+const ledFailed_ = (r) => r.status >= 400 || !!r.err;
+const ledKey = (r) => [r.t, r.agent, r.model, r.rid, r.session].join("|");
+const ledOpen = new Set(); // the rows opened, kept across a refresh
+
+// what is known of one request beyond its row: the id its vendor gave it,
+// the path it went to, and, if it failed, what the vendor said
+function ledDetail(r, cols) {
+  const dl = el("dl", "led-dl");
+  const add = (name, value, cls) => {
+    if (value === "" || value == null) return;
+    dl.append(el("dt", "", t(name)), el("dd", cls || "", value));
+  };
+  if (ledFailed_(r)) {
+    add("Status", r.status ? String(r.status) : "—", "bad");
+    add("Error type", r.err_type, "bad");
+    add(r.source === "log" ? "Error" : "Upstream said", r.err, "said");
+  }
+  add("Request ID", r.rid);
+  add("Endpoint", r.ep);
+  add("Session ID", r.session);
+  if (r.ttft_ms) add("First token", ledTook(r.ttft_ms));
+  if (r.reasoning) add("Reasoning tokens", ledNum(r.reasoning));
+  if (r.session_provider) add("Recorded provider ID", r.session_provider);
+  if (r.session_account) add("Session account", r.session_account);
+  if (r.source === "log" && r.provider === "session-unknown") add("Provider", t("This local session log does not record a verifiable service route or billing account."), "muted");
+  if (r.source === "log") add("Source", t("Read from the agent's session file. Provider and account are shown when local metadata identifies them; no HTTP status was recorded."), "muted");
+  const tr = el("tr", "led-detail");
+  const td = el("td");
+  td.colSpan = cols;
+  const box = el("div", "led-box");
+  box.append(dl.childElementCount ? dl : el("span", "faint", t("Nothing more was kept of this request")));
+  // what was said: read from the agent's session file, when the row is opened
+  const cx = el("div", "led-cx");
+  cx.append(el("p", "cx-none", t("Loading…")));
+  box.append(cx);
+  ledLoadContent(r).then((c) => { if (cx.isConnected) cx.replaceChildren(ledContentBox(c)); });
+  td.append(box);
+  tr.append(td);
+  return tr;
+}
+
+// What was said in a request — what its agent was given, and what came back —
+// is in the agent's own session file, and read from it when a row is opened
+// (the server finds the call by its session and time); magpie keeps no copy.
+// What came is kept here while the list is looked at, so a row opened again, or
+// drawn again as the list is read anew, doesn't ask again.
+const ledContent = new Map();
+function ledLoadContent(r) {
+  const key = ledKey(r);
+  if (!ledContent.has(key)) {
+    if (ledContent.size > 60) ledContent.delete(ledContent.keys().next().value);
+    const t0 = new Date(r.t).getTime();
+    // a call of a session file is at its own time; a request the gateway logged began
+    // a little before the file wrote it, and the call is in the span it took
+    const [a, b] = r.source === "log" ? [t0 - 1, t0 + 1] : [t0 - 5e3, t0 + (r.ms || 0) + 30e3];
+    // the window can hold the next calls of a quick tool loop too: the one that
+    // ended nearest the request's own end is its call
+    const at = r.source === "log" ? t0 : t0 + (r.ms || 0);
+    const q = new URLSearchParams({ agent: r.agent, session: r.native_session || r.session || "", from: new Date(a).toISOString(), to: new Date(b).toISOString(), at: new Date(at).toISOString() });
+    ledContent.set(key, api("usage/requests/content?" + q).catch(() => ({ found: false, why: "read" })));
+  }
+  return ledContent.get(key);
+}
+const LED_WHY = {
+  session: "No session was named with this request, so its session file can't be found",
+  agent: "magpie reads the session files of Claude Code, Claude Desktop and Codex only",
+  missing: "This request isn't in the agent's session files: they may be deleted, moved, or not written yet",
+  read: "The session file couldn't be read",
+};
+const LED_KINDS = { tool_use: "Tool call", tool_result: "Tool result", thinking: "Thinking", context: "Context", image: "Image" };
+const LED_ROLES = { user: "You", assistant: "Assistant", tool: "Tool" };
+
+// one thing said: who said it, and its words in a box; long ones show a part and
+// unroll, and reasoning and what the agent put in itself are folded
+function ledSaid(p) {
+  const head = el("div", "cx-h");
+  head.append(el("span", "cx-role " + p.role, t(LED_KINDS[p.kind] || LED_ROLES[p.role] || p.role)));
+  if (p.name) head.append(el("code", "cx-name", p.name));
+  const words = el("pre", "cx-t", p.text);
+  if (p.cut) words.append(el("em", "cx-cut", "\n" + t("… {n} more characters not shown", { n: ledNum(p.cut) })));
+  if (p.kind === "thinking" || p.kind === "context") {
+    const d = el("details", "cx-part fold");
+    const sum = el("summary");
+    sum.append(head);
+    d.append(sum, words);
+    return d;
+  }
+  const part = el("div", "cx-part");
+  part.append(head, words);
+  if (p.text.length > 700 || p.text.split("\n").length > 9) {
+    part.classList.add("clamp");
+    const more = el("button", "text cx-more", t("Show all"));
+    more.type = "button";
+    more.onclick = () => {
+      const open = part.classList.toggle("clamp");
+      more.textContent = t(open ? "Show all" : "Show less");
+    };
+    part.append(more);
+  }
+  return part;
+}
+
+function ledContentBox(c) {
+  const box = el("div", "cx");
+  if (!c.found) {
+    box.append(el("p", "cx-none", t(LED_WHY[c.why] || LED_WHY.read)));
+    return box;
+  }
+  for (const [name, parts] of [["Input", c.input || []], ["Output", c.output || []]]) {
+    const sec = el("section", "cx-sec");
+    sec.append(el("h4", "", t(name)));
+    if (!parts.length) sec.append(el("p", "cx-none", t("Nothing was said here")));
+    for (const p of parts) sec.append(ledSaid(p));
+    box.append(sec);
+  }
+  if (c.cut) box.append(el("p", "cx-none", t("There was more than is shown here")));
+  box.append(el("p", "cx-src", t("Read from the agent's session file; magpie keeps no copy")));
+  return box;
+}
+
+// ---- the totals and the trend over the requests listed
+//
+// A strip of four totals, then the trend of one metric — tokens, cost or
+// requests — as columns by the hour, day or week, each told apart by provider,
+// agent or model, beside a ranking of the same: which is the chart's legend
+// and a way in (a click on a provider or agent lists only its requests). The
+// server sums it all (the ledger's "series" and "by"); the tray panel's Usage
+// tab draws the same from the same answer.
+
+// a count as a short number: 1.33 亿, 68.1 万 in Chinese, 133M in English
+function ledShort(n) {
+  if (locale !== "zh") return fmtN(n);
+  if (n >= 1e8) return +(n / 1e8).toFixed(2) + " 亿";
+  if (n >= 1e4) return +(n / 1e4).toFixed(1) + " 万";
+  return String(n);
+}
+// a cost as an axis says it: the currency Settings picks, no more digits than it takes
+function ledMoney(v) {
+  let sign = "$";
+  if (currency === "cny" && fx.rate > 0) { v *= fx.rate; sign = "¥"; }
+  return sign + (v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2));
+}
+
+const LED_METRICS = [["tokens", "Tokens"], ["cost", "Cost"], ["calls", "Requests"]];
+const LED_SPLITS = [["provider", "Provider"], ["agent", "Agent"], ["model", "Model"]];
+const LED_SHOWN = 7; // told apart in a chart; the rest are "Other"
+const allTokens = (x) => x.input + x.output + x.cache_read + x.cache_write;
+// a metric's value of a point or a share, as the chart counts it
+const ledValue = (m, x) => m === "cost" ? +x.cost || 0 : m === "calls" ? +x.calls || 0 : allTokens(x);
+// of a point's part, which has only its calls, tokens and cost
+const ledPart = (m, x) => m === "cost" ? +x.cost || 0 : m === "calls" ? +x.calls || 0 : +x.tokens || 0;
+// a metric as its axis and its values say it
+const ledFormat = (m, v) => m === "cost" ? ledMoney(v) : m === "calls" ? ledNum(Math.round(v)) : ledShort(Math.round(v));
+const ledFormatLong = (m, v) => m === "cost" ? (fmtCost({ cost: v, unpriced: 0 }) || "—") : ledNum(Math.round(v));
+
+// an axis's top with four steps under it: round numbers, the top at least the largest value
+function ledAxis(max) {
+  if (!(max > 0)) return 4;
+  const e = 10 ** Math.floor(Math.log10(max / 4));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * e * 4 >= max) return m * e * 4;
+  return 10 * e * 4;
+}
+
+// what a chart tells apart, most first, and the colour of each: those of the
+// ranking's top, and the rest together as "Other"
+function ledCategories(l, split, metric) {
+  const list = (l.by?.[split] || []).slice().sort((a, b) => ledValue(metric, b) - ledValue(metric, a) || allTokens(b) - allTokens(a));
+  const top = list.slice(0, LED_SHOWN).map((x, i) => ({ ...x, color: `var(--c${i + 1})` }));
+  return { top, rest: list.slice(LED_SHOWN), list };
+}
+
+// when a point is: the hour, the day or the week it stands for
+function ledWhen(p, bucket) {
+  const d = new Date(p.time), lang = locale === "zh" ? "zh-CN" : "en";
+  if (bucket === "hour") return d.toLocaleString(lang, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+  const day = d.toLocaleDateString(lang, { year: "numeric", month: "2-digit", day: "2-digit" });
+  return bucket === "week" ? t("week of {label}", { label: day }) : day;
+}
+function ledTick(p, bucket) {
+  const d = new Date(p.time);
+  if (bucket === "hour") return String(d.getHours()).padStart(2, "0") + ":00";
+  return d.toLocaleDateString(locale === "zh" ? "zh-CN" : "en", { month: "numeric", day: "numeric" });
+}
+
+const SVGNS = "http://www.w3.org/2000/svg";
+function sv(tag, attrs, style) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (style) Object.assign(e.style, style);
+  return e;
+}
+
+// the columns: one per point of the answer's series, its part of each thing
+// told apart stacked in the colours of the ranking. box is where it goes, its
+// size the plot's; compact is for the tray panel, which has little room.
+function drawLedColumns(box, l, split, metric, compact) {
+  box.replaceChildren();
+  const plot = el("div", "plot");
+  box.append(plot);
+  const W = plot.clientWidth, H = plot.clientHeight, pts = l.series || [], n = pts.length;
+  if (W < 100 || !n) return;
+  const { top } = ledCategories(l, split, metric);
+  const totals = pts.map((p) => ledValue(metric, p));
+  const max = Math.max(0, ...totals);
+  if (!(max > 0)) {
+    plot.append(el("div", "none", t(metric === "cost" ? "No known price for these requests" : "Nothing in this period")));
+    return;
+  }
+  const topV = ledAxis(max);
+  const M = { l: compact ? 34 : 44, r: 6, t: 8, b: 22 };
+  const pw = W - M.l - M.r, ph = H - M.t - M.b, slot = pw / n, bw = Math.max(2, Math.min(compact ? 14 : 30, slot * 0.68));
+  const Y = (v) => M.t + ph - (ph * v) / topV;
+  const g = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+  g.setAttribute("aria-label", t("Usage trend"));
+  for (let i = 0; i <= 4; i++) {
+    const y = M.t + (ph * i) / 4;
+    g.append(sv("line", { x1: M.l, x2: W - M.r, y1: y, y2: y, class: "grid" }));
+    const lab = sv("text", { x: M.l - 6, y: y + 3.5, "text-anchor": "end", class: "axis" });
+    lab.textContent = ledFormat(metric, topV * (1 - i / 4));
+    g.append(lab);
+  }
+  const room = Math.max(2, Math.floor(pw / (compact ? 46 : 62))), every = Math.ceil(n / room);
+  pts.forEach((p, i) => {
+    if (i % every) return;
+    const x = sv("text", { x: M.l + slot * (i + 0.5), y: H - 6, "text-anchor": "middle", class: "axis" });
+    x.textContent = ledTick(p, l.bucket);
+    g.append(x);
+  });
+  const hot = sv("rect", { class: "hot", y: M.t, height: ph, rx: 3, width: slot }, { display: "none" });
+  g.append(hot);
+  // each column: what the top of the ranking had of it, from the bottom up,
+  // and what is left of its total as "Other"
+  const segs = [];
+  pts.forEach((p, i) => {
+    const x = M.l + slot * (i + 0.5) - bw / 2;
+    let y0 = 0;
+    const draw = (key, color, v) => {
+      if (!(v > 0)) return;
+      const r = sv("rect", { x, width: bw, y: Y(y0 + v), height: Math.max(0.5, Y(y0) - Y(y0 + v)), rx: 1, class: "col", "data-k": key }, { fill: color });
+      g.append(r);
+      segs.push(r);
+      y0 += v;
+    };
+    const by = p.by?.[split] || {};
+    let stacked = 0;
+    for (const c of top) { const v = ledPart(metric, by[c.id] || {}); stacked += v; draw(c.id, c.color, v); }
+    draw("\0other", "var(--faint)", Math.max(0, totals[i] - stacked));
+  });
+
+  const tip = el("div", "tip");
+  tip.hidden = true;
+  plot.append(g, tip);
+  const name = (c) => t(c.name || c.id || "—");
+  const at = (e) => {
+    const r = g.getBoundingClientRect();
+    const i = Math.max(0, Math.min(n - 1, Math.floor(((e.clientX - r.left) / r.width * W - M.l) / slot)));
+    const p = pts[i];
+    hot.setAttribute("x", M.l + slot * i);
+    hot.style.display = "";
+    tip.replaceChildren(el("b", "", ledWhen(p, l.bucket)));
+    const by = p.by?.[split] || {};
+    const rows = top.map((c) => [name(c), c.color, ledPart(metric, by[c.id] || {})]);
+    rows.push([t("Other"), "var(--faint)", Math.max(0, totals[i] - rows.reduce((a, x) => a + x[2], 0))]);
+    for (const [nm, color, v] of rows.filter((x) => x[2] > 0).sort((a, b) => b[2] - a[2])) {
+      const row = el("div");
+      const sw = el("i");
+      sw.style.background = color;
+      row.append(sw, el("span", "", nm), el("em", "", ledFormatLong(metric, v)));
+      tip.append(row);
+    }
+    const sum = el("div", "sum");
+    sum.append(el("span", "", t("Total")), el("em", "", ledFormatLong(metric, totals[i])));
+    if (metric !== "calls" && p.calls) sum.lastChild.append(" · " + t(p.calls === 1 ? "{n} request" : "{n} requests", { n: ledNum(p.calls) }));
+    tip.append(sum);
+    tip.hidden = false;
+    const x = M.l + slot * (i + 0.5), w = tip.offsetWidth;
+    tip.style.left = Math.max(0, x + 14 + w > W ? x - w - 14 : x + 14) + "px";
+  };
+  g.onpointermove = at;
+  g.onpointerdown = at;
+  g.onpointerleave = () => { hot.style.display = "none"; tip.hidden = true; };
+  // the ranking asks for one thing to stand out
+  box.emphasize = (key) => { for (const r of segs) r.style.opacity = key == null || r.dataset.k === key ? "" : ".22"; };
+}
+
+// the ranking: who the requests were of, by the metric, the most first —
+// each with its share, its other figures, and a click that lists only its
+// requests (a provider or an agent), or those of its model. picked is the
+// one the filter has picked, if any; the ones past the chart's colours are
+// left out of it and said in a line.
+function drawLedRank(box, l, split, metric, picked, choose, compact) {
+  // a redraw (a pick, a refresh) leaves the ranking scrolled where it was
+  const kept = box.scrollTop;
+  box.replaceChildren();
+  const { top, rest, list } = ledCategories(l, split, metric);
+  if (!list.length) return;
+  const sum = list.reduce((a, x) => a + ledValue(metric, x), 0) || 1;
+  const leader = Math.max(1, ledValue(metric, top[0]));
+  const rows = top.slice(0, compact ? 5 : LED_SHOWN);
+  const one = (x, color, plain) => {
+    const b = el("button", "rk" + (plain ? " plain" : "") + (picked && picked === x.id ? " on" : ""));
+    b.type = "button";
+    const v = ledValue(metric, x);
+    const l1 = el("div", "rk-a");
+    const sw = el("i", "rk-sw");
+    sw.style.background = color;
+    l1.append(sw);
+    if (x.icon && split !== "model") l1.append(icon(x.icon));
+    const nm = el("span", "rk-nm", t(x.name || x.id || "—"));
+    nm.title = t(x.name || x.id || "");
+    l1.append(nm, el("span", "rk-val", ledFormatLong(metric, v)));
+    const bar = el("div", "rk-bar"), fill = el("i");
+    fill.style.width = Math.max(1.5, (100 * v) / leader).toFixed(1) + "%";
+    fill.style.background = color;
+    bar.append(fill);
+    const more = [];
+    if (metric !== "calls") more.push(t(x.calls === 1 ? "{n} request" : "{n} requests", { n: ledNum(x.calls) }));
+    if (metric !== "tokens") more.push(t("{n} tokens", { n: ledShort(allTokens(x)) }));
+    if (metric !== "cost" && x.cost) more.push("≈" + fmtCost(x));
+    const prompt = x.input + x.cache_write + x.cache_read;
+    if (prompt && !compact) more.push(t("hit rate {p}", { p: Math.round((100 * x.cache_read) / prompt) + "%" }));
+    more.push(Math.round((100 * v) / sum) + "%");
+    const l2 = el("div", "rk-b");
+    l2.append(more.join(" · "));
+    if (x.errors) l2.append(" · ", Object.assign(el("span", "rk-bad"), { textContent: t("{n} failed", { n: x.errors }) }));
+    b.append(l1, bar, l2);
+    if (!plain) b.onclick = () => choose(x);
+    b.onpointerenter = () => box.chart?.emphasize?.(x.id);
+    b.onpointerleave = () => box.chart?.emphasize?.(null);
+    return b;
+  };
+  for (const x of rows) box.append(one(x, x.color));
+  const others = top.slice(rows.length).concat(rest);
+  if (others.length) {
+    const tot = others.reduce((acc, x) => {
+      for (const k of ["calls", "errors", "input", "output", "cache_read", "cache_write", "cost"]) acc[k] = (acc[k] || 0) + (x[k] || 0);
+      return acc;
+    }, { id: "\0other", name: t("Other ({n})", { n: others.length }) });
+    box.append(one(tot, "var(--faint)", true));
+  }
+  box.scrollTop = kept;
+  box.onscroll = () => ledRankEdges(box);
+  ledRankEdges(box);
+}
+
+// a ranking that scrolls fades out at the edge with more beyond it, and its
+// rail (the window's) shows how much there is and where it is scrolled to
+function ledRankEdges(box) {
+  const end = box.scrollHeight - box.clientHeight;
+  box.classList.toggle("more-above", end > 1 && box.scrollTop > 1);
+  box.classList.toggle("more-below", end > 1 && box.scrollTop < end - 1);
+  const rail = box.rail;
+  if (!rail) return;
+  rail.hidden = !(end > 1) || !box.offsetParent;
+  if (rail.hidden) return;
+  const h = box.clientHeight, thumb = Math.max(24, (h * h) / box.scrollHeight);
+  rail.style.top = box.offsetTop + "px";
+  rail.style.height = h + "px";
+  rail.firstChild.style.height = thumb + "px";
+  rail.firstChild.style.transform = `translateY(${((h - thumb) * box.scrollTop) / end}px)`;
+}
+
+// the rail's thumb drags the ranking; a click on the rail takes it there
+function ledRail(rail, box) {
+  box.rail = rail;
+  rail.onpointerdown = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const end = box.scrollHeight - box.clientHeight, thumb = rail.firstChild.offsetHeight, room = rail.clientHeight - thumb;
+    if (end <= 0 || room <= 0) return;
+    if (e.target !== rail.firstChild) {
+      // the thumb's middle to where the rail was clicked
+      const y = e.clientY - rail.getBoundingClientRect().top - thumb / 2;
+      box.scrollTop = (Math.max(0, Math.min(room, y)) / room) * end;
+    }
+    const y0 = e.clientY, top0 = box.scrollTop;
+    rail.setPointerCapture(e.pointerId);
+    rail.classList.add("drag");
+    rail.onpointermove = (m) => { box.scrollTop = top0 + ((m.clientY - y0) / room) * end; };
+    rail.onpointerup = rail.onpointercancel = () => {
+      rail.classList.remove("drag");
+      rail.onpointermove = rail.onpointerup = rail.onpointercancel = null;
+    };
+  };
+}
+
+function renderLedgerDash(l) {
+  const dash = $("#ledDash");
+  dash.hidden = !l.total;
+  if (!l.total) return;
+  const total = allTokens(l);
+  const prompt = l.input + l.cache_write + l.cache_read;
+  const rate = prompt ? l.cache_read / prompt : 0;
+  const strip = $("#ledKpi");
+  strip.replaceChildren();
+  const block = (label, value, sub, cls, title) => {
+    const b = el("div", "blk");
+    if (title) b.title = title;
+    b.append(el("span", "k", t(label)), el("span", "v" + (cls ? " " + cls : ""), value));
+    if (sub) b.append(sub);
+    strip.append(b);
+    return b;
+  };
+  const line = (...parts) => { const s = el("span", "sub"); s.append(...parts); return s; };
+  block("Tokens", ledShort(total), line(t("{a} in · {b} out", { a: ledShort(l.input), b: ledShort(l.output) }), " · ", t("{a} cache", { a: ledShort(l.cache_read + l.cache_write) })), "", ledNum(total));
+  block("Requests", ledNum(l.calls), line(l.errors ? t("{n} failed", { n: ledNum(l.errors) }) + " · " + t("{p} succeeded", { p: (100 * (1 - l.errors / l.calls)).toFixed(l.errors ? 1 : 0) + "%" }) : t("none failed")));
+  const c = fmtCost(l);
+  block("Cost", c ? "≈" + c : "—", line(l.unpriced ? t(l.unpriced === 1 ? "{n} call had no known price and is not counted" : "{n} calls had no known price and are not counted", { n: l.unpriced }) : t("list price")), c ? "cost" : "");
+  const hit = block("Cache hit rate", (100 * rate).toFixed(1) + "%", null, "", t("The share of the prompt read from the cache"));
+  const meter = el("div", "meter"), fill = el("i");
+  fill.style.width = (100 * rate).toFixed(1) + "%";
+  meter.append(fill);
+  hit.append(meter);
+  drawLedTrend();
+}
+
+function drawLedTrend() {
+  const l = ledger;
+  if (!l || $("#ledDash").hidden) return;
+  // the two switches
+  const pill = (host, key, opts, cur, pick) => {
+    host.replaceChildren();
+    for (const [id, name] of opts) {
+      const b = el("button", "opt" + (id === cur ? " on" : ""), t(name));
+      b.onclick = () => { if (id !== cur) pick(id); };
+      host.append(b);
+    }
+    slide(host, key);
+  };
+  pill($("#ledMetric"), "ledMetric", LED_METRICS, ledMetric, (id) => { ledMetric = id; try { localStorage.setItem("magpie.ledMetric", id); } catch {} drawLedTrend(); });
+  pill($("#ledSplit"), "ledSplit", LED_SPLITS, ledSplit, (id) => { ledSplit = id; try { localStorage.setItem("magpie.ledSplit", id); } catch {} drawLedTrend(); });
+  const chart = $("#ledChart"), rank = $("#ledRank");
+  drawLedColumns(chart, l, ledSplit, ledMetric, false);
+  rank.chart = chart;
+  if (!rank.rail) ledRail($("#ledRail"), rank);
+  const picked = ledSplit === "provider" ? ledProvider : ledSplit === "agent" ? ledAgent : "";
+  drawLedRank(rank, l, ledSplit, ledMetric, picked, (x) => {
+    // a click lists only that one's requests; on the one listed, all again
+    if (ledSplit === "provider") ledProvider = ledProvider === x.id ? "" : x.id;
+    else if (ledSplit === "agent") ledAgent = ledAgent === x.id ? "" : x.id;
+    else { const q = $("#ledQ"); ledQuery = ledQuery === x.id ? "" : x.id; q.value = ledQuery; }
+    ledOffset = 0;
+    loadLedger().catch((e) => status(e.message, "err"));
+  }, false);
+}
+// a window that changes size redraws the chart at its new width
+new ResizeObserver(() => $("#ledWrap").style.setProperty("--ledw", $("#ledWrap").clientWidth + "px")).observe($("#ledWrap"));
+new ResizeObserver(() => {
+  if (!ledger || usageTab !== "requests" || view !== "usage" || $("#ledDash").hidden) return;
+  drawLedColumns($("#ledChart"), ledger, ledSplit, ledMetric, false);
+  ledRankEdges($("#ledRank"));
+}).observe($("#ledChart"));
+
 const LED_COLS = [
   ["Time"], ["Agent"], ["Requested"], ["Provider · account"], ["Sent"], ["Served"], ["Effort"],
   ["In", "n"], ["Out", "n"], ["Cache write", "n"], ["Cache read", "n"], ["Cost", "n"], ["Duration", "n"], ["Status"],
@@ -6120,6 +6728,9 @@ function renderLedger() {
   // the filters: the agents with calls in the period, and failures alone
   if (ledAgent && !l.agents.some((a) => a.id === ledAgent)) ledAgent = "";
   sessPick($("#ledAgent"), "All agents", ledAgent, l.agents.map((a) => ({ v: a.id, name: a.name, note: "" })), "Agent", (v) => { ledAgent = v; ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
+  const providers = l.providers || [];
+  if (ledProvider && !providers.some((p) => p.id === ledProvider)) ledProvider = "";
+  sessPick($("#ledProvider"), "All providers", ledProvider, providers.map((p) => ({ v: p.id, name: t(p.name), note: "" })), "Provider", (v) => { ledProvider = v; ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
   const seg = $("#ledStatus");
   seg.replaceChildren();
   for (const [on, name] of [[false, "All"], [true, "Failed"]]) {
@@ -6142,12 +6753,13 @@ function renderLedger() {
     if (l.errors) sum.push(t("{n} failed", { n: l.errors }));
   }
   $("#ledSum").textContent = sum.join(" · ");
+  renderLedgerDash(l);
 
   const wrap = $("#ledWrap");
   const pager = $("#ledPager");
   if (!l.total) {
     wrap.classList.add("none");
-    const filtered = ledAgent || ledFailed || ledQuery.trim();
+    const filtered = ledAgent || ledProvider || ledFailed || ledQuery.trim();
     const none = { today: "No calls today.", "7d": "No calls in the last 7 days.", "30d": "No calls in the last 30 days.", all: "No calls yet." }[period];
     wrap.replaceChildren(el("div", "led-none", filtered ? t("No requests match these filters.") : t(none)));
     pager.hidden = true;
@@ -6161,8 +6773,11 @@ function renderLedger() {
   table.append(el("thead"), el("tbody"));
   table.tHead.append(head);
   for (const r of l.rows) {
-    const bad = r.status >= 400;
-    const tr = el("tr", bad ? "bad" : "");
+    const bad = ledFailed_(r);
+    const key = ledKey(r);
+    const tr = el("tr", "led-row" + (bad ? " bad" : "") + (ledOpen.has(key) ? " open" : ""));
+    tr.tabIndex = 0;
+    tr.setAttribute("aria-expanded", ledOpen.has(key) ? "true" : "false");
     const td = (child, cls, title) => {
       const c = el("td", cls || "");
       if (typeof child === "string") c.textContent = child; else c.append(child);
@@ -6175,9 +6790,17 @@ function renderLedger() {
     who.append(icon(r.icon || "generic"), el("span", "", r.agentName || r.agent));
     td(who, "", [r.kind, r.session && t("session {id}", { id: r.session })].filter(Boolean).join(" · "));
     td(r.req || "—", "model" + (r.req ? "" : " faint"), r.req || t("Not kept for requests before this version"));
-    const where = r.providerName + (r.host ? " · " + r.host : "");
-    td(where, "where", where);
-    td(r.model || "—", "model", r.model);
+    const where = t(r.providerName) + (r.host ? " · " + r.host : "");
+    const wc = td(where, "where", where);
+    if (r.source === "log") {
+      // read from the agent's own session file: the gateway never saw it
+      const k = el("span", "src", t("session log"));
+      k.title = t("Read from the agent's session file. Provider and account are shown when local metadata identifies them; no HTTP status was recorded.");
+      wc.append(" ", k);
+    }
+    // the model sent is what the gateway sent the vendor: a session file has none
+    // The log names a model, but does not capture the outbound HTTP request.
+    td(r.model || "—", "model" + (r.source === "log" ? " faint" : ""), r.source === "log" && r.model ? t("Model recorded in the local session log; the outbound HTTP request was not captured.") : r.model);
     td(ledServed(r), "model");
     td(r.effort || "—", r.effort ? "" : "faint");
     td(ledNum(r.in), "n");
@@ -6185,13 +6808,35 @@ function renderLedger() {
     td(ledNum(r.cache_write), "n" + (r.cache_write ? "" : " faint"));
     td(ledNum(r.cache_read), "n" + (r.cache_read ? "" : " faint"));
     td(r.priced ? "≈" + fmtCost({ cost: r.cost, unpriced: 0 }) : "—", "n cost" + (r.priced ? "" : " faint"), r.priced ? "" : t("No known price for this model"));
-    td(ledTook(r.ms), "n", r.ttft_ms ? t("TTFT {ms}", { ms: ledTook(r.ttft_ms) }) : "");
+    // a session file has the times of its lines: a call took about from the line that
+    // asked for it to its last; some have none, and are dashes, not 0 ms
+    const timed = r.source === "log";
+    const untimed = timed && !r.ms;
+    td(untimed ? "—" : (timed ? "≈" : "") + ledTook(r.ms), "n" + (untimed || timed ? " faint" : ""),
+      [timed && r.ms ? t("About: told from the session file's times, a little more or less than it took") : "", r.ttft_ms ? t("TTFT {ms}", { ms: ledTook(r.ttft_ms) }) : ""].filter(Boolean).join(" · "));
     const st = el("span", "st");
-    st.append(el("i", "dot"), document.createTextNode(r.status ? String(r.status) : "—"));
-    td(st, "", bad ? t("Failed: the agent was answered {status}", { status: r.status }) : "");
+    // a status when the gateway logged the call; a session file has none,
+    // and says only whether it went well
+    let word = r.status ? String(r.status) : r.source === "log" ? (bad ? r.err_type || t("Failed") : t("Succeeded")) : "—";
+    if (r.status && bad && r.err_type) word += " · " + r.err_type;
+    st.append(el("i", "dot"), document.createTextNode(word));
+    td(st, "", bad ? (r.err || t("Failed: the agent was answered {status}", { status: r.status })) : "");
+    const detail = ledOpen.has(key) ? ledDetail(r, LED_COLS.length) : null;
+    const toggle = () => {
+      if (ledOpen.delete(key)) { tr.classList.remove("open"); tr.setAttribute("aria-expanded", "false"); tr.nextElementSibling?.classList.contains("led-detail") && tr.nextElementSibling.remove(); return; }
+      ledOpen.add(key);
+      tr.classList.add("open");
+      tr.setAttribute("aria-expanded", "true");
+      tr.after(ledDetail(r, LED_COLS.length));
+    };
+    // a click that ends a text selection is the reader copying, not asking
+    tr.onclick = () => { if (!String(getSelection() || "")) toggle(); };
+    tr.onkeydown = (e) => { if (e.target === tr && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggle(); } };
     table.tBodies[0].append(tr);
+    if (detail) table.tBodies[0].append(detail);
   }
   wrap.replaceChildren(table);
+  wrap.style.setProperty("--ledw", wrap.clientWidth + "px");
 
   // a page at a time: the newest first
   pager.hidden = l.total <= LED_PAGE;
@@ -8774,31 +9419,68 @@ setInterval(async () => {
   }
   if (changed) renderAgents();
 }, 15000);
-// the usage page counts on while it is looked at: a request through the
-// gateway shows within seconds, the subscriptions' windows each minute (the
-// vendors' answers are cached behind them) — redrawn only on a change
-let usageTicks = 0;
-setInterval(async () => {
-  if (view !== "usage" || document.hidden || document.querySelector(".pop:not([hidden])")) return;
-  if (usageTab === "sessions") {
-    // the agents write their session files as they go
-    if (++usageTicks % 3 === 0 && sessions) loadSessions().catch(() => {});
-    return;
-  }
-  if (usageTab === "requests") {
-    // the newest page takes the requests as they come; an older one stays put
-    if (ledger && !ledOffset) loadLedger(true).catch(() => {});
-    return;
-  }
-  if (!usage) return;
-  if (++usageTicks % 12 === 0) loadQuotas();
-  const p = period;
-  let u;
-  try { u = await api("usage?period=" + p); } catch { return; }
-  if (view !== "usage" || usageTab !== "usage" || p !== period || JSON.stringify(u) === JSON.stringify(usage)) return;
-  usage = u;
-  renderUsage();
-}, 5000);
+// The Usage page reads its numbers again while it is looked at, as often as
+// the reader says — off, or every 5 s to a minute (a request through the gateway
+// shows within that; the subscriptions' windows each minute at most, the vendors'
+// answers being cached behind them, and the sessions each 15 s) — redrawn only
+// on a change. The button beside it reads them now.
+const USAGE_EVERY = [[0, "Off"], [5, "5 s"], [10, "10 s"], [30, "30 s"], [60, "1 min"]];
+let usageEvery = 5; // seconds; 0 is off
+try {
+  const v = localStorage.getItem("magpie.usageEvery");
+  if (USAGE_EVERY.some(([n]) => String(n) === v)) usageEvery = Number(v);
+} catch {}
+let usageLast = 0, usageReadAt = 0, sessionsAt = 0, quotasAsked = 0;
+
+function renderUsageEvery() {
+  const cur = USAGE_EVERY.find(([n]) => n === usageEvery);
+  const b = $("#usageEvery");
+  b.replaceChildren(el("span", "", t(cur[1])), svg(CHEV, 11, 1.6));
+  b.title = t("Refresh every");
+  b.onclick = (e) => {
+    e.stopPropagation();
+    if (b.classList.contains("open")) return closeProtoMenu();
+    openProtoMenu(b, USAGE_EVERY.map(([n, name]) => ({ v: String(n), name: t(name), note: "" })), String(usageEvery), (v) => {
+      usageEvery = Number(v);
+      try { localStorage.setItem("magpie.usageEvery", v); } catch {}
+      usageLast = performance.now();
+      renderUsageEvery();
+    }, "Refresh every", "sess-menu");
+  };
+  const r = $("#usageReload");
+  r.title = usageReadAt ? t("Refresh now") + " · " + t("Updated {time}", { time: new Date(usageReadAt).toLocaleTimeString(locale === "zh" ? "zh-CN" : undefined, { hour12: false }) }) : t("Refresh now");
+  r.setAttribute("aria-label", t("Refresh now"));
+  r.onclick = async () => {
+    r.classList.add("busy");
+    try { await refreshUsage(true); } finally { r.classList.remove("busy"); r.blur(); }
+  };
+}
+
+// refreshUsage reads what the tab shown draws; now is the reader asking, which
+// reads the page it is on too, and the sessions and the allowances
+async function refreshUsage(now = false) {
+  usageLast = performance.now();
+  try {
+    if (usageTab === "sessions") {
+      if (sessions && (now || performance.now() - sessionsAt > 15e3)) { sessionsAt = performance.now(); await loadSessions(); }
+    } else if (usageTab === "requests") {
+      // the newest page takes the requests as they come; an older one stays put
+      if (ledger && (now || !ledOffset)) await loadLedger(true);
+    } else if (usage) {
+      if (now || performance.now() - quotasAsked > 60e3) { quotasAsked = performance.now(); loadQuotas(); }
+      const p = period;
+      const u = await api("usage?period=" + p);
+      if (view === "usage" && usageTab === "usage" && p === period && JSON.stringify(u) !== JSON.stringify(usage)) { usage = u; renderUsage(); }
+    }
+    usageReadAt = Date.now();
+    renderUsageEvery();
+  } catch {}
+}
+renderUsageEvery();
+setInterval(() => {
+  if (!usageEvery || view !== "usage" || document.hidden || document.querySelector(".pop:not([hidden])")) return;
+  if (performance.now() - usageLast >= usageEvery * 1000) refreshUsage();
+}, 1000);
 window.addEventListener("focus", load);
 setInterval(renderUpdateBadge, 15 * 60 * 1000); // a window left open still hears of a new version
 // ---------- hiding emails, for a screenshot to share ----------
@@ -8901,6 +9583,15 @@ if (mode === "window" && params.get("import")) {
   }).catch(() => {});
 }
 if (mode === "window" && params.get("view") === "providers" && params.get("edit")) editing = params.get("edit");
+// opened from the tray panel's Usage tab: on the Requests of one provider or agent
+if (mode === "window" && params.get("view") === "usage") {
+  if (params.get("tab") === "requests") usageTab = "requests";
+  ledProvider = params.get("provider") || "";
+  ledAgent = params.get("agent") || "";
+  const u = new URL(location.href);
+  for (const k of ["tab", "provider", "agent"]) u.searchParams.delete(k);
+  history.replaceState(null, "", u);
+}
 if (mode === "window" && ["providers", "gateway", "routing", "usage", "library", "settings"].includes(params.get("view"))) show(params.get("view"));
 else if (mode === "window") slide($("#nav"), "nav");
 load();

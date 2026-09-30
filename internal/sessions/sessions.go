@@ -89,6 +89,7 @@ const Limit = 200
 
 // state is what one file's parse has come to, enough to read on from Off.
 type state struct {
+	Calls  *callFile         `json:"calls,omitempty"`
 	Size   int64             `json:"size"`
 	Mod    int64             `json:"mod"` // unix nanoseconds
 	Off    int64             `json:"off"` // after the last whole line read
@@ -338,7 +339,7 @@ func ccFiles(agent, dir string) []file {
 // allFiles are every agent's session files.
 func allFiles() []file {
 	var out []file
-	for _, fs := range [][]file{claudeFiles(), codexFiles(), openCodeFiles(), piFiles(),
+	for _, fs := range [][]file{callFiles(), openCodeFiles(), piFiles(),
 		zcodeFiles(), dshFiles(), clineFiles(), ccFiles("qoder", QoderDir("qoder")), ccFiles("qoder-cn", QoderDir("qoder-cn")),
 		grokFiles(), workbuddyFiles()} {
 		out = append(out, fs...)
@@ -393,9 +394,12 @@ func codexFiles() []file {
 }
 
 var (
-	mu     sync.Mutex
-	cache  map[string]*state // path → parse
-	loaded bool
+	// DB readers share connection lifetimes; call-file readers need only mu.
+	dbReadMu        sync.Mutex
+	mu              sync.Mutex
+	cache           map[string]*state // path → parse
+	loaded          bool
+	cacheGeneration uint64
 	// the zone the parses in memory date their days in
 	cacheZone string
 )
@@ -409,7 +413,9 @@ func CachePath() string { return filepath.Join(filepath.Dir(catalog.CachePath())
 // 3: the active time by hour of the day
 // 4: the tool calls and skills a day
 // 5: again, for the prompts and replies a day, which an early 4 left out
-const cacheVersion = 5
+// 6: per-call metadata and continuation share the session file scan
+// 7: Codex's recorded provider and creator identity
+const cacheVersion = 7
 
 type cacheFile struct {
 	Version int               `json:"version"`
@@ -432,6 +438,7 @@ func loadCache() {
 		return
 	}
 	loaded, cacheZone = true, z
+	cacheGeneration++
 	cache = map[string]*state{}
 	saved() // the kept file as the last save left it
 	var c cacheFile
@@ -565,33 +572,47 @@ func refresh(want, all []file) {
 		total += left[f.path]
 	}
 	progress.start(len(todo), total)
+	type job struct {
+		f      file
+		old    *state
+		parsed *state
+	}
+	jobs := make([]job, len(todo))
+	for i, f := range todo {
+		jobs[i] = job{f: f, old: cache[f.path]}
+	}
+	generation := cacheGeneration
+	mu.Unlock()
 	var wg sync.WaitGroup
-	var put sync.Mutex
-	ch := make(chan file)
+	ch := make(chan int)
 	for i := 0; i < min(max(8, 2*runtime.NumCPU()), 32, len(todo)); i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for f := range ch {
-				put.Lock()
-				old := cache[f.path]
-				put.Unlock()
-				s := parse(f, old)
+			for i := range ch {
+				j := &jobs[i]
+				j.parsed = parse(j.f, j.old)
 				progress.files.Add(1)
-				progress.read.Add(left[f.path])
-				put.Lock()
-				cache[f.path] = s
-				put.Unlock()
+				progress.read.Add(left[j.f.path])
 			}
 		}()
 	}
-	for _, f := range todo {
-		ch <- f
+	for i := range jobs {
+		ch <- i
 	}
 	close(ch)
 	wg.Wait()
-	progress.on.Store(false)
-	saveCache()
+	mu.Lock()
+	for _, j := range jobs {
+		// A concurrent read may already have published a newer parse.
+		if generation == cacheGeneration && cache[j.f.path] == j.old {
+			cache[j.f.path] = j.parsed
+		}
+	}
+	progress.finish()
+	if generation == cacheGeneration {
+		saveCache()
+	}
 }
 
 // progress is how far the reading of changed files has got, for the page to
@@ -599,17 +620,34 @@ func refresh(want, all []file) {
 var progress indexing
 
 type indexing struct {
+	guard       sync.Mutex
+	active      int
 	on          atomic.Bool
 	files, read atomic.Int64
 	todo, bytes atomic.Int64
 }
 
 func (p *indexing) start(n int, total int64) {
-	p.files.Store(0)
-	p.read.Store(0)
-	p.todo.Store(int64(n))
-	p.bytes.Store(total)
-	p.on.Store(n > 0)
+	p.guard.Lock()
+	defer p.guard.Unlock()
+	if p.active == 0 {
+		p.files.Store(0)
+		p.read.Store(0)
+		p.todo.Store(int64(n))
+		p.bytes.Store(total)
+	} else {
+		p.todo.Add(int64(n))
+		p.bytes.Add(total)
+	}
+	p.active++
+	p.on.Store(true)
+}
+
+func (p *indexing) finish() {
+	p.guard.Lock()
+	defer p.guard.Unlock()
+	p.active--
+	p.on.Store(p.active > 0)
 }
 
 // Progress is how far the sessions being read have got; Indexing is false
@@ -658,11 +696,14 @@ func Reset() {
 	defer mu.Unlock()
 	saved()
 	cache, loaded = nil, false
+	cacheGeneration++
 }
 
 // List reads the latest sessions of every agent, the most recently active
 // first, at most limit of them (Limit when 0).
 func List(limit int) []Session {
+	dbReadMu.Lock()
+	defer dbReadMu.Unlock()
 	if limit <= 0 {
 		limit = Limit
 	}
@@ -822,13 +863,37 @@ func parse(f file, old *state) *state {
 	}
 	var head func([]byte) bool
 	if f.agent == "codex" {
-		// a Codex line is read only when its start says it is wanted
 		line = codexBody
-		head = func(b []byte) bool { return codexHead(s, b, f.main) }
 	}
-	off, err := scanHead(f.path, s.Off, head, func(b []byte) { line(s, b, f.main) })
+	supported := f.agent == "claude" || f.agent == "claude-desktop" || f.agent == "codex"
+	if supported {
+		s.Calls = prepareCalls(f, s.Calls)
+		if s.Calls.Off != s.Off {
+			s = &state{Size: f.size, Mod: f.mod.UnixNano(), Calls: prepareCalls(f, nil)}
+		}
+		head = func(b []byte) bool {
+			want := f.agent != "codex" || codexHead(s, b, f.main)
+			return callHead(s.Calls, b) || want
+		}
+	}
+	off, err := scanAt(f.path, s.Off, head, func(b []byte, start, end int64) bool {
+		line(s, b, f.main)
+		if supported {
+			st := s.Calls
+			st.At, st.End = start, end
+			if f.agent == "codex" {
+				codexCallLine(st, b)
+			} else {
+				claudeCallLine(st, b)
+			}
+		}
+		return true
+	})
 	if err == nil {
 		s.Off = off
+	}
+	if supported {
+		s.Calls.Off, s.Calls.Size, s.Calls.Mod = s.Off, f.size, f.mod.UnixNano()
 	}
 	if f.agent == "workbuddy" && s.Cwd == "" {
 		workbuddyMeta(s, f.path)
@@ -852,6 +917,13 @@ func scan(path string, off int64, fn func([]byte)) (int64, error) {
 // bytes are lines no one reads: compactions, tool output). A nil head
 // wants every line.
 func scanHead(path string, off int64, head func([]byte) bool, fn func([]byte)) (int64, error) {
+	return scanAt(path, off, head, func(b []byte, _, _ int64) bool { fn(b); return true })
+}
+
+// scanAt is scanHead telling fn where each line starts and ends in the file,
+// and stopping when fn says so; what it returns is where the last line it
+// handled ended.
+func scanAt(path string, off int64, head func([]byte) bool, fn func(b []byte, start, end int64) bool) (int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return off, err
@@ -892,7 +964,9 @@ func scanHead(path string, off int64, head func([]byte) bool, fn func([]byte)) (
 		}
 		if !skip {
 			if b = bytes.TrimSpace(b); len(b) > 0 && (seen || head == nil || head(b)) {
-				fn(b)
+				if !fn(b, off, off+n) {
+					return off + n, nil
+				}
 			}
 		}
 		off += n

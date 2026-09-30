@@ -14,6 +14,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { test } = require("node:test");
 const { chromium, webkit } = require("playwright");
+const { click, inView } = require("./reader.cjs");
 
 const assets = path.resolve(__dirname, "../assets");
 const now = Date.now();
@@ -177,44 +178,46 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // scrolled to the pager: Older asks for the next page, a shorter
         // one, and the pager stays where it is on the screen (room kept at
         // the view's foot, not the page riding up); so does Newer
-        await page.locator("#ledWrap").hover({ position: { x: 40, y: 60 } });
+        const viewBox = await page.locator("#view-usage").boundingBox();
+        await page.mouse.move(viewBox.x + 40, viewBox.y + viewBox.height / 2);
         for (let i = 0; i < 200 && !(await page.locator("#ledPager").evaluate((p) => { const r = p.getBoundingClientRect(); return r.bottom < document.querySelector("#view-usage").getBoundingClientRect().bottom - 10; })); i++) {
           await page.mouse.wheel(0, 120);
-          await page.waitForTimeout(10);
+          await page.waitForTimeout(40);
         }
-        await page.waitForTimeout(250);
+        await page.waitForTimeout(300);
         assert(await scrolled(page) > 0, "the page must be scrolled");
         const pagerAt = () => page.locator("#ledPager").evaluate((p) => Math.round(p.getBoundingClientRect().top));
         const at = await pagerAt();
-        await page.locator("#ledPager button", { hasText: w.older }).click();
+        await click(page, page.locator("#ledPager button", { hasText: w.older }));
         await lastAsked(page, asked, (q) => q.get("offset") === "100");
         await page.waitForFunction(() => document.querySelectorAll(".led tbody tr").length === 30);
         await page.waitForTimeout(200);
-        assert.equal(await pagerAt(), at, "Older leaves the pager where it was");
+        assert(Math.abs(await pagerAt() - at) <= 1, "Older leaves the pager where it was, within pixel rounding");
         assert.equal(await page.locator("#ledPager > span").textContent(), lang === "en" ? "101–130 of 130" : "第 101–130 条，共 130 条");
-        await page.locator("#ledPager button", { hasText: w.newer }).click();
+        await click(page, page.locator("#ledPager button", { hasText: w.newer }));
         await lastAsked(page, asked, (q) => q.get("offset") === "0");
         await page.waitForFunction(() => document.querySelectorAll(".led tbody tr").length === 100);
         await page.waitForTimeout(200);
-        assert.equal(await pagerAt(), at, "Newer leaves the pager where it was");
+        assert(Math.abs(await pagerAt() - at) <= 1, "Newer leaves the pager where it was, within pixel rounding");
 
         // back up: the filters ask the server
         for (let i = 0; i < 200 && (await scrolled(page)) > 0; i++) { await page.mouse.wheel(0, -400); await page.waitForTimeout(10); }
         await page.waitForTimeout(100);
-        await page.locator("#ledStatus .opt", { hasText: w.failed }).click();
+        await click(page, page.locator("#ledStatus .opt", { hasText: w.failed }));
         await lastAsked(page, asked, (q) => q.get("failed") === "1" && q.get("offset") === "0");
         await page.waitForFunction(() => document.querySelectorAll(".led tbody tr").length === 1);
         assert.equal(await page.locator(".led tr.bad").count(), 1);
         assert(await page.locator("#ledPager").isHidden(), "one page: no pager");
-        await page.locator("#ledStatus .opt").first().click();
+        await click(page, page.locator("#ledStatus .opt").first());
         await lastAsked(page, asked, (q) => !q.has("failed"));
 
-        await page.locator("#ledAgent").click();
+        await click(page, page.locator("#ledAgent"));
         await page.locator(".sess-menu .pm-item", { hasText: "Claude Code" }).click();
         await lastAsked(page, asked, (q) => q.get("agent") === "claude");
         await page.waitForFunction(() => [...document.querySelectorAll(".led tbody tr td:nth-child(2)")].every((c) => c.textContent === "Claude Code"));
         assert.equal(await page.locator("#ledAgent").textContent(), "Claude Code");
 
+        await inView(page, page.locator("#ledQ"));
         await page.locator("#ledQ").fill("sonnet");
         await lastAsked(page, asked, (q) => q.get("q") === "sonnet" && q.get("agent") === "claude");
         await page.waitForFunction(() => document.querySelectorAll(".led tbody tr").length === 1);
@@ -225,17 +228,17 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert(await page.locator("#ledExport").isDisabled(), "nothing to export");
         await page.locator("#ledQ").press("Escape");
         await lastAsked(page, asked, (q) => !q.has("q") && q.get("agent") === "claude");
-        await page.locator("#ledAgent").click();
+        await click(page, page.locator("#ledAgent"));
         await page.locator(".sess-menu .pm-item").first().click();
         await lastAsked(page, asked, (q) => !q.has("agent"));
         await page.waitForFunction(() => document.querySelectorAll(".led tbody tr").length === 100);
 
         // the period: today, and the ledger asks again from the first page
-        await page.locator("#period .opt").first().click();
+        await click(page, page.locator("#period .opt").first());
         await lastAsked(page, asked, (q) => q.get("period") === "today" && q.get("offset") === "0");
 
         // Export CSV posts the filters shown, no page, and says where it went
-        await page.locator("#ledExport").click();
+        await click(page, page.locator("#ledExport"));
         await lastAsked(page, asked, (q) => q.method === "POST");
         const ex = asked.findLast((q) => q.method === "POST"); // a refresh may ask after it
         assert.equal(ex.get("period"), "today");

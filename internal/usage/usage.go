@@ -6,9 +6,9 @@ package usage
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -27,7 +27,12 @@ type Record struct {
 	Agent    string    `json:"agent"` // magpie agent id, or the client's product name
 	Provider string    `json:"provider"`
 	Host     string    `json:"host,omitempty"` // where the call went: provider.Where then
-	Model    string    `json:"model"`          // the provider's model id
+	// SessionProvider is the provider ID recorded by the agent. SessionAccount
+	// identifies the session's creator, not the account used for an API request.
+	// Neither field establishes an upstream route from today's configuration.
+	SessionProvider string `json:"session_provider,omitempty"`
+	SessionAccount  string `json:"session_account,omitempty"`
+	Model           string `json:"model"` // the provider's model id
 	// Requested is the model id the agent asked for (a magpie alias, a
 	// routing group, provider/model…), and Served the model the vendor's
 	// reply says answered, when it named one: a ledger to set beside the
@@ -50,10 +55,23 @@ type Record struct {
 	TTFT      int64 `json:"ttft_ms,omitempty"`
 	FirstText int64 `json:"first_text_ms,omitempty"`
 	Status    int   `json:"status"`
+	// Error is why a call failed, in the vendor's words and cut short;
+	// ErrType what its body called the error (rate_limit_error,
+	// usage_limit_reached); RequestID the id the vendor gave the call; and
+	// Endpoint the path the agent called, with the one it was sent to when
+	// it went out in another protocol (/v1/messages → /v1/chat/completions)
+	Error     string `json:"err,omitempty"`
+	ErrType   string `json:"err_type,omitempty"`
+	RequestID string `json:"rid,omitempty"`
+	Endpoint  string `json:"ep,omitempty"`
 	// Session is the conversation the call was part of, as its agent names
 	// it (X-Magpie-Session, or the session header Claude Code, Codex or
 	// OpenCode sends): several sessions on one model told apart
 	Session string `json:"session,omitempty"`
+	// NativeSession retains the client header when X-Magpie-Session overrides it.
+	NativeSession string `json:"native_session,omitempty"`
+	// Rejected is a request refused locally before an upstream was contacted.
+	Rejected bool `json:"rejected,omitempty"`
 	// Kind is what the agent made the call for when it isn't a turn of
 	// the conversation: a Codex subagent's (review, compact, guardian…)
 	Kind string `json:"kind,omitempty"`
@@ -87,31 +105,57 @@ func Append(r Record) {
 	f.Write(append(b, '\n'))
 }
 
-// Load reads every record since a time (zero means all), oldest first.
+// IsRejected also recognizes local rejections written before the explicit flag.
+func (r Record) IsRejected() bool { return r.Rejected || r.Provider == "" && r.Status >= 400 }
+
+var logCache struct {
+	path string
+	info os.FileInfo
+	off  int64
+	rows []Record
+}
+
+// Load reuses the append-only log snapshot and decodes only complete new lines.
+// A truncated, replaced or rewritten file resets the snapshot.
 func Load(since time.Time) []Record {
 	mu.Lock()
 	defer mu.Unlock()
 	f, err := os.Open(Path())
 	if err != nil {
+		logCache.path = ""
+		logCache.rows = nil
 		return nil
 	}
 	defer f.Close()
-	var out []Record
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64<<10), 1<<20)
-	for sc.Scan() {
-		line := bytes.TrimSpace(sc.Bytes())
-		if len(line) == 0 {
-			continue
+	info, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	if logCache.path != Path() || logCache.info == nil || !os.SameFile(logCache.info, info) || info.Size() < logCache.info.Size() || info.Size() == logCache.info.Size() && !info.ModTime().Equal(logCache.info.ModTime()) {
+		logCache.off, logCache.rows = 0, nil
+	}
+	if info.Size() != logCache.off {
+		if _, err := f.Seek(logCache.off, io.SeekStart); err == nil {
+			reader := bufio.NewReader(f)
+			for {
+				b, err := reader.ReadBytes('\n')
+				if err != nil {
+					break
+				} // leave an unfinished line for the next read
+				logCache.off += int64(len(b))
+				var r Record
+				if json.Unmarshal(b, &r) == nil {
+					logCache.rows = append(logCache.rows, r)
+				}
+			}
 		}
-		var r Record
-		if json.Unmarshal(line, &r) != nil {
-			continue
+	}
+	logCache.path, logCache.info = Path(), info
+	out := make([]Record, 0, len(logCache.rows))
+	for _, r := range logCache.rows {
+		if since.IsZero() || !r.Time.Before(since) {
+			out = append(out, r)
 		}
-		if !since.IsZero() && r.Time.Before(since) {
-			continue
-		}
-		out = append(out, r)
 	}
 	return out
 }
@@ -232,7 +276,7 @@ func FormatCost(amountUSD float64, currency string, rate float64) string {
 
 func (t *Totals) add(r Record, price *catalog.Price) {
 	t.Calls++
-	if r.Status >= 400 {
+	if r.Failed() {
 		t.Errors++
 	}
 	t.Input += r.Input
@@ -307,55 +351,25 @@ func summarize(p Period, now time.Time, recs []Record) Summary {
 			}
 		}
 	}
-	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	s := Summary{Period: p, Bucket: "day", Agents: []Group{}, Models: []Group{}, Sessions: []Group{}, Series: []Point{}}
-	var n int
-	switch p {
-	case Today:
-		s.Since, s.Bucket = day, "hour"
-	case Week:
-		s.Since, n = day.AddDate(0, 0, -6), 7
-	case Month:
-		s.Since, n = day.AddDate(0, 0, -29), 30
-	default:
-		s.Period = All
-		if len(recs) > 0 {
-			first := recs[0].Time.In(now.Location())
-			s.Since = time.Date(first.Year(), first.Month(), first.Day(), 0, 0, 0, 0, now.Location())
-		} else {
-			s.Since = day
-		}
-		if n = int(day.Sub(s.Since).Hours()/24) + 1; n > 60 {
-			s.Bucket = "week"
-			// start on the Monday of the first week
-			off := (int(s.Since.Weekday()) + 6) % 7
-			s.Since = s.Since.AddDate(0, 0, -off)
-			n = int(day.Sub(s.Since).Hours()/(24*7)) + 1
+	var first time.Time
+	for _, r := range recs {
+		if !r.IsRejected() && (first.IsZero() || r.Time.Before(first)) {
+			first = r.Time
 		}
 	}
-	// the empty timeline, so quiet days still take their place
-	switch s.Bucket {
-	case "hour":
-		for h := 0; h < 24; h++ {
-			t := day.Add(time.Duration(h) * time.Hour)
-			s.Series = append(s.Series, Point{Label: t.Format("15"), Time: t})
-		}
-	case "day":
-		for i := 0; i < n; i++ {
-			t := s.Since.AddDate(0, 0, i)
-			s.Series = append(s.Series, Point{Label: t.Format("Jan 2"), Time: t})
-		}
-	case "week":
-		for i := 0; i < n; i++ {
-			t := s.Since.AddDate(0, 0, 7*i)
-			s.Series = append(s.Series, Point{Label: t.Format("Jan 2"), Time: t})
-		}
+	s.Since, s.Bucket, s.Series = timeline(p, now, first)
+	if p != Today && p != Week && p != Month {
+		s.Period = All
 	}
 
 	priceOf := pricer()
 	// the places each provider id went in the period, and goes now
 	hosts := map[string]map[string]bool{}
 	for _, r := range recs {
+		if r.IsRejected() {
+			continue
+		}
 		if r.Host != "" && !r.Time.Before(s.Since) {
 			if hosts[r.Provider] == nil {
 				hosts[r.Provider] = map[string]bool{}
@@ -371,21 +385,16 @@ func summarize(p Period, now time.Time, recs []Record) Summary {
 	models := map[string]*Group{}
 	sessions := map[string]*Group{}
 	for _, r := range recs {
+		if r.IsRejected() {
+			continue
+		}
 		t := r.Time.In(now.Location())
 		if t.Before(s.Since) {
 			continue
 		}
 		pr := priceOf(r)
 		s.Totals.add(r, pr)
-		var i int
-		switch s.Bucket {
-		case "hour":
-			i = int(t.Sub(s.Since).Hours())
-		case "day":
-			i = int(t.Sub(s.Since).Hours() / 24)
-		case "week":
-			i = int(t.Sub(s.Since).Hours() / (24 * 7))
-		}
+		i := bucketIndex(s.Bucket, s.Since, t)
 		if i >= 0 && i < len(s.Series) {
 			s.Series[i].add(r, pr)
 		}
