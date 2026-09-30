@@ -627,6 +627,9 @@ type Entry struct {
 	Family string `json:"family,omitempty"`
 	// Free is set on a model its subscription serves at no cost to it.
 	Free bool `json:"free,omitempty"`
+	// Shared are a group's levels its members have in common: its Efforts,
+	// unless the group names its own (Group.Levels).
+	Shared []string `json:"-"`
 }
 
 // Catalog lists the routing groups, then every exposed model of every ready

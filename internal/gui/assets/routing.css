@@ -307,6 +307,9 @@
 .rt-classifier[hidden] { display: none; }
 .rt-classifier .w { color: var(--muted); font-size: 12px; }
 .rt-classifier .hint { flex-basis: 100%; }
+/* the levels a group names for agents (#295): one toggle each */
+.rt-levels { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 6px; }
+.rt-levels[hidden] { display: none; }
 /* the field is the pill: the editor's boxed input (its border and focus ring) stays off it */
 .rt-cond input, .editor .rt-cond input[type="text"], .editor .rt-cond input:focus { box-shadow: none; border-radius: 0; }
 .editor .rt-cond input:focus-visible { box-shadow: none; border-radius: 0; }

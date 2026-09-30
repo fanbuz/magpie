@@ -180,6 +180,13 @@ func TestRoutingPage(t *testing.T) {
 	if g.Classifier != "b/gpt-5.5" || g.Routing != provider.Ordered || g.Affinity != provider.AffinitySession || g.Context != 300000 {
 		t.Fatalf("group %+v", g)
 	}
+	// the levels agents are offered (#295)
+	m = press(t, m, "l")
+	m = typeIn(m, "xhigh,medium")
+	m = press(t, m, "enter")
+	if g := group(t, "opus"); !slices.Equal(g.Levels, []string{"medium", "xhigh"}) {
+		t.Fatalf("levels %v", g.Levels)
+	}
 
 	// d twice removes the rule picked; a model taken out takes its rules
 	m = press(t, m, "d")

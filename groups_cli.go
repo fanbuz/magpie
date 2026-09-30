@@ -23,8 +23,10 @@ const groupUsage = `usage:
   magpie group set <id> k=v…              change one: name, models (the whole list, in order),
                                           models+=<m> (append), models-=<m> (drop), routing, stays,
                                           context (how long a request agents are told it takes: 272k; empty is
-                                          its shortest model's), family (a tag: magpie visible shows agents
-                                          families, not each group),
+                                          its shortest model's), levels (the reasoning levels agents are offered:
+                                          levels=none,low,medium,high,xhigh,max; empty is those every model has —
+                                          a model without the one asked is sent its nearest),
+                                          family (a tag: magpie visible shows agents families, not each group),
                                           id (what agents pick it as: id=gpt-6-astra drops auto-; the groups
                                           it is in follow; an agent set to the old id needs setting again),
                                           effort=auto (the classifier picks each turn's reasoning; needs classifier=),
@@ -323,6 +325,13 @@ func applyGroupPairs(g *provider.Group, pairs []string, resolve func(string) (st
 			if strings.TrimSpace(v) != "" {
 				g.Context, err = parseTokens(v)
 			}
+		case "levels", "level":
+			// the reasoning levels agents are offered; empty is those every
+			// member has again
+			g.Levels = nil
+			if strings.TrimSpace(v) != "" {
+				g.Levels, err = provider.CleanLevels(splitList(v))
+			}
 		case "family", "tag":
 			g.Family = strings.TrimSpace(v)
 		case "effort", "reasoning":
@@ -337,7 +346,7 @@ func applyGroupPairs(g *provider.Group, pairs []string, resolve func(string) (st
 		case "classifier", "classify":
 			g.Classifier = strings.TrimPrefix(strings.TrimSpace(v), "magpie/")
 		default:
-			return fmt.Errorf("unknown field %q (fields: name, models, models+, models-, routing, stays, context, family, effort, classifier; magpie group help)", k)
+			return fmt.Errorf("unknown field %q (fields: name, models, models+, models-, routing, stays, context, levels, family, effort, classifier; magpie group help)", k)
 		}
 		if err != nil {
 			return err
@@ -746,6 +755,9 @@ func showGroup(g provider.Group) error {
 			k = "rules"
 		}
 		kv(k, fmt.Sprintf("%d %s", i+1, ruleLine(r)))
+	}
+	if len(g.Levels) > 0 {
+		kv("levels", strings.Join(g.Levels, ", ")+muted.Render("  offered to agents; a model without the one asked is sent its nearest"))
 	}
 	if g.Effort == provider.EffortAuto {
 		kv("effort", "auto"+muted.Render("  the classifier picks each turn's reasoning"))

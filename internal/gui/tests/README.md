@@ -62,6 +62,13 @@ under way, one with two tries, in Chromium and WebKit, English and Chinese, at
 text is drawn over another (#273: in two columns of ~470px it sat on the time
 taken).
 
+`routing-levels.test.cjs` edits a group's reasoning levels in Chromium and
+WebKit, English and Chinese (#295: a member with low/high/max took medium and
+xhigh from the rest). "Its models' shared" names those levels; "Named" shows a
+toggle per level, starting from the shared ones, and toggling them moves
+nothing; saved, they go lowest first and the group's family stays. A group with
+its own opens on them, none picked is refused, and back to shared saves none.
+
 `routing-served.test.cjs` lists a request whose vendor's reply names another
 model than the one asked for (gpt-6-sol served as gpt-6-luna), one answered
 under the model's dated name and ones naming none: only the first is marked
@@ -299,10 +306,14 @@ theme's background, square corners and its name in place of the choices, and
 Settings → Bar icon, whose On and Off each post and move nothing, hidden when
 the app says Omarchy's bar isn't there; in English and Chinese.
 
+`brand.test.cjs` holds the header's logo and name: shown in `magpie web`
+on Windows, macOS and Linux alike, beside the tabs; hidden in the Windows
+window, whose title bar has them; shown in the Mac window.
+
 With Node.js and Playwright available:
 
 ```sh
-node --test internal/gui/tests/menu-scroll.test.cjs internal/gui/tests/click-scroll.test.cjs internal/gui/tests/panel-fold.test.cjs internal/gui/tests/panel-routing.test.cjs internal/gui/tests/gateway-fold.test.cjs internal/gui/tests/routing-kind.test.cjs internal/gui/tests/balance-fix.test.cjs internal/gui/tests/cli-update.test.cjs internal/gui/tests/login-import.test.cjs internal/gui/tests/agy-launch.test.cjs internal/gui/tests/currency.test.cjs internal/gui/tests/usage-ledger.test.cjs internal/gui/tests/update-check.test.cjs internal/gui/tests/omarchy.test.cjs internal/gui/tests/signin-callback.test.cjs internal/gui/tests/routing-steady.test.cjs internal/gui/tests/old-webkit.test.cjs internal/gui/tests/session-terminal.test.cjs internal/gui/tests/text-size.test.cjs internal/gui/tests/zcode-site.test.cjs internal/gui/tests/usage-ledger-detail.test.cjs internal/gui/tests/usage-ledger-chart.test.cjs internal/gui/tests/panel-usage.test.cjs internal/gui/tests/usage-refresh.test.cjs internal/gui/tests/usage-ledger-content.test.cjs internal/gui/tests/rail-tip.test.cjs internal/gui/tests/sync-update.test.cjs
+node --test internal/gui/tests/menu-scroll.test.cjs internal/gui/tests/click-scroll.test.cjs internal/gui/tests/panel-fold.test.cjs internal/gui/tests/panel-routing.test.cjs internal/gui/tests/gateway-fold.test.cjs internal/gui/tests/routing-kind.test.cjs internal/gui/tests/balance-fix.test.cjs internal/gui/tests/cli-update.test.cjs internal/gui/tests/login-import.test.cjs internal/gui/tests/agy-launch.test.cjs internal/gui/tests/currency.test.cjs internal/gui/tests/usage-ledger.test.cjs internal/gui/tests/update-check.test.cjs internal/gui/tests/omarchy.test.cjs internal/gui/tests/signin-callback.test.cjs internal/gui/tests/routing-steady.test.cjs internal/gui/tests/old-webkit.test.cjs internal/gui/tests/session-terminal.test.cjs internal/gui/tests/text-size.test.cjs internal/gui/tests/zcode-site.test.cjs internal/gui/tests/usage-ledger-detail.test.cjs internal/gui/tests/usage-ledger-chart.test.cjs internal/gui/tests/panel-usage.test.cjs internal/gui/tests/usage-refresh.test.cjs internal/gui/tests/usage-ledger-content.test.cjs internal/gui/tests/rail-tip.test.cjs internal/gui/tests/sync-update.test.cjs internal/gui/tests/brand.test.cjs
 ```
 
 If Playwright is installed outside the repository, set `NODE_PATH` to the

@@ -20,6 +20,7 @@ package provider
 // provider has.
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -103,4 +104,28 @@ func fixedLevels(fixed []string) []string {
 		}
 	}
 	return out
+}
+
+// CleanLevels are the reasoning levels a group names for itself
+// (Group.Levels) as they are kept: lowercase, each once, lowest first.
+// Only the levels magpie knows are taken.
+func CleanLevels(in []string) ([]string, error) {
+	var want []string
+	for _, l := range in {
+		l = strings.ToLower(strings.TrimSpace(l))
+		if l == "" {
+			continue
+		}
+		if !slices.Contains(Levels, l) {
+			return nil, fmt.Errorf("%q is not a reasoning level magpie knows (they are %s)", l, strings.Join(Levels, ", "))
+		}
+		want = append(want, l)
+	}
+	var out []string
+	for _, l := range Levels {
+		if slices.Contains(want, l) {
+			out = append(out, l)
+		}
+	}
+	return out, nil
 }

@@ -402,6 +402,19 @@ func (m model) updateGroup(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}, g.Name+" context "+dash(v))
 			}})
 		m.back = modeGroup
+	case "l":
+		in := newInput("e.g. low,medium,high,xhigh · empty for those its models share")
+		in.SetValue(strings.Join(g.Levels, ","))
+		m.openAsk(ask{crumbs: []string{"routing", g.Name, "levels"}, input: in, empty: true,
+			hint: "the reasoning levels agents are offered: " + strings.Join(provider.Levels, ", ") + "; a model without the one asked is sent its nearest",
+			onEnter: func(v string) tea.Cmd {
+				return saveGroup(g.ID, func(g *provider.Group) error {
+					var err error
+					g.Levels, err = provider.CleanLevels(strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == ' ' }))
+					return err
+				}, g.Name+" levels "+dash(v))
+			}})
+		m.back = modeGroup
 	case "R":
 		in := newInput("the group's new id")
 		in.SetValue(g.ID)
@@ -527,6 +540,9 @@ func (m model) viewGroup() string {
 	head := []string{provider.GroupPrefix + g.ID, routingName(g.Routing), staysName(g.Affinity)}
 	if g.Context > 0 {
 		head = append(head, "context "+fmtTokens(g.Context))
+	}
+	if len(g.Levels) > 0 {
+		head = append(head, "levels "+strings.Join(g.Levels, "/"))
 	}
 	if g.Family != "" {
 		head = append(head, "family "+g.Family)

@@ -72,6 +72,13 @@ type Group struct {
 	// Context is how long a request the user says the group takes, in
 	// tokens: agents are told it rather than its shortest member's.
 	Context int `json:"context,omitempty"`
+	// Levels are the reasoning levels agents are offered for the group,
+	// lowest first, when the user names them (#295): rather than those
+	// every member has, so that a member with few doesn't take the rest
+	// from the others. A member without the level a request asks for is
+	// sent the one it has nearest, as ever. Empty offers the members'
+	// shared levels.
+	Levels []string `json:"levels,omitempty"`
 	// Family is a tag the group goes by in which agents are shown it
 	// (settings' Visible), with its id.
 	Family string `json:"family,omitempty"`
@@ -311,6 +318,8 @@ func membersIn(entries []Entry, all []Group, g Group) []Member {
 // member has — but for those fixed at an effort of their own, which take
 // whatever the agent asks. With every member fixed, the group offers the
 // levels they are fixed at, so that an agent still asks it to reason.
+// A group that names its own levels (Group.Levels) offers those, and so
+// does a group in it for its models.
 func groupEntries(entries []Entry) []Entry {
 	var out []Entry
 	all := groupsIn(entries)
@@ -354,7 +363,11 @@ func groupEntries(entries []Entry) []Entry {
 			} else {
 				e.ImageInput = sharedImageInput(e.ImageInput, imageInput)
 			}
-			if m.Effort != "" {
+			// a group in the group that names its own levels offers them for
+			// its models (the outermost that does)
+			if i := slices.IndexFunc(m.Via, func(v Group) bool { return len(v.Levels) > 0 }); i >= 0 {
+				efforts = m.Via[i].Levels
+			} else if m.Effort != "" {
 				if !slices.Contains(fixed, m.Effort) {
 					fixed = append(fixed, m.Effort)
 				}
@@ -369,6 +382,10 @@ func groupEntries(entries []Entry) []Entry {
 		}
 		if !levelled {
 			e.Efforts = fixedLevels(fixed)
+		}
+		e.Shared = e.Efforts
+		if len(g.Levels) > 0 {
+			e.Efforts = slices.Clone(g.Levels)
 		}
 		if ultra && slices.Contains(e.Efforts, "max") && !slices.Contains(e.Efforts, "ultra") {
 			e.Efforts = append(e.Efforts, "ultra")
@@ -434,6 +451,9 @@ func SaveGroup(g Group) error {
 		return err
 	}
 	g.Rules = rules
+	if g.Levels, err = CleanLevels(g.Levels); err != nil {
+		return err
+	}
 	g.Classifier = strings.TrimPrefix(strings.TrimSpace(g.Classifier), "magpie/")
 	g.Effort = strings.ToLower(strings.TrimSpace(g.Effort))
 	intents := slices.ContainsFunc(g.Rules, func(r Rule) bool { return r.Intent != "" })

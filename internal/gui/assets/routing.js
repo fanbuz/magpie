@@ -1806,7 +1806,7 @@
     if (!g.ready) tags.append(el("span", "tag bad", t("no member ready")));
     const edit = el("button", "text", t("Edit"));
     edit.onclick = (e) => { e.stopPropagation(); open(); };
-    const open = () => { gEdit = { id: g.id, draft: { name: g.name, members: [...g.members], routing: g.routing || "", affinity: g.affinity || "", classifier: g.classifier || "", effort: g.effort || "", rules: (g.rules || []).map((r) => ({ ...r, intent: r.intent || "", agents: [...(r.agents || [])] })) } }; renderGroups(); };
+    const open = () => { gEdit = { id: g.id, draft: { name: g.name, members: [...g.members], routing: g.routing || "", affinity: g.affinity || "", classifier: g.classifier || "", effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, intent: r.intent || "", agents: [...(r.agents || [])] })) } }; renderGroups(); };
     row.onclick = open;
     row.append(ics, main, tags, edit);
     return row;
@@ -2075,6 +2075,40 @@
     cw.append(cls);
     ed.append(clabel, cw);
     drawRules();
+    // the levels agents are offered: those every model has, or ones the
+    // group names (#295) — a model without the one asked is sent its
+    // nearest, so one with few needn't take the rest from the others
+    if (!d.levels) d.levels = [];
+    let own = d.levels.length > 0;
+    const shared = g && d.members.join() === g.members.join() ? g.shared || [] : null; // as saved
+    const lHint = el("div", "hint");
+    const chips = el("div", "rt-levels");
+    const drawLevels = () => {
+      chips.hidden = !own;
+      lHint.textContent = own
+        ? t("Agents are offered these. A model without the level asked is sent the one it has nearest.")
+        : shared?.length ? t("Agents are offered the levels every model has: {levels}.", { levels: shared.join(", ") })
+        : t("Agents are offered the levels every model has.");
+    };
+    for (const v of LEVELS) {
+      const c = el("button", "rt-cond" + (d.levels.includes(v) ? " on" : ""), v);
+      c.onclick = () => {
+        d.levels = d.levels.includes(v) ? d.levels.filter((x) => x !== v) : LEVELS.filter((x) => x === v || d.levels.includes(x));
+        c.classList.toggle("on", d.levels.includes(v));
+      };
+      chips.append(c);
+    }
+    const lw = el("div");
+    lw.append(segs([["", t("Its models' shared")], ["own", t("Named")]], own ? "own" : "", (v) => {
+      own = v === "own";
+      if (own && !d.levels.length) {
+        d.levels = LEVELS.filter((x) => (shared?.length ? shared : ["low", "medium", "high"]).includes(x));
+        for (const c of chips.children) c.classList.toggle("on", d.levels.includes(c.textContent));
+      }
+      drawLevels();
+    }), chips, lHint);
+    drawLevels();
+    ed.append(el("label", "", t("Levels")), lw);
 
     const bar = el("div", "bar");
     if (g) {
@@ -2093,8 +2127,9 @@
       if (bare >= 0) return status(t("Rule {n} needs a condition", { n: bare + 1 }), "warn");
       if (d.rules.some((r) => r.intent) && !d.classifier) return status(t("Choose the model that tells which intent a message is"), "warn");
       if (d.effort === "auto" && !d.classifier) return status(t("Choose the model that rates how hard a turn is"), "warn");
+      if (own && !d.levels.length) return status(t("Pick a level to offer, or leave them to its models"), "warn");
       saveBtn.classList.add("busy");
-      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), members: d.members, routing: d.routing, affinity: d.affinity, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", context: g?.context || 0 }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }));
+      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), members: d.members, routing: d.routing, affinity: d.affinity, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", context: g?.context || 0, levels: own ? d.levels : [], family: g?.family || "" }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }));
     };
     saveBtn.onclick = save;
     bar.append(cancel, saveBtn);
