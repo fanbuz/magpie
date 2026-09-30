@@ -1,29 +1,14 @@
 package usage
 
 import (
-	"cmp"
 	"encoding/json"
-	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/pelletier/go-toml/v2"
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/sessions"
 )
-
-// Vendor identities for session calls, separate from a configured gateway
-// subscription provider whose account can change.
-const (
-	SessionOpenAIProvider    = "session-openai"
-	SessionAnthropicProvider = "session-anthropic"
-)
-
-type sessionAttribution struct {
-	provider, user, account string
-}
 
 type desktopSessionInfo struct {
 	Session string `json:"cliSessionId"`
@@ -32,20 +17,17 @@ type desktopSessionInfo struct {
 
 type desktopSessionIdentity struct {
 	account, org, email string
-	official            bool
+	linkable            bool
 }
 
+// sessionResolver only identifies accounts recorded by local sessions. It does
+// not infer a service provider, endpoint, or billing account.
 type sessionResolver struct {
-	identities    []provider.SessionIdentity
-	builtinOpenAI bool
-	// signedIn are magpie's own subscriptions (codex, claude) by agent: a
-	// session call of one of their accounts is theirs, beside the gateway's
-	signedIn  map[string]string
-	accounts  []provider.SessionIdentity        // actual gateway subscription identities
-	desktop   map[string]desktopSessionIdentity // absolute metadata file
-	bySession map[string][]desktopSessionIdentity
-	emails    map[string]string // exact account/organization identity
-	roots     []string
+	identities []provider.SessionIdentity
+	desktop    map[string]desktopSessionIdentity // absolute metadata file
+	bySession  map[string][]desktopSessionIdentity
+	emails     map[string]string // exact account/organization identity
+	roots      []string
 }
 
 func newSessionResolver(logs []sessions.Call) *sessionResolver {
@@ -53,15 +35,7 @@ func newSessionResolver(logs []sessions.Call) *sessionResolver {
 	if len(logs) == 0 {
 		return r
 	}
-	r.builtinOpenAI = codexOfficialRoute()
 	r.identities = provider.SessionIdentities(sessions.CodexDir())
-	r.signedIn = map[string]string{}
-	for _, p := range provider.All() {
-		if !p.Off && p.Account != nil && (p.Account.Agent == "codex" || p.Account.Agent == "claude") && p.ID == p.Account.Agent {
-			r.signedIn[p.Account.Agent] = p.ID
-			r.accounts = append(r.accounts, p.SessionIdentities()...)
-		}
-	}
 	r.desktop = map[string]desktopSessionIdentity{}
 	r.bySession = map[string][]desktopSessionIdentity{}
 	r.emails = map[string]string{}
@@ -73,7 +47,7 @@ func newSessionResolver(logs []sessions.Call) *sessionResolver {
 	r.roots = sessions.DesktopDataDirs()
 	for _, root := range r.roots {
 		for _, kind := range []string{"local-agent-mode-sessions", "claude-code-sessions"} {
-			files, _ := filepath.Glob(filepath.Join(root, kind, "*", "*", "local_*.json"))
+			files, _ := sessions.SessionGlob(filepath.Join(root, kind, "*", "*", "local_*.json"))
 			for _, path := range files {
 				meta, err := filememo.Read("session desktop identity", path, func(b []byte) (desktopSessionInfo, error) {
 					var info desktopSessionInfo
@@ -86,12 +60,12 @@ func newSessionResolver(logs []sessions.Call) *sessionResolver {
 				rel, _ := filepath.Rel(root, path)
 				parts := strings.Split(rel, string(filepath.Separator))
 				id := desktopSessionIdentity{account: parts[1], org: parts[2], email: meta.Email,
-					official: !strings.Contains(filepath.Base(root), "-3p") && uuidIdentity(parts[1]) && uuidIdentity(parts[2])}
+					linkable: !strings.Contains(filepath.Base(root), "-3p") && uuidIdentity(parts[1]) && uuidIdentity(parts[2])}
 				r.desktop[path] = id
 				if meta.Session != "" {
 					r.bySession[meta.Session] = append(r.bySession[meta.Session], id)
 				}
-				if id.official {
+				if id.linkable {
 					r.noteEmail(id.account, id.org, id.email)
 				}
 			}
@@ -145,33 +119,50 @@ func (r *sessionResolver) codexUser(c sessions.Call) string {
 	return user
 }
 
-func (r *sessionResolver) resolve(c sessions.Call) sessionAttribution {
-	unknown := sessionAttribution{provider: UnknownProvider}
+func (r *sessionResolver) resolve(c sessions.Call) string {
 	if c.Agent == "codex" {
-		user := r.codexUser(c)
-		unknown.account = user
-		// A named provider ID has no historical endpoint or auth-mode snapshot.
-		// Today's config cannot establish its route. Only the recorded built-in
-		// OpenAI backend is attributed here, unless an endpoint override makes
-		// even that route uncertain; custom calls retain creator identity.
-		if c.Upstream == "openai" && r.builtinOpenAI {
-			// the creator is one of magpie's Codex accounts: the same
-			// subscription as the gateway's Codex calls, and told as them
-			if id := r.signedIn["codex"]; id != "" && c.AccountID != "" && c.UserID != "" && user != "" {
-				for _, a := range r.accounts {
-					if a.Agent == "codex" && a.AccountID == c.AccountID && a.UserID == c.UserID && a.User == user {
-						return sessionAttribution{provider: id, user: user, account: user}
-					}
-				}
-			}
-			return sessionAttribution{provider: SessionOpenAIProvider, account: user}
-		}
-		// A creator identity proves who owns the session, not which service
-		// handled a call.
-		return unknown
+		return r.codexUser(c)
 	}
+	id, found := r.desktopIdentity(c)
+	if !found {
+		return ""
+	}
+	if id.email == "" {
+		id.email = r.emails[id.account+"/"+id.org]
+	}
+	return id.email
+}
+
+// officialLogin requires explicit login metadata for the exact session
+// identity. A model, a provider ID, an email alone, or another signed-in
+// account never establishes it. It makes no claim about the request's route.
+func (r *sessionResolver) officialLogin(c sessions.Call, account string) bool {
+	if account == "" {
+		return false
+	}
+	if c.Agent == "codex" {
+		for _, id := range r.identities {
+			if id.Agent == "codex" && id.OfficialLogin && c.AccountID != "" && c.UserID != "" && id.AccountID == c.AccountID && id.UserID == c.UserID && id.User == account {
+				return true
+			}
+		}
+		return false
+	}
+	desktop, found := r.desktopIdentity(c)
+	if !found || desktop.account == "" || desktop.org == "" {
+		return false
+	}
+	for _, id := range r.identities {
+		if id.Agent == "claude" && id.OfficialLogin && id.AccountID == desktop.account && id.OrganizationID == desktop.org && id.User == account {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *sessionResolver) desktopIdentity(c sessions.Call) (desktopSessionIdentity, bool) {
 	if c.Agent != "claude" && c.Agent != "claude-desktop" {
-		return unknown
+		return desktopSessionIdentity{}, false
 	}
 	var id desktopSessionIdentity
 	found := false
@@ -192,54 +183,5 @@ func (r *sessionResolver) resolve(c sessions.Call) sessionAttribution {
 			id, found = ids[0], true
 		}
 	}
-	if !found {
-		return unknown
-	}
-	if id.email == "" {
-		id.email = r.emails[id.account+"/"+id.org]
-	}
-	if !id.official {
-		return sessionAttribution{provider: UnknownProvider, account: id.email}
-	}
-	// the account and organization of one of magpie's Claude sign-ins: the
-	// same subscription as the gateway's Claude calls
-	if pid := r.signedIn["claude"]; pid != "" {
-		for _, s := range r.accounts {
-			if s.Agent == "claude" && s.AccountID == id.account && s.OrganizationID == id.org {
-				return sessionAttribution{provider: pid, user: cmp.Or(id.email, s.User)}
-			}
-		}
-	}
-	return sessionAttribution{provider: SessionAnthropicProvider, user: id.email}
-}
-
-// Today's overrides cannot prove a historical route, but are enough to reject
-// the assumption that the built-in provider went directly to OpenAI. Magpie
-// itself sets openai_base_url when routing Codex through its gateway.
-func codexOfficialRoute() bool {
-	var cfg struct {
-		BaseURL   string `toml:"openai_base_url"`
-		Providers map[string]struct {
-			BaseURL string `toml:"base_url"`
-		} `toml:"model_providers"`
-	}
-	b, err := os.ReadFile(filepath.Join(sessions.CodexDir(), "config.toml"))
-	if err != nil && !os.IsNotExist(err) {
-		return false
-	}
-	if len(b) > 0 && toml.Unmarshal(b, &cfg) != nil {
-		return false
-	}
-	for _, endpoint := range []string{os.Getenv("OPENAI_BASE_URL"), cfg.BaseURL, cfg.Providers["openai"].BaseURL} {
-		if endpoint != "" && !officialOpenAI(endpoint) {
-			return false
-		}
-	}
-	return true
-}
-
-func officialOpenAI(endpoint string) bool {
-	u, err := url.Parse(endpoint)
-	return err == nil && u.Scheme == "https" && u.User == nil &&
-		(u.Host == "api.openai.com" || u.Host == "chatgpt.com" || u.Host == "chat.openai.com")
+	return id, found
 }

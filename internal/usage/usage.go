@@ -31,7 +31,10 @@ type Record struct {
 	// Neither field establishes an upstream route from today's configuration.
 	SessionProvider string `json:"session_provider,omitempty"`
 	SessionAccount  string `json:"session_account,omitempty"`
-	Model           string `json:"model"` // the provider's model id
+	// SessionOfficialLogin marks a matched account's explicit official login
+	// metadata, not this call's endpoint or billing authentication.
+	SessionOfficialLogin bool   `json:"session_official_login,omitempty"`
+	Model                string `json:"model"` // the provider's model id
 	// Requested is the model id the agent asked for (a magpie alias, a
 	// routing group, provider/model…), and Served the model the vendor's
 	// reply says answered, when it named one: a ledger to set beside the
@@ -256,7 +259,7 @@ func (t *Totals) add(r Record, price *catalog.Price) {
 	t.CacheRead += r.CacheRead
 	t.CacheWrite += r.CacheWrite
 	t.Reasoning += r.Reasoning
-	if r.TTFT > 0 && r.Status < 400 {
+	if r.TTFT > 0 && !r.Failed() {
 		t.Timed++
 		t.TTFT += r.TTFT
 		if r.Output > 0 && r.Millis > r.TTFT {

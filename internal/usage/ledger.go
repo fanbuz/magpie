@@ -81,7 +81,7 @@ func (p Period) Since(now time.Time) time.Time {
 
 // LogCalls reads the calls the agents' own session files record, which the
 // ledger adds to those the gateway logged. A variable for the tests.
-var LogCalls = sessions.Calls
+var LogCalls func(time.Time) []sessions.Call
 
 // Ledgered is a period's calls that a filter keeps, newest first, with their
 // sum, and the agents and providers that made any call in the period (their
@@ -102,7 +102,11 @@ func LedgerOf(p Period, f Filter) Ledgered {
 	if !since.IsZero() {
 		gatewaySince = since.Add(-24 * time.Hour)
 	} // calls ending across the period boundary
-	rows, sum, agents, providers := ledgerWith(since, f, Load(gatewaySince), LogCalls(since))
+	reader := LogCalls
+	if reader == nil {
+		reader = sessions.Calls
+	}
+	rows, sum, agents, providers := ledgerWith(since, f, Load(gatewaySince), reader(since))
 	return Ledgered{rows, sum, agents, providers}
 }
 
@@ -134,8 +138,8 @@ func ledger(since time.Time, f Filter, recs []Record) (rows []Row, sum Totals, a
 	return rows, sum, agents
 }
 
-// UnknownProvider names calls whose session file does not identify the upstream.
-// The client alone cannot distinguish a subscription from a third-party endpoint.
+// UnknownProvider groups local session calls without claiming a supplier.
+// Recorded provider IDs and matched creator identities stay in their own fields.
 const UnknownProvider = "session-unknown"
 
 // logRecord is a call read from a session file, as a record: the upstream is
@@ -273,8 +277,8 @@ func ledgerWith(since time.Time, f Filter, recs []Record, logs []sessions.Call) 
 		// Gateway and session calls use the same model API list price,
 		// independently of route and account attribution.
 		r := logRecord(c)
-		id := identities.resolve(c)
-		r.Provider, r.Host, r.SessionAccount = id.provider, id.user, id.account
+		r.SessionAccount = identities.resolve(c)
+		r.SessionOfficialLogin = identities.officialLogin(c, r.SessionAccount)
 		r.SessionProvider = c.Upstream
 		add(r, priceOf(r), "log")
 	}
@@ -310,7 +314,7 @@ func pricer() func(Record) *catalog.Price {
 var CSVHeader = []string{"time", "agent", "requested_model", "provider", "host", "model", "served_model", "swapped",
 	"effort", "input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens", "reasoning_tokens",
 	"cost_usd", "duration_ms", "ttft_ms", "status", "error", "session", "kind",
-	"request_id", "endpoint", "error_message", "error_type", "source", "rejected", "session_provider", "session_account"}
+	"request_id", "endpoint", "error_message", "error_type", "source", "rejected", "session_provider", "session_account", "session_official_login"}
 
 // WriteCSV writes rows as CSV, a header first: times in RFC 3339 with
 // their offset, the cost in USD at list price (empty when unknown), error
@@ -332,7 +336,7 @@ func WriteCSV(w io.Writer, rows []Row) error {
 		cw.Write([]string{r.Time.Format(time.RFC3339), r.Agent, r.Requested, r.Provider, r.Host, r.Model, r.Served,
 			strconv.FormatBool(r.Swapped), r.Effort, n(r.Input), n(r.Output), n(r.CacheWrite), n(r.CacheRead), n(r.Reasoning),
 			cost, strconv.FormatInt(r.Millis, 10), ttft, n(r.Status), strconv.FormatBool(r.Failed()), r.Session, r.Kind,
-			r.RequestID, r.Endpoint, r.Error, r.ErrType, r.Source, strconv.FormatBool(r.IsRejected()), r.SessionProvider, r.SessionAccount})
+			r.RequestID, r.Endpoint, r.Error, r.ErrType, r.Source, strconv.FormatBool(r.IsRejected()), r.SessionProvider, r.SessionAccount, strconv.FormatBool(r.SessionOfficialLogin)})
 	}
 	cw.Flush()
 	return cw.Error()

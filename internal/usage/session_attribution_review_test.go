@@ -42,7 +42,7 @@ func TestNamedProviderHistoryDoesNotFollowCurrentConfig(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(sessions.CodexDir(), "config.toml"), []byte(cfg), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if got := newSessionResolver([]sessions.Call{c}).resolve(c); got != (sessionAttribution{provider: UnknownProvider, account: "me@example.com"}) {
+		if got := newSessionResolver([]sessions.Call{c}).resolve(c); got != ("me@example.com") {
 			t.Fatalf("current config changed historical attribution: %+v", got)
 		}
 	}
@@ -56,26 +56,23 @@ func TestSeparateCodexHomesAndDisabledProvider(t *testing.T) {
 	t.Setenv("CODEX_HOME", cliDir)
 	c := sessions.Call{Time: time.Now(), Agent: "codex", Upstream: "openai", AccountID: "cli-account", UserID: "cli-user"}
 	r := newSessionResolver([]sessions.Call{c})
-	if r.signedIn["codex"] != "codex" {
-		t.Fatal("fixture has no gateway Codex account")
-	}
-	if got := r.resolve(c); got != (sessionAttribution{provider: SessionOpenAIProvider, account: "cli@example.com"}) {
+	if got := r.resolve(c); got != ("cli@example.com") {
 		t.Fatalf("foreign CODEX_HOME merged into gateway account: %+v", got)
 	}
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	c.AccountID, c.UserID = "gateway-account", "gateway-user"
-	if got := newSessionResolver([]sessions.Call{c}).resolve(c); got.provider != "codex" {
+	if got := newSessionResolver([]sessions.Call{c}).resolve(c); got != "gateway@example.com" {
 		t.Fatalf("same account not recognized: %+v", got)
 	}
 	if err := provider.SetOff("codex", true); err != nil {
 		t.Fatal(err)
 	}
-	if got := newSessionResolver([]sessions.Call{c}).resolve(c); got.provider != SessionOpenAIProvider || got.user != "" {
+	if got := newSessionResolver([]sessions.Call{c}).resolve(c); got != "gateway@example.com" {
 		t.Fatalf("disabled provider still used: %+v", got)
 	}
 }
 
-func TestCodexEndpointOverridesPreventSubscriptionAttribution(t *testing.T) {
+func TestCodexConfigurationDoesNotChangeRecordedAccount(t *testing.T) {
 	sessionHome(t)
 	sessionAuth(t, sessions.CodexDir(), "a", "u", "me@example.com")
 	c := sessions.Call{Agent: "codex", Upstream: "openai", Model: "relay/glm-5", AccountID: "a", UserID: "u"}
@@ -90,7 +87,7 @@ func TestCodexEndpointOverridesPreventSubscriptionAttribution(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(sessions.CodexDir(), "config.toml"), []byte(tc.config), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if got := newSessionResolver([]sessions.Call{c}).resolve(c); got.provider != UnknownProvider || got.user != "" || got.account != "me@example.com" {
+			if got := newSessionResolver([]sessions.Call{c}).resolve(c); got != "me@example.com" {
 				t.Fatalf("gateway route became subscription: %+v", got)
 			}
 		})
@@ -98,11 +95,10 @@ func TestCodexEndpointOverridesPreventSubscriptionAttribution(t *testing.T) {
 }
 
 func TestSharedWorkspaceDoesNotIdentifyItsMember(t *testing.T) {
-	r := &sessionResolver{builtinOpenAI: true, signedIn: map[string]string{"codex": "codex"}, identities: []provider.SessionIdentity{{Agent: "codex", AccountID: "team-ws", UserID: "u-me", User: "me@example.com"}}}
-	r.accounts = r.identities
+	r := &sessionResolver{identities: []provider.SessionIdentity{{Agent: "codex", AccountID: "team-ws", UserID: "u-me", User: "me@example.com"}}}
 	for _, user := range []string{"", "colleague"} {
 		c := sessions.Call{Agent: "codex", Upstream: "openai", AccountID: "team-ws", UserID: user}
-		if got := r.resolve(c); got != (sessionAttribution{provider: SessionOpenAIProvider}) {
+		if got := r.resolve(c); got != ("") {
 			t.Fatalf("workspace inferred its member: %+v", got)
 		}
 	}

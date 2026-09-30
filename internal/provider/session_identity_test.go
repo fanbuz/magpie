@@ -37,6 +37,28 @@ func TestSessionIdentitiesReadOnly(t *testing.T) {
 	}
 }
 
+func TestOfficialLoginRequiresExplicitAuthenticationMetadata(t *testing.T) {
+	for _, mode := range []string{"chatgpt", "", "custom", "apikey"} {
+		b, _ := json.Marshal(map[string]any{"auth_mode": mode, "tokens": map[string]string{
+			"account_id": "a", "id_token": fakeJWT(map[string]any{"email": "me@example.com", "https://api.openai.com/auth": map[string]string{"chatgpt_user_id": "u"}}),
+		}})
+		id, ok := codexSessionIdentity(b)
+		if mode == "apikey" {
+			if ok {
+				t.Fatal("API key mode accepted as a login identity")
+			}
+			continue
+		}
+		if !ok || id.OfficialLogin != (mode == "chatgpt") {
+			t.Fatalf("mode %q: %+v, %v", mode, id, ok)
+		}
+	}
+	id, ok := claudeSessionIdentity([]byte(`{"accountUuid":"a","organizationUuid":"org","emailAddress":"me@example.com"}`))
+	if !ok || !id.OfficialLogin {
+		t.Fatal("Claude oauthAccount lost its explicit login method")
+	}
+}
+
 func TestSubscriptionIdentitiesOnlyContainUsableAccounts(t *testing.T) {
 	home := signIn(t)
 	auth := func(account, user, email string) json.RawMessage {

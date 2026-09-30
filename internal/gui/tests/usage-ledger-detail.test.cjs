@@ -24,7 +24,7 @@ const ROWS = [
   // the gateway's: answered, with the id and the protocol it was turned into
   { t: new Date(now - 120e3).toISOString(), agent: "claude", agentName: "Claude Code", icon: "claudecode-color", provider: "relay", providerName: "Relay", host: "team", req: "sonnet", model: "sonnet", served: "sonnet", in: 300, out: 40, ms: 2380, ttft_ms: 700, status: 200, rid: "chatcmpl-77", ep: "/v1/messages → /v1/chat/completions", cost: 0.01, priced: true },
   // a session file's: nothing went wrong
-  { t: new Date(now - 180e3).toISOString(), agent: "claude-desktop", agentName: "Claude Desktop", icon: "claude-color", provider: "claude", providerName: "Claude", req: "claude-opus-5[1m]", model: "claude-opus-5", served: "claude-opus-5", effort: "xhigh", ms: 4200, in: 1000, out: 200, cache_read: 4000, cache_write: 500, status: 0, rid: "req_log", session: "s2", source: "log", cost: 0.02, priced: true },
+  { t: new Date(now - 180e3).toISOString(), agent: "claude-desktop", agentName: "Claude Desktop", icon: "claude-color", provider: "claude", providerName: "Claude", req: "claude-opus-5[1m]", model: "claude-opus-5", served: "claude-opus-5", effort: "xhigh", ms: 4200, in: 1000, out: 200, cache_read: 4000, cache_write: 500, status: 0, rid: "req_log", session: "s2", session_account: "claude@example.com", source: "log", cost: 0.02, priced: true },
   // a session file's: the error that ended the call
   { t: new Date(now - 240e3).toISOString(), agent: "claude-desktop", agentName: "Claude Desktop", icon: "claude-color", provider: "claude", providerName: "Claude", model: "", in: 0, out: 0, status: 0, err: "You've hit your limit · resets 3am", err_type: "rate_limit", rid: "req_lim", session: "s3", source: "log", cost: 0, priced: false },
 ];
@@ -61,14 +61,14 @@ function server(lang, refreshed) {
 
 const L = {
   en: {
-    statuses: ["429 · rate_limit_error", "200", "Succeeded", "rate_limit"], badge: "session log",
+    statuses: ["429 · rate_limit_error", "200", "Succeeded", "rate_limit"], badge: "Local session",
     labels: { fail: ["Status", "Error type", "Upstream said", "Request ID", "Endpoint", "Session ID"], ok: ["Request ID", "Endpoint", "First token"], log: ["Request ID", "Session ID", "Source"], logFail: ["Status", "Error type", "Error", "Request ID", "Session ID", "Source"] },
-    noStatus: "Read from the agent's session file. Provider and account are shown when local metadata identifies them; no HTTP status was recorded.",
+    noStatus: "Read from the agent's session file. The account is shown only when local metadata identifies it; no service provider is inferred.",
   },
   zh: {
-    statuses: ["429 · rate_limit_error", "200", "成功", "rate_limit"], badge: "会话日志",
+    statuses: ["429 · rate_limit_error", "200", "成功", "rate_limit"], badge: "本地会话",
     labels: { fail: ["状态", "错误类型", "上游返回", "请求 ID", "终结点", "会话 ID"], ok: ["请求 ID", "终结点", "首响"], log: ["请求 ID", "会话 ID", "来源"], logFail: ["状态", "错误类型", "错误", "请求 ID", "会话 ID", "来源"] },
-    noStatus: "读自 Agent 的会话文件；有本地元数据依据时显示供应商和账号，文件未记录 HTTP 状态码。",
+    noStatus: "读自 Agent 的会话文件；仅在本地元数据能够明确识别时显示账号，不推断供应商。",
   },
 };
 
@@ -111,7 +111,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual([logged[2], logged[4], logged[5], logged[6]], ["claude-opus-5[1m]", "claude-opus-5", "claude-opus-5", "xhigh"], "a session file's models and effort");
         assert.deepEqual([gateway[2], gateway[4]], ["sol", "gpt-6-sol"], "the gateway's model asked for and sent");
         // only the session file's rows are marked as such
-        assert.deepEqual(await rows.evaluateAll((trs) => trs.map((tr) => tr.querySelector(".src")?.textContent || "")), ["", "", w.badge, w.badge]);
+        assert.deepEqual(await rows.evaluateAll((trs) => trs.map((tr) => tr.querySelector(".src")?.textContent || "")), ["", "", w.badge, ""]);
         assert.equal(await p.locator(".led tbody tr.led-detail").count(), 0, "closed to begin with");
 
         const labels = async () => p.locator(".led tbody tr.led-detail dt").allTextContents();

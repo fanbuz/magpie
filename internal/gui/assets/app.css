@@ -623,6 +623,8 @@ body.window .field.solo { grid-column: auto; }
 .led .when { color: var(--muted); }
 .led .model, .led .where { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
 .led .where { color: var(--fg-2); }
+.led .source-badges { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
+.led .price-reference { font-size: 10px; color: var(--muted); }
 .led .cost { color: var(--green); }
 .led .cost.faint { color: var(--faint); }
 .led .who { display: inline-flex; align-items: center; gap: 6px; }

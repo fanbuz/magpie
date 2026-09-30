@@ -133,7 +133,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const asked = [];
         const { page, errors } = await open(lang, "light", asked);
         assert.deepEqual(await page.locator("#usageTab .opt").allTextContents(), w.tabs);
-        assert.equal(asked.at(-1).get("period"), "30d");
+        assert.equal(asked.at(-1).get("period"), "today");
         assert.equal(asked.at(-1).get("offset"), "0");
         assert.deepEqual(await page.locator(".led thead th").allTextContents(), w.cols);
         assert.equal(await page.locator(".led tbody tr").count(), 100, "a page of 100");

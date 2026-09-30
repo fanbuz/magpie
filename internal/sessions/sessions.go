@@ -89,19 +89,20 @@ const Limit = 200
 
 // state is what one file's parse has come to, enough to read on from Off.
 type state struct {
-	Head     string            `json:"head,omitempty"`
-	HeadSize int               `json:"head_size,omitempty"`
-	Size     int64             `json:"size"`
-	Mod      int64             `json:"mod"` // unix nanoseconds
-	Off      int64             `json:"off"` // after the last whole line read
-	ID       string            `json:"id,omitempty"`
-	Cwd      string            `json:"cwd,omitempty"`
-	Title    string            `json:"title,omitempty"`
-	Named    string            `json:"named,omitempty"` // the agent's own title for it
-	First    string            `json:"first,omitempty"` // the first message, when no prompt looked typed
-	Start    time.Time         `json:"start"`
-	Last     time.Time         `json:"last"`
-	Models   map[string]Tokens `json:"models,omitempty"`
+	Head        string            `json:"head,omitempty"`
+	HeadSize    int               `json:"head_size,omitempty"`
+	ContentHash string            `json:"content_hash,omitempty"`
+	Size        int64             `json:"size"`
+	Mod         int64             `json:"mod"` // unix nanoseconds
+	Off         int64             `json:"off"` // after the last whole line read
+	ID          string            `json:"id,omitempty"`
+	Cwd         string            `json:"cwd,omitempty"`
+	Title       string            `json:"title,omitempty"`
+	Named       string            `json:"named,omitempty"` // the agent's own title for it
+	First       string            `json:"first,omitempty"` // the first message, when no prompt looked typed
+	Start       time.Time         `json:"start"`
+	Last        time.Time         `json:"last"`
+	Models      map[string]Tokens `json:"models,omitempty"`
 	// Days is Models again, split by the local date each message was
 	// written on: a session that runs past midnight counts on both days.
 	Days map[string]*day `json:"days,omitempty"`
@@ -320,18 +321,29 @@ func claudeFiles() []file { return ccFiles("claude", ClaudeDir()) }
 func ccFiles(agent, dir string) []file {
 	projects := filepath.Join(dir, "projects")
 	var out []file
-	mains, _ := filepath.Glob(filepath.Join(projects, "*", "*.jsonl"))
-	for _, p := range mains {
-		f := file{agent: agent, key: agent + ":" + strings.TrimSuffix(filepath.Base(p), ".jsonl"), path: p, main: true}
-		if stat(&f) {
-			out = append(out, f)
+	for _, project := range readDirectory(projects) {
+		if !project.IsDir() && project.Type()&os.ModeSymlink == 0 {
+			continue
 		}
-	}
-	subs, _ := filepath.Glob(filepath.Join(projects, "*", "*", "subagents", "*.jsonl"))
-	for _, p := range subs {
-		f := file{agent: agent, key: agent + ":" + filepath.Base(filepath.Dir(filepath.Dir(p))), path: p}
-		if stat(&f) {
-			out = append(out, f)
+		root := filepath.Join(projects, project.Name())
+		for _, e := range readDirectory(root) {
+			path := filepath.Join(root, e.Name())
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
+				f := file{agent: agent, key: agent + ":" + strings.TrimSuffix(e.Name(), ".jsonl"), path: path, main: true}
+				if stat(&f) {
+					out = append(out, f)
+				}
+			} else if e.IsDir() || e.Type()&os.ModeSymlink != 0 {
+				for _, sub := range readDirectory(filepath.Join(path, "subagents")) {
+					if sub.IsDir() || !strings.HasSuffix(sub.Name(), ".jsonl") {
+						continue
+					}
+					f := file{agent: agent, key: agent + ":" + e.Name(), path: filepath.Join(path, "subagents", sub.Name())}
+					if stat(&f) {
+						out = append(out, f)
+					}
+				}
+			}
 		}
 	}
 	return out
@@ -417,7 +429,8 @@ func CachePath() string { return filepath.Join(filepath.Dir(catalog.CachePath())
 // 6: per-call metadata and continuation share the session file scan
 // 7: Codex's recorded provider and creator identity
 // 8: keep only summaries here; request metadata has per-file shards.
-const cacheVersion = 8
+// 9: validate the previous full prefix before treating growth as an append.
+const cacheVersion = 9
 
 type cacheFile struct {
 	Version int               `json:"version"`
@@ -694,6 +707,9 @@ func pricer() func(string) *catalog.Price {
 
 // Reset forgets the kept parses, in memory only.
 func Reset() {
+	directoryCache.Lock()
+	directoryCache.entries = map[string]directoryEntry{}
+	directoryCache.Unlock()
 	resetCalls()
 	mu.Lock()
 	defer mu.Unlock()
@@ -850,13 +866,14 @@ func parse(f file, old *state) *state {
 	}
 	headBytes := headOf(f.path)
 	var s *state
-	if old != nil && f.size >= old.Size && old.Off <= f.size && sameHead(headBytes, old.Head, old.HeadSize) {
+	if old != nil && f.size >= old.Size && old.Off <= f.size && sameHead(headBytes, old.Head, old.HeadSize) && old.ContentHash != "" && prefixHash(f.path, old.Size) == old.ContentHash {
 		s = old.clone()
 	} else {
 		s = &state{}
 	}
 	s.Size, s.Mod = f.size, f.mod.UnixNano()
 	s.Head, s.HeadSize = hashHead(headBytes), len(headBytes)
+	s.ContentHash = prefixHash(f.path, f.size)
 	line := claudeLine
 	switch f.agent {
 	case "codex":

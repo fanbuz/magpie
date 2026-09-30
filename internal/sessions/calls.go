@@ -55,14 +55,16 @@ type Call struct {
 // callFile is what one file's read has come to: the calls found in it, and
 // what it takes to read on from off.
 type callFile struct {
-	Size     int64
-	Mod      int64  // unix nanoseconds
-	Off      int64  // after the last whole line read
-	Head     string // hash of the prefix, to tell one replaced from one grown
-	HeadSize int
-	Path     string
-	Calls    []Call
-	Agent    string
+	ContentHash string
+	dirty       map[int]bool
+	Size        int64
+	Mod         int64  // unix nanoseconds
+	Off         int64  // after the last whole line read
+	Head        string // hash of the prefix, to tell one replaced from one grown
+	HeadSize    int
+	Path        string
+	Calls       []Call
+	Agent       string
 	// where the line being handled begins and ends, and where the last reply's did
 	At, End, AsstEnd int64
 	Strs             map[string]string
@@ -113,8 +115,6 @@ func DesktopDataDirs() []string { return callDesktopDirs() }
 func Calls(since time.Time) []Call { return callsFor(since, "") }
 
 func callsFor(since time.Time, session string) []Call {
-	callsMu.Lock()
-	defer callsMu.Unlock()
 	files := callFiles()
 	pruneCalls(files)
 	// Earlier files own messages copied into a resumed Claude session.
@@ -126,11 +126,13 @@ func callsFor(since time.Time, session string) []Call {
 	})
 	seen := map[string]bool{}
 	capacity := 0
+	callsMu.Lock()
 	for _, f := range files {
 		if since.IsZero() || !f.mod.Before(since) {
 			capacity += callCounts[f.path]
 		}
 	}
+	callsMu.Unlock()
 	if session != "" {
 		capacity = 0
 	}
@@ -180,7 +182,7 @@ func callFiles() []file {
 	add(ccFiles("claude", ClaudeDir()))
 	for _, d := range callDesktopDirs() {
 		// Cowork keeps a Claude Code folder of its own for each session
-		homes, _ := filepath.Glob(filepath.Join(d, "local-agent-mode-sessions", "*", "*", "local_*", ".claude"))
+		homes, _ := SessionGlob(filepath.Join(d, "local-agent-mode-sessions", "*", "*", "local_*", ".claude"))
 		for _, h := range homes {
 			add(ccFiles("claude-desktop", h))
 		}
@@ -256,7 +258,7 @@ func headOf(path string) string {
 func prepareCalls(f file, old *callFile) *callFile {
 	head := headOf(f.path)
 	var st *callFile
-	if old != nil && f.size >= old.Size && old.Off <= f.size && sameHead(head, old.Head, old.HeadSize) {
+	if old != nil && f.size >= old.Size && old.Off <= f.size && sameHead(head, old.Head, old.HeadSize) && old.ContentHash != "" && prefixHash(f.path, old.Size) == old.ContentHash {
 		st = old.clone()
 	} else {
 		st = &callFile{Agent: f.agent}
@@ -270,6 +272,7 @@ func prepareCalls(f file, old *callFile) *callFile {
 			st.Msgs = map[string]int{}
 		}
 	}
+	st.dirty = map[int]bool{}
 	st.Head, st.HeadSize, st.Path = hashHead(head), len(head), f.path
 	return st
 }
@@ -464,6 +467,9 @@ func claudeCallLine(st *callFile, b []byte) {
 		if i, ok := st.Msgs[id]; ok {
 			c.From = st.Calls[i].From // its asking began with its first line
 			st.Calls[i] = c
+			if st.dirty != nil {
+				st.dirty[i] = true
+			}
 			return
 		}
 		st.Msgs[id] = len(st.Calls)
@@ -580,6 +586,9 @@ func codexCallLine(st *callFile, b []byte) {
 	case l.Type == "event_msg" && p.Type == "task_complete":
 		if t, ok := r.Turns[p.TurnID]; ok && t.N == 1 {
 			st.Calls[t.First].TTFT, st.Calls[t.First].Millis = p.FirstToken, p.Duration
+			if st.dirty != nil {
+				st.dirty[t.First] = true
+			}
 		}
 		delete(r.Turns, p.TurnID)
 	case l.Type == "event_msg" && p.Type == "token_count":
@@ -639,4 +648,42 @@ func codexCallLine(st *callFile, b []byte) {
 func hashHead(head string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(head))) }
 func sameHead(head, hash string, size int) bool {
 	return size >= 0 && len(head) >= size && hashHead(head[:size]) == hash
+}
+
+// prefixHash verifies the already indexed bytes before continuing an append.
+// A prefix sampled only at the first 256 bytes cannot detect in-place rewrites.
+func prefixHash(path string, n int64) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err = io.CopyN(h, f, n); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// CallSource identifies a raw local request log without reading its contents.
+type CallSource struct {
+	Path, Key, Agent string
+	Size             int64
+	Modified         time.Time
+}
+
+func CallSources() []CallSource {
+	fs := callFiles()
+	pruneCalls(fs)
+	out := make([]CallSource, 0, len(fs))
+	for _, f := range fs {
+		out = append(out, CallSource{f.path, f.key, f.agent, f.size, f.mod})
+	}
+	return out
+}
+
+// ReadCallSource returns immutable calls for one source. Independent files can
+// be read concurrently; disk IO never holds callsMu.
+func ReadCallSource(s CallSource) []Call {
+	return readCalls(file{path: s.Path, key: s.Key, agent: s.Agent, size: s.Size, mod: s.Modified}).Calls
 }

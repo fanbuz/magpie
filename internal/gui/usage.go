@@ -86,6 +86,8 @@ type ledgerRow struct {
 	AgentName    string `json:"agentName"`
 	Icon         string `json:"icon"` // the agent's
 	ProviderName string `json:"providerName"`
+	Access       string `json:"access,omitempty"` // known account/route type, independent of model maker
+	PricingModel string `json:"pricing_model,omitempty"`
 }
 
 type ledgerJSON struct {
@@ -122,24 +124,24 @@ type ledgerAgent struct {
 // ledgerPage is one page of the ledger: limit rows (100 when none is
 // given, 500 at most) from offset.
 func ledgerPage(p usage.Period, f usage.Filter, offset, limit int) ledgerJSON {
-	all := usage.LedgerOf(p, usage.Filter{})
-	l := all.Filtered(f)
-	rows := l.Rows
-	if limit <= 0 {
-		limit = 100
-	}
-	limit = min(limit, 500)
-	offset = max(0, min(offset, len(rows)))
-	page := rows[offset:min(len(rows), offset+limit)]
+	l := usage.QueryPage(p, f, offset, limit)
+	offset = max(0, min(offset, l.Total))
+	page := l.Rows
 	agents := map[string]*agent.Agent{}
 	for _, a := range agent.Clients() {
 		agents[a.ID] = a
 	}
 	// A session file without route evidence is a local source, not a supplier.
-	names := map[string]string{usage.UnknownProvider: "Local session", usage.SessionOpenAIProvider: "OpenAI", usage.SessionAnthropicProvider: "Anthropic"}
-	icons := map[string]string{usage.SessionOpenAIProvider: "openai", usage.SessionAnthropicProvider: "claude-color"}
+	names := map[string]string{usage.UnknownProvider: "Local session"}
+	icons := map[string]string{}
+	access := map[string]string{}
 	for _, pr := range provider.All() {
 		names[pr.ID], icons[pr.ID] = pr.Name, pr.Icon
+		if pr.Account != nil {
+			access[pr.ID] = "subscription"
+		} else if pr.Key != "" {
+			access[pr.ID] = "api"
+		}
 	}
 	who := func(id string) ledgerAgent {
 		if a := agents[id]; a != nil {
@@ -157,11 +159,19 @@ func ledgerPage(p usage.Period, f usage.Filter, offset, limit int) ledgerJSON {
 		}
 		return a
 	}
-	out := ledgerJSON{Period: p, Rows: make([]ledgerRow, 0, len(page)), Offset: offset, Total: len(rows), Totals: l.Sum, Agents: []ledgerAgent{}, Providers: []ledgerAgent{}}
-	out.Bucket, out.Series = usage.LedgerSeries(p, rows)
+	out := ledgerJSON{Period: p, Rows: make([]ledgerRow, 0, len(page)), Offset: offset, Total: l.Total, Totals: l.Sum, Agents: []ledgerAgent{}, Providers: []ledgerAgent{}}
+	out.Bucket, out.Series = l.Bucket, l.Series
 	for _, r := range page {
 		a := who(r.Agent)
 		lr := ledgerRow{Row: r, AgentName: a.Name, Icon: a.Icon, ProviderName: names[r.Provider]}
+		if r.Source != "log" {
+			lr.Access = access[r.Provider]
+		}
+		if r.Priced {
+			if model := provider.PricedName(r.Model); model != r.Model {
+				lr.PricingModel = model
+			}
+		}
 		if lr.ProviderName == "" {
 			lr.ProviderName = r.Provider
 		}
@@ -177,19 +187,8 @@ func ledgerPage(p usage.Period, f usage.Filter, offset, limit int) ledgerJSON {
 	// filter has picked, of the rows without that pick
 	out.By = map[string][]ledgerShare{}
 	for _, d := range usage.Dimensions {
-		src := rows
-		switch {
-		case d == "provider" && f.Provider != "":
-			g := f
-			g.Provider = ""
-			src = all.Filtered(g).Rows
-		case d == "agent" && f.Agent != "":
-			g := f
-			g.Agent = ""
-			src = all.Filtered(g).Rows
-		}
 		shares := []ledgerShare{}
-		for _, s := range usage.Breakdown(src, d) {
+		for _, s := range l.By[d] {
 			ls := ledgerShare{Share: s, Name: s.ID}
 			switch d {
 			case "provider":

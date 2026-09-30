@@ -34,7 +34,7 @@ let prefs = null; // the settings page: theme, lang, version, dir, gateway
 let providers = null; // { providers, presets, gateway }
 let view = "agents";
 let showAllAgents = false; // the agents no one has set anything on, folded away
-let period = "30d"; // usage window
+let period = "today"; // usage window
 let usage = null;   // last usage summary
 let pick = null; // { agent, field, options, items, cursor, anchor }
 let editing = null; // provider id being edited; { preset } or { custom: true } for a new one
@@ -6184,12 +6184,11 @@ function renderUsage() {
 let ledger = null; // the page shown: { rows, offset, total, agents, …totals }
 let ledOffset = 0, ledAgent = "", ledProvider = "", ledFailed = false, ledQuery = "";
 const LED_PAGE = 100;
-// the chart's metric, and what it tells apart; remembered
-let ledMetric = "tokens", ledSplit = "provider";
+// Remember the chart metric; start each app load split by model.
+let ledMetric = "tokens", ledSplit = "model";
 try {
-  const m = localStorage.getItem("magpie.ledMetric"), b = localStorage.getItem("magpie.ledSplit");
+  const m = localStorage.getItem("magpie.ledMetric");
   if (["tokens", "cost", "calls"].includes(m)) ledMetric = m;
-  if (["provider", "agent", "model"].includes(b)) ledSplit = b;
 } catch {}
 
 function ledParams(extra) {
@@ -6275,8 +6274,9 @@ function ledDetail(r, cols) {
   if (r.reasoning) add("Reasoning tokens", ledNum(r.reasoning));
   if (r.session_provider) add("Recorded provider ID", r.session_provider);
   if (r.session_account) add("Session account", r.session_account);
-  if (r.source === "log" && r.provider === "session-unknown") add("Provider", t("This local session log does not record a verifiable service route or billing account."), "muted");
-  if (r.source === "log") add("Source", t("Read from the agent's session file. Provider and account are shown when local metadata identifies them; no HTTP status was recorded."), "muted");
+  if (r.source === "log" && r.session_account && r.session_official_login) add("Login method", t("Official login"));
+  if (r.pricing_model) add("API price reference", r.pricing_model);
+  if (r.source === "log") add("Source", t("Read from the agent's session file. The account is shown only when local metadata identifies it; no service provider is inferred."), "muted");
   const tr = el("tr", "led-detail");
   const td = el("td");
   td.colSpan = cols;
@@ -6395,7 +6395,7 @@ function ledMoney(v) {
 }
 
 const LED_METRICS = [["tokens", "Tokens"], ["cost", "Cost"], ["calls", "Requests"]];
-const LED_SPLITS = [["provider", "Provider"], ["agent", "Agent"], ["model", "Model"]];
+const LED_SPLITS = [["model", "Model"], ["provider", "Provider"], ["agent", "Agent"]];
 const LED_SHOWN = 7; // told apart in a chart; the rest are "Other"
 const allTokens = (x) => x.input + x.output + x.cache_read + x.cache_write;
 // a metric's value of a point or a share, as the chart counts it
@@ -6681,7 +6681,7 @@ function drawLedTrend() {
     slide(host, key);
   };
   pill($("#ledMetric"), "ledMetric", LED_METRICS, ledMetric, (id) => { ledMetric = id; try { localStorage.setItem("magpie.ledMetric", id); } catch {} drawLedTrend(); });
-  pill($("#ledSplit"), "ledSplit", LED_SPLITS, ledSplit, (id) => { ledSplit = id; try { localStorage.setItem("magpie.ledSplit", id); } catch {} drawLedTrend(); });
+  pill($("#ledSplit"), "ledSplit", LED_SPLITS, ledSplit, (id) => { ledSplit = id; drawLedTrend(); });
   const chart = $("#ledChart"), rank = $("#ledRank");
   drawLedColumns(chart, l, ledSplit, ledMetric, false);
   rank.chart = chart;
@@ -6790,14 +6790,29 @@ function renderLedger() {
     who.append(icon(r.icon || "generic"), el("span", "", r.agentName || r.agent));
     td(who, "", [r.kind, r.session && t("session {id}", { id: r.session })].filter(Boolean).join(" · "));
     td(r.req || "—", "model" + (r.req ? "" : " faint"), r.req || t("Not kept for requests before this version"));
-    const where = t(r.providerName) + (r.host ? " · " + r.host : "");
+    const local = r.source === "log";
+    const where = local ? (r.session_account || t("Local session")) : t(r.providerName) + (r.host ? " · " + r.host : "");
     const wc = td(where, "where", where);
-    if (r.source === "log") {
-      // read from the agent's own session file: the gateway never saw it
-      const k = el("span", "src", t("session log"));
-      k.title = t("Read from the agent's session file. Provider and account are shown when local metadata identifies them; no HTTP status was recorded.");
-      wc.append(" ", k);
+    if (local && r.session_account && r.session_official_login) {
+      const badge = el("span", "src official", "OFFICIAL");
+      badge.title = t("Official login confirmed for this account by local login metadata. This does not establish the route or authentication used for this request.");
+      wc.prepend(badge, " ");
     }
+    let access = "";
+    if (!local && r.access === "subscription") access = "Subscription";
+    else if (!local && r.access === "api") access = "API";
+    const badges = el("div", "source-badges");
+    if (access) {
+      const badge = el("span", "src access", t(access));
+      badge.title = t(access);
+      badges.append(badge);
+    }
+    if (local && r.session_account) {
+      const k = el("span", "src", t("Local session"));
+      k.title = t("Read from the agent's session file. The account is shown only when local metadata identifies it; no service provider is inferred.");
+      badges.append(k);
+    }
+    if (badges.childElementCount) wc.append(badges);
     // the model sent is what the gateway sent the vendor: a session file has none
     // The log names a model, but does not capture the outbound HTTP request.
     td(r.model || "—", "model" + (r.source === "log" ? " faint" : ""), r.source === "log" && r.model ? t("Model recorded in the local session log; the outbound HTTP request was not captured.") : r.model);
@@ -6807,7 +6822,12 @@ function renderLedger() {
     td(ledNum(r.out), "n", r.reasoning ? t("{n} reasoning, inside output", { n: ledNum(r.reasoning) }) : "");
     td(ledNum(r.cache_write), "n" + (r.cache_write ? "" : " faint"));
     td(ledNum(r.cache_read), "n" + (r.cache_read ? "" : " faint"));
-    td(r.priced ? "≈" + fmtCost({ cost: r.cost, unpriced: 0 }) : "—", "n cost" + (r.priced ? "" : " faint"), r.priced ? "" : t("No known price for this model"));
+    const cost = td(r.priced ? "≈" + fmtCost({ cost: r.cost, unpriced: 0 }) : "—", "n cost" + (r.priced ? "" : " faint"), r.priced ? (r.pricing_model ? t("API price reference") + ": " + r.pricing_model : "") : t("No known price for this model"));
+    if (r.priced && r.pricing_model) {
+      const reference = el("div", "price-reference", t("Price reference: {model}", { model: r.pricing_model }));
+      reference.title = t("Model used for the API price estimate; this is not an observed model forwarding event.");
+      cost.append(reference);
+    }
     // a session file has the times of its lines: a call took about from the line that
     // asked for it to its last; some have none, and are dashes, not 0 ms
     const timed = r.source === "log";

@@ -90,8 +90,8 @@ function server(lang, theme, variant, asked) {
 }
 
 const L = {
-  en: { strip: ["Tokens", "Requests", "Cost", "Cache hit rate"], metric: ["Tokens", "Cost", "Requests"], split: ["Provider", "Agent", "Model"], all: "All providers", none: "No known price for these requests" },
-  zh: { strip: ["Token", "请求", "费用", "缓存命中率"], metric: ["Token", "费用", "请求"], split: ["供应商", "Agent", "模型"], all: "全部供应商", none: "这些请求没有已知价格" },
+  en: { strip: ["Tokens", "Requests", "Cost", "Cache hit rate"], metric: ["Tokens", "Cost", "Requests"], split: ["Model", "Provider", "Agent"], all: "All providers", none: "No known price for these requests" },
+  zh: { strip: ["Token", "请求", "费用", "缓存命中率"], metric: ["Token", "费用", "请求"], split: ["模型", "供应商", "Agent"], all: "全部供应商", none: "这些请求没有已知价格" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -113,6 +113,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await p.locator('[data-view="usage"]').first().click();
       await p.locator("#usageTab .opt").nth(1).click();
       if (variant !== "none") await p.locator("#ledRank .rk").first().waitFor();
+      if (["many", "unpriced"].includes(variant)) await p.locator("#ledSplit .opt").nth(1).click();
       return { p, errors, asked, context };
     };
     const lastAsked = async (asked, want) => {
@@ -139,6 +140,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await p.locator("#ledScope").textContent(), lang === "zh" ? "统计网关调用与会话日志调用；本地拒绝的请求不计入汇总。" : "Gateway and session-log calls; local rejections excluded from totals.");
         assert.equal(await p.locator("#ledMetric .opt.on").textContent(), w.metric[0]);
         assert.equal(await p.locator("#ledSplit .opt.on").textContent(), w.split[0]);
+        assert.equal(await p.locator("#period .opt.on").textContent(), lang === "zh" ? "今天" : "Today");
+        assert.deepEqual(await names(p), ["claude-sonnet-5", "gpt-6-sol", "gpt-6-luna"]);
+        await p.locator("#ledSplit .opt").nth(1).click(); // exercise provider ranking below
         assert.deepEqual(await names(p), ["Claude", "Relay", "Codex"]);
         assert.deepEqual(await p.locator("#ledRank .rk-sw").evaluateAll((s) => s.map((x) => x.style.background)), ["var(--c1)", "var(--c2)", "var(--c3)"]);
         assert(/\d+%/.test(await p.locator("#ledRank .rk-b").first().textContent()), "a share");
@@ -194,11 +198,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(await names(p), ["Relay", "Codex", "Claude"]);
         assert.equal(await p.locator("#view-usage").evaluate((v) => v.scrollTop), before, "a click moved the page");
         // and what it is split by
-        await p.locator("#ledSplit .opt").nth(1).click();
-        assert.deepEqual(await names(p), ["Codex", "Claude Code"]);
         await p.locator("#ledSplit .opt").nth(2).click();
-        assert.deepEqual(await names(p), ["gpt-6-sol", "gpt-6-luna", "claude-sonnet-5"]);
+        assert.deepEqual(await names(p), ["Codex", "Claude Code"]);
         await p.locator("#ledSplit .opt").nth(0).click();
+        assert.deepEqual(await names(p), ["gpt-6-sol", "gpt-6-luna", "claude-sonnet-5"]);
+        await p.locator("#ledSplit .opt").nth(1).click();
         await p.locator("#ledMetric .opt").nth(0).click();
 
         // no rule of another part of the page reaches the ranking: nothing in it but the
@@ -245,10 +249,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       });
     }
 
-    await t.test("the metric and the split are remembered", async () => {
+    await t.test("the metric is remembered, while today and model are defaults", async () => {
       const first = await open("en", "light");
       await first.p.locator("#ledMetric .opt").nth(1).click();
-      await first.p.locator("#ledSplit .opt").nth(2).click();
+      await first.p.locator("#ledSplit .opt").nth(1).click();
+      await first.p.evaluate(() => localStorage.setItem("magpie.ledSplit", "provider"));
       const second = await open("en", "light", { ctx: first.context });
       assert.equal(await second.p.locator("#ledMetric .opt.on").textContent(), "Cost");
       assert.equal(await second.p.locator("#ledSplit .opt.on").textContent(), "Model");
