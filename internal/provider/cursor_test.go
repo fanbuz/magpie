@@ -94,6 +94,7 @@ func TestCollapseCursorModels(t *testing.T) {
 func TestCursorLegacyPicks(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	was := cursorStatus
@@ -161,6 +162,7 @@ func TestCursorContext(t *testing.T) {
 func TestCursorClientVersion(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	exe := CursorExecutable
 	defer func() { CursorExecutable = exe }()
 	CursorExecutable = func() string { return "" }
@@ -204,6 +206,7 @@ func TestTokenExpiry(t *testing.T) {
 func TestCursorPluginContext(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755)

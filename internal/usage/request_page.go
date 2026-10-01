@@ -40,7 +40,7 @@ type RequestPage struct {
 
 type packedRow struct {
 	Time                           time.Time
-	Text                           [18]uint32
+	Text                           [19]uint32
 	Tokens                         [5]int64
 	Millis, TTFT, FirstText, Order int64
 	Cost                           float64
@@ -58,8 +58,8 @@ type rowChunk struct {
 	Used      uint64
 }
 
-func rowText(r *Row) [17]*string {
-	return [17]*string{&r.Agent, &r.Provider, &r.Host, &r.SessionProvider, &r.SessionAccount, &r.Model, &r.Requested, &r.Served, &r.Effort, &r.Error, &r.ErrType, &r.RequestID, &r.Endpoint, &r.Session, &r.NativeSession, &r.Kind, &r.Source}
+func rowText(r *Row) [18]*string {
+	return [18]*string{&r.Agent, &r.Provider, &r.Host, &r.SessionProvider, &r.SessionAccount, &r.Model, &r.Requested, &r.Served, &r.Effort, &r.Error, &r.ErrType, &r.RequestID, &r.Endpoint, &r.Session, &r.NativeSession, &r.Kind, &r.Source, &r.Via}
 }
 func (c *rowChunk) add(r Row, msg string, order int64, failed bool) {
 	if c.dict == nil {
@@ -80,7 +80,7 @@ func (c *rowChunk) add(r Row, msg string, order int64, failed bool) {
 	for i, s := range rowText(&r) {
 		p.Text[i] = intern(*s)
 	}
-	p.Text[17] = intern(msg)
+	p.Text[18] = intern(msg)
 	if r.Priced {
 		p.Flags |= 1
 	}
@@ -93,6 +93,9 @@ func (c *rowChunk) add(r Row, msg string, order int64, failed bool) {
 	if r.SessionOfficialLogin {
 		p.Flags |= 8
 	}
+	if r.Routed {
+		p.Flags |= 32
+	}
 	if failed {
 		p.Flags |= 16
 	}
@@ -101,7 +104,7 @@ func (c *rowChunk) add(r Row, msg string, order int64, failed bool) {
 }
 func (c *rowChunk) row(i int) Row {
 	p := &c.Rows[i]
-	r := Row{Record: Record{Time: p.Time, Input: int(p.Tokens[0]), Output: int(p.Tokens[1]), CacheRead: int(p.Tokens[2]), CacheWrite: int(p.Tokens[3]), Reasoning: int(p.Tokens[4]), Millis: p.Millis, TTFT: p.TTFT, FirstText: p.FirstText, Status: int(p.Status), Rejected: p.Flags&4 != 0, SessionOfficialLogin: p.Flags&8 != 0}, Cost: p.Cost, Priced: p.Flags&1 != 0, Swapped: p.Flags&2 != 0}
+	r := Row{Record: Record{Time: p.Time, Input: int(p.Tokens[0]), Output: int(p.Tokens[1]), CacheRead: int(p.Tokens[2]), CacheWrite: int(p.Tokens[3]), Reasoning: int(p.Tokens[4]), Millis: p.Millis, TTFT: p.TTFT, FirstText: p.FirstText, Status: int(p.Status), Rejected: p.Flags&4 != 0, SessionOfficialLogin: p.Flags&8 != 0}, Cost: p.Cost, Priced: p.Flags&1 != 0, Swapped: p.Flags&2 != 0, Routed: p.Flags&32 != 0}
 	for i, s := range rowText(&r) {
 		*s = c.Strings[p.Text[i]]
 	}
@@ -198,8 +201,10 @@ func queryPage(p Period, f Filter, offset, limit int, readSource func(sessions.C
 	})
 	ids, _ := json.Marshal(provider.SessionIdentities(sessions.CodexDir()))
 	renamed, _ := json.Marshal(provider.Renamed())
-	prices, _ := json.Marshal(settings.Load().ModelPrices)
-	meta := fmt.Sprintf("%s|%s|%s|%s|%s", ids, renamed, prices, statKey(provider.Path()), statKey(catalog.CachePath()))
+	cfg := settings.Load()
+	prices, _ := json.Marshal(cfg.ModelPrices)
+	wires, _ := json.Marshal(cfg.ModelWires)
+	meta := fmt.Sprintf("%s|%s|%s|%s|%s|%s", ids, renamed, prices, wires, statKey(provider.Path()), statKey(catalog.CachePath()))
 	h := sha256.New()
 	for _, root := range sessions.DesktopDataDirs() {
 		for _, kind := range []string{"local-agent-mode-sessions", "claude-code-sessions"} {
@@ -209,7 +214,7 @@ func queryPage(p Period, f Filter, offset, limit int, readSource func(sessions.C
 			}
 		}
 	}
-	meta += fmt.Sprintf("|%x", h.Sum(nil))
+	meta += fmt.Sprintf("|%x|%s", h.Sum(nil), statKey(catalog.LivePath("antigravity")))
 	h.Reset()
 	fmt.Fprint(h, meta, statKey(Path()), time.Now().Format("2006-01-02 MST"))
 	for _, s := range sources {
@@ -246,7 +251,11 @@ func queryPage(p Period, f Filter, offset, limit int, readSource func(sessions.C
 	shared.Unlock()
 	price := pricer()
 	priceRow := func(r Record, source string) Row {
-		row := Row{Record: r, Source: source, Swapped: r.Served != "" && Swapped(r.Model, r.Served)}
+		sent := r.Model
+		if source == "" {
+			sent = provider.SentNameIn(cfg.ModelWires, r.Provider, r.Model, r.Effort)
+		}
+		row := Row{Record: r, Source: source, Swapped: r.Served != "" && Swapped(sent, r.Served), Routed: GroupRouted(sent, r.Served)}
 		if pr := price(r); pr != nil && r.Input+r.Output > 0 {
 			row.Priced = true
 			row.Cost = pr.Cost(r.Input, r.Output, r.CacheRead, r.CacheWrite)
@@ -426,7 +435,7 @@ func visibleLocal(chunks []*rowChunk) map[rowRef]bool {
 	seen := map[string]bool{}
 	for _, c := range chunks {
 		for i, p := range c.Rows {
-			msg := c.Strings[p.Text[17]]
+			msg := c.Strings[p.Text[18]]
 			if msg == "" {
 				continue
 			}

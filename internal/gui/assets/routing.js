@@ -145,7 +145,7 @@
   }
   const tokens = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(Math.round(n));
   const pct = (n) => Math.round(n) + "%";
-  const FAIL = { rate: "rate limited", credit: "out of credit", quota: "quota used up", other: "failed", canceled: "canceled", foreign: "another account's reasoning", floor: "reply too short", verify: "needs verification", refused: "refused (safety filter)", shape: "request not understood" };
+  const FAIL = { rate: "rate limited", credit: "out of credit", quota: "quota used up", other: "failed", canceled: "canceled", foreign: "another account's reasoning", floor: "reply too short", verify: "needs verification", refused: "refused (safety filter)", shape: "request not understood", proxy: "proxy not reachable" };
   const failWord = (why) => t(FAIL[why] || "failed");
   const API = { anthropic: "Anthropic", chat: "OpenAI", responses: "OpenAI Responses", gemini: "Gemini" };
   const MODES = {
@@ -455,11 +455,10 @@
     let name = w ? `${who(w)} (${w.model})` : tr.id;
     if (tr.effort) name += " " + t("at {level} reasoning", { level: tr.effort });
     if (!tr.done) return t("{who} is answering…", { who: name });
-    // a Codex or Claude reset spent by itself: with Codex's own sign-in
-    // the one try it was spent for is the one that then answered
-    const claude = tr.reset?.agent === "claude";
+    // a Codex reset spent by itself: with Codex's own sign-in the one try
+    // it was spent for is the one that then answered
     const spent = tr.reset && tr.status < 400
-      ? t(claude ? "Its week was used up, so one of {account}'s Claude resets was used by itself first." : "Its week was used up, so one of {account}'s Codex resets was used by itself first.", { account: tr.reset.who }) + " "
+      ? t("Its week was used up, so one of {account}'s Codex resets was used by itself first.", { account: tr.reset.who }) + " "
       : "";
     if (tr.status < 400) {
       const tk = (r.tokens ? " · " + t("{n} tokens", { n: tokens(r.tokens) }) : "") + firstNote(r, tr);
@@ -468,9 +467,7 @@
         : t("{who} answered in {ms}{tk}.", { who: name, ms: took(tr.ms), tk }));
     }
     if (tr.reset)
-      return t(claude
-        ? "{who} answered {status}: its week is used up and nobody else could take the request, so one of {account}'s Claude resets was used by itself and the request is asked again, before any of the reply reaches {agent}."
-        : "{who} answered {status}: its week is used up and nobody else could take the request, so one of {account}'s Codex resets was used by itself and the request is asked again, before any of the reply reaches {agent}.",
+      return t("{who} answered {status}: its week is used up and nobody else could take the request, so one of {account}'s Codex resets was used by itself and the request is asked again, before any of the reply reaches {agent}.",
         { who: name, status: tr.status, account: tr.reset.who, agent });
     if (tr.fail === "canceled")
       return t("{agent} canceled the request while {who} was answering: nobody failed, so nobody rests and nobody else is asked.", { who: name, agent });
@@ -486,6 +483,10 @@
         : t("{who}'s safety filter refused the request before saying anything, and nobody is left to try, so {agent} gets an error saying so, not an empty reply to ask again for.", { who: name, agent });
     if (tr.fail === "shape")
       return t("{who} answered {status}: its API couldn't read something in the request that another's may, so it goes on to the next before any of the reply reaches {agent}. Nothing is wrong with {who}, so it doesn't rest.", { who: name, status: tr.status, agent });
+    if (tr.fail === "proxy")
+      return r.tries[i + 1]
+        ? t("{who}: the proxy magpie goes through didn't take the connection, so the request never reached the vendor and goes on to the next. Nothing is wrong with {who}, so it doesn't rest: once the proxy is up it is asked first again.", { who: name })
+        : t("{who}: the proxy magpie goes through didn't take the connection, so the request never reached the vendor, and nobody is left to try: {agent} gets the error. Start the proxy, or change it in Settings.", { who: name, agent });
     if (tr.again)
       return t("{who} answered {status} · {fail}, and nobody else is left to ask — a failure that may pass, so it is tried again in {d}, before any of the reply reaches {agent}.",
         { who: name, status: tr.status, fail: failWord(tr.fail), d: took(tr.again), agent });
@@ -965,6 +966,8 @@
       }
       // the reply said another model answered it
       if (tr.done && tr.status < 400 && tr.swapped) items.push([swapWhy(tr), "swap", tr]);
+      // another magpie's routing group named the member it routed to
+      else if (tr.done && tr.status < 400 && tr.routed) items.push([routedWhy(tr), "aside", tr]);
     });
     if (r.done && !r.tries.length) items.push([t("Nothing was tried: {error}", { error: r.error || r.status }), "bad"]);
     const key = JSON.stringify([r.kind, items.map(([s, c, tr]) => [s, c, tr?.model, tr?.served])]);
@@ -1022,6 +1025,16 @@
   }
   const swapWhy = (tr) => t("The vendor was asked for {sent}, and its reply says {served} answered it: another model, not just {sent} under a dated name.", { sent: tr.model, served: tr.served });
   window.swapWhy = swapWhy; // the Usage page's Requests say it too
+  // a try that asked a remote magpie for one of its routing groups: the
+  // reply names the member the group routed to, which is the group
+  // picking, not a swap — shown plain, as a model that answered
+  function routedTag(tr) {
+    const k = el("span", "routed", t("served {served}", { served: tr.served }));
+    k.title = routedWhy(tr);
+    return k;
+  }
+  const routedWhy = (tr) => t("{sent} is a routing group of the remote magpie, and it routed the request to {served}: the group picking one of its models, not the vendor swapping the model.", { sent: tr.model, served: tr.served });
+  window.routedWhy = routedWhy;
   function kindWhy(r) {
     const agent = agentName(r.agent);
     if (r.kind === "luna_reserve") return t("{agent} sent this turn on Luna Reserve, which it turns to once the plan's own allowance is used up; it picks the model itself.", { agent });
@@ -1146,7 +1159,7 @@
       // all the row says, and its titles
       const title = reqTitle(r, how, tr);
       const sig = JSON.stringify([lang, said, how, title, r.time, r.agent, agentName(r.agent), ag?.icon, r.model, r.provider, r.kind, r.effort,
-        tr?.effort, tr?.picked, tr?.fixed, tr?.swapped && tr.done && tr.status < 400 ? [tr.model, tr.served] : 0, meta]);
+        tr?.effort, tr?.picked, tr?.fixed, tr?.swapped && tr.done && tr.status < 400 ? [tr.model, tr.served] : 0, tr?.routed && tr.done && tr.status < 400 ? tr.served : 0, meta]);
       ids.add(r.id);
       let x = reqRows.get(r.id);
       if (!x || x.sig !== sig) {
@@ -1195,6 +1208,7 @@
       to.append(ef);
     }
     if (tr?.swapped && tr.done && tr.status < 400) to.append(swapTag(tr, true)); // beside the model asked for
+    else if (tr?.routed && tr.done && tr.status < 400) to.append(routedTag(tr));
     b.append(when, asked, to, el("span", "meta", meta.join(" · ")));
     b.title = title;
     return b;
@@ -2637,6 +2651,7 @@
       const model = tr?.model || w?.model;
       if (model) to.append(el("span", "pr-m", model));
       if (tr?.swapped && tr.done) to.append(swapTag(tr, true));
+      else if (tr?.routed && tr.done) to.append(routedTag(tr));
     }
     const meta = [];
     if (r.tries.length > 1) meta.push(t("{n} tries", { n: r.tries.length }));

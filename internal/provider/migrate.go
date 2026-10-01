@@ -527,6 +527,12 @@ func move(ctx context.Context, id string, mv *mover) (err error) {
 			notePluginLapse(pp, moved[i].Key, http.StatusUnauthorized)
 			continue
 		}
+		if err != nil && signInGone.MatchString(err.Error()) {
+			// the plugin says in words the sign-in is gone (Grok's past
+			// its time): it moves along untried, as a lapsed one does, and
+			// unmarked, as the plugin's own reads leave its accounts
+			continue
+		}
 		if err != nil {
 			return &moveError{MoveWhy{Code: "account", Args: map[string]string{"user": a.User, "error": err.Error()}}, fmt.Sprintf("%s doesn't work through the plugin: %s", a.User, err), err}
 		}

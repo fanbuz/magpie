@@ -33,6 +33,11 @@ method's questions (a pick, then a text the plugin checks), then takes the
 code the browser page shows; an API-key way opens the account. English and
 Chinese, Chromium and WebKit, with the API faked.
 
+`plugin-key-hint.test.cjs` checks a plugin's API-key way: its label titles
+the key's field and its placeholder is the field's hint, while a way labelled
+only "API key" keeps "<name> API key"; the provider's own icon shows on its
+row. English and Chinese, Chromium and WebKit, with the API faked.
+
 `plugin-market.test.cjs` checks the Plugins tab: Discover lists the
 suggested plugins in their two sections, a card installs its plugin and
 then offers its sign-in, which opens in the Providers add sheet; a search
@@ -48,6 +53,15 @@ scrolled to its end, in the tray panel (one agent open) and in the window:
 "Show {n} more" unrolls the rest under the button, the view going down with
 them and never back up; "Show less", and a row opened and closed, leave what
 was clicked where it is on every frame.
+
+`rollup-short.test.cjs` folds the Agents page's list in a window taller
+than the list rolled up (#355): 24 agents, 5 in use and 19 folded, 4 of
+them hidden. "Show {n} more" takes the button up the view; "Show less"
+leaves it where it is on every frame painted, the room kept at the view's
+foot measured from where the content ends rather than from scrollHeight
+(never less than the view is tall), and the room goes once the reader
+scrolls back to the top. With Reduce motion and without, Chromium and
+WebKit, English and Chinese.
 
 `rail-tip.test.cjs` hovers the model picker's rail in Chromium and WebKit,
 English light and Chinese dark: an icon's name shows to its right, level with
@@ -83,6 +97,15 @@ small model, which doesn't follow the model, stays a picker.
 `gateway-fold.test.cjs` folds Connect on the Gateway page with the view
 scrolled: its fields hide, the head keeps the base URL and a copy button, the
 head stays where it was, and the fold is remembered across a reload.
+
+`sse-body.test.cjs` opens streamed replies in the Gateway page's recent
+calls (Anthropic Messages, Chat Completions with `[DONE]`, OpenAI Responses cut
+before it completed): the response body reads as each event's data
+pretty-printed under its name, as the reply put together (text, reasoning, tool
+calls with their arguments as objects, how it stopped, usage) or as it came,
+the pick remembered. A 450-event stream draws 200 at a time from a button under
+the box that stays where it is, the page too; a body that isn't a stream is as
+before. English and Chinese, Chromium and WebKit.
 
 `routing-kind.test.cjs` lists calls Codex makes for itself (a guardian review,
 a title, memories, a turn on Luna Reserve, a kind it does not know yet): each
@@ -124,6 +147,15 @@ under the model's dated name and ones naming none: only the first is marked
 "served gpt-6-luna" by its answer in the Requests list and "requested
 gpt-6-sol · served gpt-6-luna" in its story, in English and Chinese, and the
 click that picks it leaves the page where it is.
+
+`remote-group-served.test.cjs` lists a request sent to a remote magpie for one
+of its routing groups (group/auto-deepseek-v4-1-flash answered by
+deepseek/deepseek-v4.1-flash) beside a real swap: the group's member is shown
+plain, not amber, in the Routing page's Requests list, with a title (and a
+line in its story) saying the remote magpie's group routed the request there,
+and muted with the same title in the Usage page's Requests, while the swap
+stays amber; Chromium and WebKit, English and Chinese, and the click that
+picks it leaves the page where it is.
 
 `routing-reroute-title.test.cjs` lists a request the plan's account rate
 limited and a relay took, and one answered on its first try: the rerouted
@@ -212,6 +244,12 @@ unchanged posts nothing; a save of another setting keeps them; Off unticks
 them all, closing the menu and the refresh row; no row has a left-border
 stripe and no click moves the page; in English and Chinese.
 
+`tray-logos.test.cjs` turns the menu bar's logos off and on in Settings: on a
+Mac with a card in the menu bar the Menu bar logos row shows On by default;
+Off posts `trayNoLogos: true`, a save of another setting keeps it, On posts it
+back; the row has no left-border stripe, no click moves the page, and there is
+no row with no card picked nor off a Mac; in English and Chinese.
+
 `text-size.test.cjs` checks the Settings page's Text size row (100, 110,
 125 and 150%): a pick posts to /api/settings/text-size without scrolling
 the page, stays picked after a reload (boot.js carries it, and the page's
@@ -248,6 +286,13 @@ and Chinese.
 `sync-update.test.cjs` checks the header's refresh button looks for a newer
 magpie too: one click, one check, and the Update pill shows what it found.
 Its tooltip says so. English and Chinese.
+
+`update-hide.test.cjs` keeps the header's Update pill away when asked (Wang
+Hsiaohi on Discord): its ×, shown with the pointer over the pill, hides it for
+that version, through a reload, until a newer one is out; a right-click does
+the same. Settings → Update button says which version it is hidden for, with
+Show again, and turns it off for good; the version row still offers the
+restart. No click moves the page. Panel and window, English and Chinese.
 
 `add-sheet.test.cjs` opens the Providers page's add sheet as quiet rows:
 Subscriptions, Vendors, Relays and On this machine, each with its word on
@@ -305,7 +350,8 @@ them afresh; in English and Chinese.
 from a faked `/api/usage/requests`: the columns, the model asked for, the
 provider and account, the model sent, "gpt-6-luna" amber by the one a vendor
 answered with another model and plain on a dated name, a failure's red dot
-and 429, the totals over them. Older and Newer page through 130 requests
+and 429 and its agent, on another computer whose magpie passed it on, as
+"Codex · via office-mac", the totals over them. Older and Newer page through 130 requests
 with the pager held where it was; the agent, Failed and search filters and
 the period ask the server again from the first page; Export CSV posts the
 filters shown with no page and says where the file went. At the window's
@@ -442,6 +488,14 @@ it went on to the next and that the first doesn't rest, tagged "request not
 understood", in English and Chinese, never "an error another account
 wouldn't fix"; picking the request doesn't move the page. The API is faked.
 
+`routing-proxy.test.cjs` opens a group request whose first member's proxy
+wasn't listening (#381: "proxyconnect tcp: … 127.0.0.1:1082: connection
+refused") and whose next member answered: the Routing page says the request
+never reached the vendor, went on to the next and that the first doesn't
+rest, tagged "proxy not reachable", in English and Chinese, never "an error
+another account wouldn't fix"; picking the request doesn't move the page.
+Chromium and WebKit, API faked.
+
 `s3-sync.test.cjs` sets up sync to an S3 bucket from Settings (#296). It
 works as follows, in English and Chinese:
 
@@ -542,15 +596,16 @@ reset used by itself: a try out of its week says whose reset was used and
 that the request was asked again, and Codex's own sign-in answering after
 one says so before it answered; English and Chinese, Chromium and WebKit.
 
-`claude-resets.test.cjs` checks a Claude account's usage-limit resets (a Max
-subscriber's Opus 5.5 launch reset): the Usage page's card and the menu bar
-panel's say how many and until when; Auto-use posts
-`settings/claude-auto-reset` for that account; "Use a reset" asks first, as a
-Claude reset (the one Anthropic names next), then posts `usage/claude-reset`
-and says what came of it, Anthropic's `not_limited` in words. The Routing
-page's story names a Claude reset used by itself as Claude's. No click moves
-the page, nothing has a left-border accent; English and Chinese, Chromium and
-WebKit.
+`claude-risk.test.cjs` checks starting a Claude sign-in first says Anthropic
+may ban the account, as Command Code's does, and asks nothing of the backend
+until "Sign in anyway"; the click moves nothing, no left-border accent.
+English and Chinese, Chromium and WebKit.
+
+`claude-usage-asked.test.cjs` checks a Claude account's usage is only asked
+for when the reader opens Usage or presses Refresh: opening the page and
+Refresh load `usage/quotas?asked=1`, the timed reload and the window coming
+back don't; an asked load isn't swallowed by one already on its way.
+Chromium and WebKit.
 `panel-effort.test.cjs` opens a row in the tray panel whose effort is not one
 of the levels offered (omp at auto, an agent with none set): the slider shows
 it as it is ("auto", "default"; 自动 in Chinese) at a stop of its own, a touch
@@ -614,10 +669,20 @@ typed under More endpoints and goes with it, and Save then posts
 `searches: false`. A signed-in account (Codex) has no such row. Every
 string has its Chinese; English and Chinese, Chromium and WebKit.
 
+`lan-docker.test.cjs` checks Share on local network in a container (Discord:
+magpie in Docker on a NAS showed the container's own 172.17.x address).
+Opened over the network from `magpie web`, the address is the host the page
+was opened at, on the gateway's port, with an "In a container" row saying so;
+the OpenAI/Anthropic switch keeps that host and doesn't move the page. Opened
+at localhost, the container's address stays and the row says it is the
+container's own and to set `MAGPIE_PUBLIC_URL`. Outside a container nothing
+changes. No coloured left border; English and Chinese, Chromium and WebKit,
+with `/api/plugins` faked.
+
 With Node.js and Playwright available:
 
 ```sh
-node --test internal/gui/tests/menu-scroll.test.cjs internal/gui/tests/click-scroll.test.cjs internal/gui/tests/panel-fold.test.cjs internal/gui/tests/panel-routing.test.cjs internal/gui/tests/gateway-fold.test.cjs internal/gui/tests/routing-kind.test.cjs internal/gui/tests/balance-fix.test.cjs internal/gui/tests/cli-update.test.cjs internal/gui/tests/login-import.test.cjs internal/gui/tests/agy-launch.test.cjs internal/gui/tests/currency.test.cjs internal/gui/tests/usage-ledger.test.cjs internal/gui/tests/update-check.test.cjs internal/gui/tests/omarchy.test.cjs internal/gui/tests/brand.test.cjs internal/gui/tests/library-loading.test.cjs internal/gui/tests/signin-callback.test.cjs internal/gui/tests/routing-steady.test.cjs internal/gui/tests/old-webkit.test.cjs internal/gui/tests/session-terminal.test.cjs internal/gui/tests/text-size.test.cjs internal/gui/tests/zcode-site.test.cjs internal/gui/tests/rail-tip.test.cjs internal/gui/tests/sync-update.test.cjs internal/gui/tests/plugin-signin.test.cjs internal/gui/tests/plugin-market.test.cjs internal/gui/tests/s3-sync.test.cjs internal/gui/tests/routing-wb-refused.test.cjs internal/gui/tests/routing-shape.test.cjs internal/gui/tests/market-have.test.cjs internal/gui/tests/sessions-today.test.cjs internal/gui/tests/routing-side-calls.test.cjs internal/gui/tests/import-all-skills.test.cjs internal/gui/tests/routing-flood.test.cjs internal/gui/tests/routing-busy.test.cjs internal/gui/tests/own-skill.test.cjs internal/gui/tests/routing-manual.test.cjs internal/gui/tests/tray-usages.test.cjs internal/gui/tests/provider-remove.test.cjs internal/gui/tests/signin-link.test.cjs internal/gui/tests/tray-inuse.test.cjs internal/gui/tests/codex-auto-reset.test.cjs internal/gui/tests/routing-auto-reset.test.cjs internal/gui/tests/claude-resets.test.cjs internal/gui/tests/library-toggle-status.test.cjs internal/gui/tests/library-all.test.cjs internal/gui/tests/routing-reroute-title.test.cjs internal/gui/tests/plain-names.test.cjs internal/gui/tests/panel-effort.test.cjs internal/gui/tests/agent-models-all-hidden.test.cjs internal/gui/tests/omp-roles.test.cjs internal/gui/tests/claude-effort.test.cjs internal/gui/tests/remote-magpie.test.cjs internal/gui/tests/qoder-cn-tile.test.cjs internal/gui/tests/provider-levels-scroll.test.cjs internal/gui/tests/signin-paste-codex.test.cjs internal/gui/tests/usage-alert.test.cjs internal/gui/tests/quota-families.test.cjs internal/gui/tests/provider-search.test.cjs internal/gui/tests/webdav-settings-refresh.test.cjs internal/gui/tests/usage-ledger-detail.test.cjs internal/gui/tests/usage-ledger-chart.test.cjs internal/gui/tests/panel-usage.test.cjs internal/gui/tests/usage-refresh.test.cjs internal/gui/tests/usage-ledger-content.test.cjs
+node --test internal/gui/tests/menu-scroll.test.cjs internal/gui/tests/click-scroll.test.cjs internal/gui/tests/panel-fold.test.cjs internal/gui/tests/rollup-short.test.cjs internal/gui/tests/panel-routing.test.cjs internal/gui/tests/gateway-fold.test.cjs internal/gui/tests/routing-kind.test.cjs internal/gui/tests/balance-fix.test.cjs internal/gui/tests/cli-update.test.cjs internal/gui/tests/login-import.test.cjs internal/gui/tests/agy-launch.test.cjs internal/gui/tests/currency.test.cjs internal/gui/tests/usage-ledger.test.cjs internal/gui/tests/update-check.test.cjs internal/gui/tests/omarchy.test.cjs internal/gui/tests/brand.test.cjs internal/gui/tests/library-loading.test.cjs internal/gui/tests/signin-callback.test.cjs internal/gui/tests/routing-steady.test.cjs internal/gui/tests/old-webkit.test.cjs internal/gui/tests/session-terminal.test.cjs internal/gui/tests/text-size.test.cjs internal/gui/tests/zcode-site.test.cjs internal/gui/tests/rail-tip.test.cjs internal/gui/tests/sync-update.test.cjs internal/gui/tests/plugin-signin.test.cjs internal/gui/tests/plugin-market.test.cjs internal/gui/tests/s3-sync.test.cjs internal/gui/tests/routing-wb-refused.test.cjs internal/gui/tests/routing-shape.test.cjs internal/gui/tests/market-have.test.cjs internal/gui/tests/sessions-today.test.cjs internal/gui/tests/routing-side-calls.test.cjs internal/gui/tests/import-all-skills.test.cjs internal/gui/tests/routing-flood.test.cjs internal/gui/tests/routing-busy.test.cjs internal/gui/tests/own-skill.test.cjs internal/gui/tests/routing-manual.test.cjs internal/gui/tests/tray-usages.test.cjs internal/gui/tests/provider-remove.test.cjs internal/gui/tests/signin-link.test.cjs internal/gui/tests/tray-inuse.test.cjs internal/gui/tests/codex-auto-reset.test.cjs internal/gui/tests/routing-auto-reset.test.cjs internal/gui/tests/claude-usage-asked.test.cjs internal/gui/tests/claude-risk.test.cjs internal/gui/tests/library-toggle-status.test.cjs internal/gui/tests/library-all.test.cjs internal/gui/tests/routing-reroute-title.test.cjs internal/gui/tests/plain-names.test.cjs internal/gui/tests/panel-effort.test.cjs internal/gui/tests/agent-models-all-hidden.test.cjs internal/gui/tests/omp-roles.test.cjs internal/gui/tests/claude-effort.test.cjs internal/gui/tests/remote-magpie.test.cjs internal/gui/tests/qoder-cn-tile.test.cjs internal/gui/tests/provider-levels-scroll.test.cjs internal/gui/tests/signin-paste-codex.test.cjs internal/gui/tests/usage-alert.test.cjs internal/gui/tests/quota-families.test.cjs internal/gui/tests/provider-search.test.cjs internal/gui/tests/webdav-settings-refresh.test.cjs internal/gui/tests/lan-docker.test.cjs internal/gui/tests/plugin-key-hint.test.cjs internal/gui/tests/update-hide.test.cjs internal/gui/tests/tray-logos.test.cjs internal/gui/tests/routing-proxy.test.cjs internal/gui/tests/sse-body.test.cjs internal/gui/tests/remote-group-served.test.cjs internal/gui/tests/usage-ledger-detail.test.cjs internal/gui/tests/usage-ledger-chart.test.cjs internal/gui/tests/panel-usage.test.cjs internal/gui/tests/usage-refresh.test.cjs internal/gui/tests/usage-ledger-content.test.cjs
 ```
 
 If Playwright is installed outside the repository, set `NODE_PATH` to the

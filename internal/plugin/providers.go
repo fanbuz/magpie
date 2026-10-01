@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/settings"
+	"github.com/yetone/magpie/internal/steady"
 )
 
 // Method is a way a plugin signs in: "oauth" (a browser, then a code
@@ -20,6 +21,20 @@ import (
 type Method struct {
 	Type  string `json:"type"`
 	Label string `json:"label"`
+	// Placeholder is the hint an "api" method gives in its key's field
+	// (magpie's own field: OpenCode's says "API key")
+	Placeholder string `json:"placeholder,omitempty"`
+}
+
+// KeyTitle is what an "api" method's key is asked as: its label, as
+// OpenCode's dialog titles it, unless that only says "API key" (or
+// nothing), when it is name's API key.
+func (m Method) KeyTitle(name string) string {
+	l := strings.TrimSpace(m.Label)
+	if l == "" || strings.EqualFold(l, "API key") {
+		return name + " API key"
+	}
+	return l
 }
 
 // Model is a model a plugin's provider serves, as OpenCode lists it.
@@ -56,6 +71,9 @@ type Provider struct {
 	NPM     string   `json:"npm"`
 	API     string   `json:"api"`
 	Methods []Method `json:"methods"`
+	// Icon is the picture the plugin gives the provider, as it said it:
+	// an https URL or a data:image URI (internal/provider keeps it)
+	Icon string `json:"icon,omitempty"`
 	// Usage says the plugin tells each account's allowance (auth.usage)
 	Usage     bool    `json:"usage"`
 	SignedIn  bool    `json:"signedIn"`
@@ -116,7 +134,7 @@ func Providers(ctx context.Context) ([]Provider, error) {
 	provCache, provGood = ps, true
 	provMu.Unlock()
 	if b, err := json.Marshal(ps); err == nil {
-		_ = os.WriteFile(providersPath(), b, 0o600)
+		_ = writeWhole(providersPath(), b)
 	}
 	return ps, nil
 }
@@ -128,7 +146,7 @@ func Providers(ctx context.Context) ([]Provider, error) {
 // why, rather than going as if it were removed.
 func keepUnloaded(ps, last []Provider) []Provider {
 	if last == nil {
-		if b, err := os.ReadFile(providersPath()); err == nil {
+		if b, err := steady.ReadFile(providersPath()); err == nil {
 			_ = json.Unmarshal(b, &last)
 		}
 	}
@@ -180,7 +198,7 @@ func Cached() []Provider {
 	good := provGood
 	provMu.Unlock()
 	if ps == nil {
-		if b, err := os.ReadFile(providersPath()); err == nil {
+		if b, err := steady.ReadFile(providersPath()); err == nil {
 			_ = json.Unmarshal(b, &ps)
 		}
 	}
@@ -285,7 +303,7 @@ func firstNonEmpty(ss ...string) string {
 
 func readAuth() map[string]storedAuth {
 	var m map[string]storedAuth
-	if b, err := os.ReadFile(AuthPath()); err == nil {
+	if b, err := steady.ReadFile(AuthPath()); err == nil {
 		_ = json.Unmarshal(b, &m)
 	}
 	return m
@@ -416,7 +434,7 @@ func SignOut(ctx context.Context, provider, account string) error {
 		return Call(ctx, "signOut", map[string]any{"provider": provider, "account": account}, nil)
 	}
 	var m map[string]json.RawMessage
-	b, err := os.ReadFile(AuthPath())
+	b, err := steady.ReadFile(AuthPath())
 	if err != nil {
 		return nil
 	}
@@ -429,7 +447,7 @@ func SignOut(ctx context.Context, provider, account string) error {
 		}
 	}
 	b, _ = json.MarshalIndent(m, "", "  ")
-	if err := os.WriteFile(AuthPath(), append(b, '\n'), 0o600); err != nil {
+	if err := writeWhole(AuthPath(), append(b, '\n')); err != nil {
 		return err
 	}
 	changed()
@@ -523,7 +541,7 @@ func Check(ctx context.Context, provider, account string) (Checked, error) {
 // Auths are provider's sign-ins as plugin-auth.json keeps them, by key.
 func Auths(provider string) map[string]map[string]any {
 	var m map[string]map[string]any
-	if b, err := os.ReadFile(AuthPath()); err == nil {
+	if b, err := steady.ReadFile(AuthPath()); err == nil {
 		_ = json.Unmarshal(b, &m)
 	}
 	out := map[string]map[string]any{}

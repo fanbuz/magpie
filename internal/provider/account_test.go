@@ -222,6 +222,8 @@ func claudeHome(t *testing.T) string {
 	isolate(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// Windows finds the home in USERPROFILE
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	forgetClaudeCredential()
@@ -460,6 +462,7 @@ func TestCopilotSignAndModels(t *testing.T) {
 // Logging out of Claude Code can leave its credentials behind; what the CLI
 // says wins, so a signed-out account is not a provider.
 func TestClaudeSignedOut(t *testing.T) {
+	shellFakes(t)
 	home := claudeHome(t)
 	claudeSignIn(t, home, time.Now().Add(time.Hour))
 	status := `{"loggedIn": true, "email": "me@example.com", "subscriptionType": "max"}`

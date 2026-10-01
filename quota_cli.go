@@ -21,7 +21,8 @@ const quotaUsage = `usage: magpie quota [<provider>…] [--json]
   what is left of every subscription, plan and key magpie has: each window's use and
   when it starts again, and each key's balance, asked of the vendors now (or less than
   a minute ago). --json is for scripts and agents; the gateway answers the same at
-  GET http://127.0.0.1:3425/v1/magpie/quotas
+  GET http://127.0.0.1:3425/v1/magpie/quotas, and to another machine only while magpie is
+  shared on the local network, with its key as the API key (Authorization: Bearer or x-api-key)
   A Codex account that holds rate-limit resets says how many; quota reset spends one,
   starting the account's current windows again (the one Codex is signed in to unless
   named). It can't be undone, so it asks first; --yes doesn't. quota auto-reset on lets
@@ -61,6 +62,7 @@ func quotaCmd(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	qs := []provider.Quota{}
+	provider.AskClaudeUsage()
 	for _, q := range provider.QuotaReport(ctx, time.Now()) {
 		if len(only) == 0 || quotaMatches(q, only) {
 			qs = append(qs, q)

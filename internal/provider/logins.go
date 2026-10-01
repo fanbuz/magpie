@@ -24,6 +24,7 @@ import (
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/plugin"
+	"github.com/yetone/magpie/internal/steady"
 )
 
 // Login is a remembered subscription account, without its secrets.
@@ -148,7 +149,7 @@ func writePrivate(path string, b []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return steady.Rename(tmp.Name(), path)
 }
 
 func upsertLogin(ls []savedLogin, l savedLogin) []savedLogin {

@@ -77,6 +77,10 @@ type Record struct {
 	// Kind is what the agent made the call for when it isn't a turn of
 	// the conversation: a Codex subagent's (review, compact, guardian…)
 	Kind string `json:"kind,omitempty"`
+	// Via is the computer whose magpie passed the call on to this one (a
+	// Remote magpie provider there), Agent being the agent's on it; "" for
+	// a call made on this computer
+	Via string `json:"via,omitempty"`
 }
 
 // Path is the log file: ~/.config/magpie/usage.jsonl (XDG-aware).
@@ -506,7 +510,7 @@ func LastSeen(agent string) time.Time {
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		var r Record
-		if json.Unmarshal(sc.Bytes(), &r) == nil && r.Agent == agent && r.Time.After(last) {
+		if json.Unmarshal(sc.Bytes(), &r) == nil && r.Agent == agent && r.Via == "" && r.Time.After(last) {
 			last = r.Time
 		}
 	}

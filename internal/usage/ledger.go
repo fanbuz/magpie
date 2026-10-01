@@ -27,6 +27,8 @@ type Row struct {
 	Cost    float64 `json:"cost"`
 	Priced  bool    `json:"priced"`
 	Swapped bool    `json:"swapped,omitempty"`
+	// Routed marks a remote magpie group answered by one of its members.
+	Routed bool `json:"routed,omitempty"`
 	// Source is "log" for a call read from an agent's own session file,
 	// which the gateway never saw: no status, no provider, no model asked
 	// for, but what the file says of the call. "" for one the gateway logged.
@@ -132,7 +134,9 @@ func (l Ledgered) Filtered(f Filter) Ledgered {
 	return out
 }
 
-// Ledger is LedgerOf's rows, sum and agents.
+// Ledger is LedgerOf's rows, sum and agents. Model comparisons use the
+// current upstream names and recorded effort; historical records do not
+// retain the exact name sent to the vendor.
 func Ledger(p Period, f Filter) (rows []Row, sum Totals, agents []string) {
 	l := LedgerOf(p, f)
 	return l.Rows, l.Sum, l.Agents
@@ -240,6 +244,7 @@ func gatewayMatches(recs []Record, logs []sessions.Call) map[int]bool {
 
 func ledgerWith(since time.Time, f Filter, recs []Record, logs []sessions.Call) (rows []Row, sum Totals, agents, providers []string) {
 	renamed := provider.Renamed()
+	wires := settings.Load().ModelWires
 	priceOf := pricer()
 	rows = make([]Row, 0, len(recs)+len(logs))
 	agents, providers = []string{}, []string{}
@@ -258,7 +263,11 @@ func ledgerWith(since time.Time, f Filter, recs []Record, logs []sessions.Call) 
 		if !r.IsRejected() {
 			sum.add(r, pr)
 		}
-		row := Row{Record: r, Swapped: r.Served != "" && Swapped(r.Model, r.Served), Source: source}
+		sent := r.Model
+		if source == "" {
+			sent = provider.SentNameIn(wires, r.Provider, r.Model, r.Effort)
+		}
+		row := Row{Record: r, Swapped: r.Served != "" && Swapped(sent, r.Served), Routed: GroupRouted(sent, r.Served), Source: source}
 		if pr != nil && r.Input+r.Output > 0 {
 			row.Cost, row.Priced = pr.Cost(r.Input, r.Output, r.CacheRead, r.CacheWrite), true
 		}

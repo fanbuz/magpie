@@ -188,6 +188,7 @@
 .rt-req .asked.kinded .m { flex: none; max-width: calc(100% - 3.2em - 40px); }
 .rt-req .to .swap, .rt-steps li .swap { font-size: 10.5px; line-height: 16px; padding: 0 5px; border-radius: 5px; color: var(--amber); background: var(--amber-soft); white-space: nowrap; }
 .rt-req .to .swap { flex: none; max-width: 70%; }
+.rt-req .to .routed, .pr-to .routed { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; font-size: 10.5px; line-height: 16px; color: var(--muted); white-space: nowrap; }
 .rt-steps li.swap::before { background: var(--amber); }
 .rt-req .meta { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
 /* one line wants room for the time, the model, where it went at what

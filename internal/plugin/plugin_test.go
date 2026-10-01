@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -121,7 +122,7 @@ func TestFakePlugin(t *testing.T) {
 	if saved["fakeco"]["type"] != "oauth" || saved["fakeco"]["refresh"] != "r-blue" || saved["fakeco"]["accountId"] != "blue@fake" {
 		t.Fatalf("saved %v", saved)
 	}
-	if fi, _ := os.Stat(AuthPath()); fi.Mode().Perm() != 0o600 {
+	if fi, _ := os.Stat(AuthPath()); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 { // Windows keeps no mode bits
 		t.Fatalf("plugin-auth.json is %v", fi.Mode().Perm())
 	}
 	if !SignedIn("fakeco") {

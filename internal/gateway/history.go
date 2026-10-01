@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/usage"
 )
 
 const (
@@ -169,6 +170,7 @@ func History(day string) (days []HistoryDay, routes []Route, cut bool) {
 				}
 				var r Route
 				if json.Unmarshal(line, &r) == nil {
+					r.routedAgain()
 					routes = append(routes, r)
 				}
 			})
@@ -184,6 +186,20 @@ func History(day string) (days []HistoryDay, routes []Route, cut bool) {
 		routes, cut = routes[len(routes)-historyMax:], true
 	}
 	return days, routes, cut
+}
+
+// routedAgain reads a route kept before Routed was: a try that asked
+// another magpie's routing group was marked swapped for the member it
+// routed to, and is routed (usage.GroupRouted).
+func (r *Route) routedAgain() {
+	for i := range r.Tries {
+		if tr := &r.Tries[i]; tr.Swapped && usage.GroupRouted(tr.Model, tr.Served) {
+			tr.Swapped, tr.Routed = false, true
+		}
+	}
+	if n := len(r.Tries); n > 0 && r.Swapped && r.Tries[n-1].Routed && r.Served == r.Tries[n-1].Served {
+		r.Swapped, r.Routed = false, true
+	}
 }
 
 // readDay calls f with each line of a day's file.

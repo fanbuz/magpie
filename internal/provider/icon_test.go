@@ -18,6 +18,7 @@ import (
 func TestStoreIcon(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 
 	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
@@ -55,6 +56,7 @@ func TestStoreIcon(t *testing.T) {
 func TestFetchIcon(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 
 	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")

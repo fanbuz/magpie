@@ -33,6 +33,7 @@ import (
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/settings"
+	"github.com/yetone/magpie/internal/steady"
 )
 
 // Entry is one plugin the user added.
@@ -69,10 +70,31 @@ func listPath() string { return filepath.Join(settings.Dir(), "plugins.json") }
 // Load reads plugins.json.
 func Load() List {
 	var l List
-	if b, err := os.ReadFile(listPath()); err == nil {
+	if b, err := steady.ReadFile(listPath()); err == nil {
 		_ = json.Unmarshal(b, &l)
 	}
 	return l
+}
+
+// writeWhole writes b to p by a rename, so a magpie or the host reading
+// p meanwhile reads the old file or the new one, never one half-written;
+// read back with steady.ReadFile, which waits out the rename on Windows.
+func writeWhole(p string, b []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(p), filepath.Base(p)+".*")
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(b)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = steady.Rename(f.Name(), p)
+	}
+	if err != nil {
+		os.Remove(f.Name())
+	}
+	return err
 }
 
 func save(l List) error {
@@ -83,7 +105,7 @@ func save(l List) error {
 	if err := os.MkdirAll(settings.Dir(), 0o700); err != nil {
 		return err
 	}
-	if err := os.WriteFile(listPath(), append(b, '\n'), 0o600); err != nil {
+	if err := writeWhole(listPath(), append(b, '\n')); err != nil {
 		return err
 	}
 	listSeen.Lock()

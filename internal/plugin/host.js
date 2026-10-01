@@ -120,8 +120,21 @@ globalThis.fetch = Object.assign(function fetch(input, init) {
 // ---- auth.json ---------------------------------------------------------------
 
 function readAuth() {
+  let text
+  for (let i = 0; ; i++) {
+    try {
+      text = fs.readFileSync(authPath, "utf8")
+      break
+    } catch (e) {
+      if (e?.code === "ENOENT") return {}
+      // Windows refuses a file being renamed over for a moment: read as
+      // none, the next setAuth would write the others' accounts away
+      if (i >= 50) throw e
+      pause(10)
+    }
+  }
   try {
-    const v = JSON.parse(fs.readFileSync(authPath, "utf8"))
+    const v = JSON.parse(text)
     return v && typeof v === "object" ? v : {}
   } catch {
     return {}
@@ -132,7 +145,19 @@ function writeAuth(all) {
   fs.mkdirSync(path.dirname(authPath), { recursive: true })
   const tmp = authPath + ".tmp-" + process.pid
   fs.writeFileSync(tmp, JSON.stringify(all, null, 2) + "\n", { mode: 0o600 })
-  fs.renameSync(tmp, authPath)
+  // and a file held open by a reader refuses to be renamed over
+  for (let i = 0; ; i++) {
+    try {
+      return fs.renameSync(tmp, authPath)
+    } catch (e) {
+      if (i >= 50 || !["EPERM", "EACCES", "EBUSY"].includes(e?.code)) throw e
+      pause(10)
+    }
+  }
+}
+
+function pause(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
 function setAuth(key, info) {
@@ -379,7 +404,7 @@ async function loadPlugins(list) {
         if (fns.length) break
       }
       if (fns.length === 0) throw new Error("exports no OpenCode plugin function")
-      for (const fn of fns) hooks.push({ spec: p.spec, hooks: (await fn(input, p.options)) ?? {} })
+      for (const fn of fns) hooks.push({ spec: p.spec, target: p.target, hooks: (await fn(input, p.options)) ?? {} })
       loaded.push({ spec: p.spec })
     } catch (e) {
       loaded.push({ spec: p.spec, error: String(e?.stack ?? e) })
@@ -400,7 +425,7 @@ async function loadPlugins(list) {
 // winning, as in OpenCode.
 function auths() {
   const m = new Map()
-  for (const h of hooks) if (h.hooks.auth?.provider) m.set(h.hooks.auth.provider, { spec: h.spec, auth: h.hooks.auth })
+  for (const h of hooks) if (h.hooks.auth?.provider) m.set(h.hooks.auth.provider, { spec: h.spec, target: h.target, auth: h.hooks.auth })
   return m
 }
 
@@ -528,8 +553,35 @@ async function info(id, key, strict) {
   return out
 }
 
+// shown is a plugin's string as magpie shows it: trimmed and at most n
+// characters, "" for anything else.
+const shown = (v, n) => (typeof v === "string" ? v.trim().slice(0, n) : "")
+
+// methods are the auth hook's ways to sign in. An "api" one may say what
+// its key looks like (placeholder, magpie's own: OpenCode's dialog says
+// "API key"); its label titles the key's field, as OpenCode's does.
 function methods(auth) {
-  return (auth.methods ?? []).map((m) => ({ type: m.type, label: m.label }))
+  return (auth.methods ?? []).map((m) => ({
+    type: m.type,
+    label: m.label,
+    ...(m.type === "api" && shown(m.placeholder, 200) ? { placeholder: shown(m.placeholder, 200) } : {}),
+  }))
+}
+
+// iconOf is the picture a plugin gives its provider, magpie's own field
+// (OpenCode's providers have none): the auth hook's icon, else
+// package.json's magpie.icon. An https URL or a data:image URI; magpie
+// checks and keeps it (internal/provider), nothing is fetched here.
+function iconOf(a) {
+  const ok = (v) => {
+    const s = typeof v === "string" ? v.trim() : ""
+    // a data URI of a picture over 1 MB, magpie's most, isn't carried
+    return s.length <= 3 << 19 && /^(https:\/\/|data:image\/)/i.test(s) ? s : ""
+  }
+  const own = ok(a.auth.icon)
+  if (own || !a.target) return own
+  const dir = fs.statSync(a.target, { throwIfNoEntry: false })?.isDirectory() ? a.target : path.dirname(a.target)
+  return ok(readJSON(path.join(dir, "package.json"))?.magpie?.icon)
 }
 
 async function providers() {
@@ -553,6 +605,7 @@ async function providers() {
       npm: p.npm ?? "",
       api: p.api ?? "",
       methods: methods(a.auth),
+      icon: iconOf(a),
       usage: typeof a.auth.usage === "function",
       signedIn: keys.length > 0,
       authType: first?.type ?? "",

@@ -27,14 +27,14 @@ type pluginSubJSON struct {
 	Models   int             `json:"models"`
 }
 
-// pluginIcon is the vendor's icon: the one the plugin market gives the
-// plugin or its provider, else that of the providers OpenCode names, a
-// plain one for the rest.
-func pluginIcon(spec, id string) string {
-	if ic := plugin.Icon(spec, id); ic != "" {
+// pluginIcon is the vendor's icon: the one the plugin gives its provider,
+// else the one the plugin market gives the plugin or its provider, else
+// that of the providers OpenCode names, a plain one for the rest.
+func pluginIcon(pp plugin.Provider) string {
+	if ic := provider.PluginIcon(pp); ic != "" {
 		return ic
 	}
-	switch id {
+	switch pp.ID {
 	case "github-copilot", "github-copilot-enterprise":
 		return "githubcopilot"
 	case "anthropic":
@@ -55,7 +55,7 @@ func pluginSubs() []pluginSubJSON {
 	out := []pluginSubJSON{}
 	for _, pp := range plugin.Cached() {
 		out = append(out, pluginSubJSON{
-			ID: provider.PluginID(pp.ID), PID: pp.ID, Name: pp.Name, Icon: pluginIcon(pp.Spec, pp.ID), Spec: pp.Spec,
+			ID: provider.PluginID(pp.ID), PID: pp.ID, Name: pp.Name, Icon: pluginIcon(pp), Spec: pp.Spec,
 			Methods: pp.Methods, SignedIn: pp.SignedIn, Models: len(pp.Models),
 		})
 	}

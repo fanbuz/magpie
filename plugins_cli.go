@@ -285,7 +285,7 @@ func pluginLogin(ctx context.Context, name, method string) error {
 	}
 	var saved plugin.Saved
 	if pp.Methods[m].Type == "api" {
-		key, err := secret("key", pp.Name+" API key: ", false)
+		key, err := secret("key", keyPrompt(pp.Name, pp.Methods[m]), false)
 		if err != nil {
 			return err
 		}
@@ -322,6 +322,16 @@ func pluginLogin(ctx context.Context, name, method string) error {
 	}
 	fmt.Println(green.Render("✓"), "signed in to", pp.Name, muted.Render("· its models are "+provider.PluginID(saved.Provider)+"/<model>"))
 	return nil
+}
+
+// keyPrompt asks an "api" method's key: its title, then the hint the
+// plugin gives (its placeholder), as a question's is.
+func keyPrompt(name string, m plugin.Method) string {
+	p := m.KeyTitle(name)
+	if m.Placeholder != "" {
+		p += " " + muted.Render("("+m.Placeholder+")")
+	}
+	return p + ": "
 }
 
 func askNumber(n int) (int, error) {

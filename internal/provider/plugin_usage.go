@@ -65,7 +65,7 @@ func pluginCard(pp plugin.Provider) (string, string) {
 	if name == "" {
 		name = pp.ID
 	}
-	return name, plugin.Icon(pp.Spec, pp.ID)
+	return name, PluginIcon(pp)
 }
 
 // pluginUsageLogins are the accounts of pp whose allowance can be asked.

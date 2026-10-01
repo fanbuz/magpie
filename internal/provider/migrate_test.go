@@ -196,13 +196,15 @@ func TestMoveToPlugin(t *testing.T) {
 	}
 	// a built-in with no usage card of its own (Devin) keeps the plugin's
 	cards := 0
-	for _, q := range fetchSubscriptionUsage() {
+	qs := fetchSubscriptionUsage()
+	for _, q := range qs {
 		if q.Provider == "fakeco" {
 			cards++
 		}
 	}
 	if cards == 0 {
-		t.Fatal("the moved plugin's accounts show no usage")
+		t.Fatalf("the moved plugin's accounts show no usage: moved %v, plugins %d, logins %d, cards %+v",
+			Moved("fakeco"), len(plugin.Cached()), len(pluginUsageLogins(mustPlugin(t))), qs)
 	}
 
 	// the user reorders on the plugin, and it renews a's token; back, the

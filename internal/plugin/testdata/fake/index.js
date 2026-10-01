@@ -101,6 +101,8 @@ export const FakePlugin = async ({ client }) => ({
     models: async (p, { auth }) => {
       if (auth?.refresh === "r-dead" || auth?.key === "dead") throw new Error("the vendor refused the sign-in")
       if (auth?.refresh === "r-models-gone") throw Object.assign(new Error("the vendor refused the sign-in"), { signIn: "expired" })
+      // a sign-in past its time, said in words only, as Grok's plugin says it
+      if (auth?.refresh === "r-models-expired") throw new Error("FakeCo's sign-in has expired; run `fake login`")
       // the vendor unreachable: the list kept, as Zed's plugin keeps it
       if (auth?.refresh === "r-unreachable") await fetch("http://127.0.0.1:9/models").catch(() => {})
       if (auth?.type === "oauth" && auth.refresh?.startsWith("rot-")) {

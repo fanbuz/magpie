@@ -54,9 +54,11 @@ type Route struct {
 	TTFT      int64 `json:"ttft,omitempty"`
 	FirstText int64 `json:"firstText,omitempty"`
 	// Served: the model the reply says answered, as the last try has it;
-	// Swapped: another than the one that try asked for
+	// Swapped: another than the one that try asked for; Routed: that try
+	// asked another magpie's routing group, and Served is its member
 	Served  string `json:"served,omitempty"`
 	Swapped bool   `json:"swapped,omitempty"`
+	Routed  bool   `json:"routed,omitempty"`
 }
 
 // GroupRef is the routing group a request asked for.
@@ -164,9 +166,12 @@ type Try struct {
 	TTFT      int64 `json:"ttft,omitempty"`
 	FirstText int64 `json:"firstText,omitempty"`
 	// Served: the model its reply said answered, when it named one;
-	// Swapped: another model than Model, not just its dated name
+	// Swapped: another model than Model, not just its dated name; Routed:
+	// Model is another magpie's routing group, and Served the member it
+	// routed to (usage.GroupRouted)
 	Served  string `json:"served,omitempty"`
 	Swapped bool   `json:"swapped,omitempty"`
+	Routed  bool   `json:"routed,omitempty"`
 	Fail    string `json:"fail,omitempty"` // why it failed, as rest tells it
 	Error   string `json:"error,omitempty"`
 	Rest    *Rest  `json:"rest,omitempty"`  // how long it now sits out; none when it was the last to try
