@@ -3,7 +3,8 @@
 // editor says which runs it, "Move to the plugin" posts provider/move and
 // then says the plugin runs it, with "Use the built-in again" posting
 // provider/moveback; a failed move says why it stays built-in. The add
-// sheet no longer offers the built-in Zed once it runs on its plugin. In
+// sheet no longer offers the built-in Zed once it runs on its plugin, and
+// its editor shows no plugin:// endpoints to test. In
 // English and Chinese; the API is faked here.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
@@ -19,7 +20,7 @@ function serve(lang, posts) {
   const payload = () => {
     const onPlugin = move.state === "plugin";
     const zed = {
-      id: "zed", name: "Zed", icon: "zed", chat: "", responses: "", anthropic: "", catalog: "",
+      id: "zed", name: "Zed", icon: "zed", chat: onPlugin ? "plugin://zed/v1" : "", responses: "", anthropic: onPlugin ? "plugin://zed" : "", catalog: "",
       models: [{ id: "claude-sonnet-5", name: "Claude Sonnet 5", on: true }], agents: [], fallback: [], headers: {}, keyList: [], key: {},
       account: { agent: onPlugin ? "zed" : "zed", agentName: "Zed", user: "ada", logins: [{ user: "ada", active: true, on: true }, { user: "bob", on: true }] },
       move,
@@ -86,6 +87,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const back = ed.locator("button", { hasText: w.back });
       await back.waitFor();
       assert.ok((await ed.innerText()).includes(w.onPlugin), "doesn't name the plugin");
+      // its plugin:// URLs are magpie's own: no Endpoints, no Test
+      assert.equal(await ed.locator(".eps").count(), 0, "shows the plugin:// endpoints");
       if (process.env.ARTIFACT_DIR) await ed.screenshot({ path: path.join(process.env.ARTIFACT_DIR, `plugin-moved-${engine}-${lang}.png`) });
       await page.keyboard.press("Escape");
 

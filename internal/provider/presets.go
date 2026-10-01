@@ -48,6 +48,8 @@ type PresetDef struct {
 	// EndpointHint under it.
 	Endpoint     string `json:"endpoint,omitempty"`
 	EndpointHint string `json:"endpointHint,omitempty"`
+	// EndpointNeeded is what the editor says when no endpoint was given.
+	EndpointNeeded string `json:"endpointNeeded,omitempty"`
 	// Hosts: a vendor serving other makers' models as well as its own
 	// (Groq, Ollama Cloud), whose list is no maker's word on theirs
 	Hosts bool `json:"-"`
@@ -337,6 +339,15 @@ var presets = []PresetDef{
 			{ID: "global", Name: "Global", Chat: "https://global.yylx.io/v1", Anthropic: "https://global.yylx.io"},
 			{ID: "cn", Name: "China Mainland", Chat: "https://cn.yylx.io/v1", Anthropic: "https://cn.yylx.io"},
 		}},
+
+	// another computer's magpie, shared on its network (remote_magpie.go):
+	// its providers, routing groups and usage stay there, each request
+	// goes on in the API the agent spoke
+	{ID: RemoteMagpiePreset, Name: "Remote magpie", Icon: "magpie", Kind: KindRelay,
+		Note:           "another computer's magpie, shared on its network",
+		Endpoint:       "http://192.168.1.20:3425",
+		EndpointHint:   "The address and API key the other computer's magpie shows in Settings, under Share on local network. Its models and routing groups are listed here; each request goes on in the API the agent spoke.",
+		EndpointNeeded: "The other magpie's address is needed"},
 
 	// Jev answers no conversation: it decides which of a routing group's
 	// models takes a turn, and how hard it thinks

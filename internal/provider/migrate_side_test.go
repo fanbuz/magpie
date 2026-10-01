@@ -100,17 +100,24 @@ func TestMoveDevin(t *testing.T) {
 	exe := filepath.Join(home, "devin")
 	os.WriteFile(exe, []byte("#!/bin/sh\n"+devinSigned+"\n"), 0o755)
 	fakeDevin(t, exe)
+	// the CLI's account is read by running it, which a loaded machine may
+	// take longer than a look's first wait for
+	old := firstAsk
+	firstAsk = time.Minute
+	t.Cleanup(func() { firstAsk = old })
 	two, _ := newDevinHome()
 	os.WriteFile(devinCredentialsAt(two), devinCredentials("key-two", "https://eu.codeium.com", "", ""), 0o600)
 	writeLogins([]savedLogin{{Agent: "devin", User: "two@example.com", Plan: "Devin Max", Home: two, On: true, First: true}})
 
 	out, before, after := moveAndBack(t, "devin",
-		map[string]any{"type": "api", "key": "key-own", "metadata": map[string]any{"email": "dev@example.com"}},
+		// the CLI's account, its key since rotated in the CLI: still the CLI's
+		map[string]any{"type": "api", "key": "key-stale", "metadata": map[string]any{"email": "dev@example.com", "cli": true}},
 		map[string]any{"type": "api", "key": "key-three", "metadata": map[string]any{"email": "three@example.com", "plan": "Pro"}})
 	if len(out) != 2 || out[0].User != "two@example.com" || !out[0].First || out[0].Own ||
 		out[0].Auth["key"] != "key-two" || out[0].Auth["metadata"].(map[string]any)["server"] != "https://eu.codeium.com" ||
 		out[0].Auth["metadata"].(map[string]any)["plan"] != "Devin Max" ||
-		out[1].User != "dev@example.com" || !out[1].Own || out[1].Auth["key"] != "key-own" || out[1].Auth["metadata"].(map[string]any)["server"] != nil {
+		out[1].User != "dev@example.com" || !out[1].Own || out[1].Auth["key"] != "key-own" || out[1].Auth["metadata"].(map[string]any)["server"] != nil ||
+		out[1].Auth["metadata"].(map[string]any)["cli"] != true || out[0].Auth["metadata"].(map[string]any)["cli"] != nil {
 		t.Fatalf("out %+v", out)
 	}
 	ls := loginsOfAgent(after, "devin")
@@ -189,10 +196,11 @@ func TestMoveCommandCode(t *testing.T) {
 	writeLogins([]savedLogin{{Agent: CommandCodePlanID, User: "two", Plan: "Pro", On: true, Auth: []byte(jsonText(cmdAuth{APIKey: "cc-two", UserID: "u2", UserName: "two", KeyName: "laptop"}))}})
 
 	out, before, after := moveAndBack(t, CommandCodePlanID,
-		map[string]any{"type": "api", "key": "cc-own", "metadata": map[string]any{"email": "me"}},
+		map[string]any{"type": "api", "key": "cc-stale", "metadata": map[string]any{"email": "me", "cli": true}},
 		map[string]any{"type": "api", "key": "cc-three", "metadata": map[string]any{"email": "three", "userId": "u3"}})
 	if len(out) != 2 || out[0].User != "me" || !out[0].Own || !out[0].First || out[0].Auth["key"] != "cc-own" ||
-		out[1].User != "two" || out[1].Own || out[1].Auth["key"] != "cc-two" || out[1].Auth["metadata"].(map[string]any)["keyName"] != "laptop" {
+		out[1].User != "two" || out[1].Own || out[1].Auth["key"] != "cc-two" || out[1].Auth["metadata"].(map[string]any)["keyName"] != "laptop" ||
+		out[0].Auth["metadata"].(map[string]any)["cli"] != true || out[1].Auth["metadata"].(map[string]any)["cli"] != nil {
 		t.Fatalf("out %+v", out)
 	}
 	ls := loginsOfAgent(after, CommandCodePlanID)

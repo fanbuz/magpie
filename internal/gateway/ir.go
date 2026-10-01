@@ -111,6 +111,11 @@ type Request struct {
 	// for (Codex's reasoning.encrypted_content), which a Responses upstream
 	// is asked for too: a relay may refuse a request without it (#315).
 	Include []string
+	// Metadata is an Anthropic client's metadata (Claude Code's user_id),
+	// which goes on as it was sent when the request is built again for an
+	// Anthropic upstream: a relay that serves only Claude Code turns a
+	// request without it away (#359).
+	Metadata json.RawMessage
 	// GeminiCompat is the upstream being Gemini's OpenAI-compatible API
 	// (AI Studio's, or a proxy in front of it on this machine or the LAN),
 	// which gives the model's thoughts only when asked in thinking_config.
@@ -155,8 +160,8 @@ type Event struct {
 	MsgID  string
 	Model  string
 	Stop   string // stop | length | tool | filter
-	// Code: for KError, the kind of error as its source names it (Claude
-	// Code's rate_limit, server_error…); RequestID: the vendor's id for the
+	// Code: for KError, the source error or safety-filter code (rate_limit,
+	// server_error, bio_policy, content_filter…); RequestID: the vendor's id for the
 	// request the event is of, when it is known by then
 	Code      string
 	RequestID string

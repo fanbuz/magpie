@@ -2,6 +2,8 @@ package catalog
 
 import (
 	"context"
+	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,6 +44,37 @@ func TestFetchContextLength(t *testing.T) {
 	}
 	if len(got) != 3 || got["claude-sonnet-5"] != 1000000 || got["kimi-k3"] != 0 || got["glm-5"] != 0 {
 		t.Errorf("contexts %v", got)
+	}
+}
+
+// Another magpie's list tells each model's native APIs, over the ones it
+// serves it on, its longest reply and its reasoning levels; a vendor's odd
+// values are only left out, never the whole list.
+func TestFetchMagpieFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		rw.Write([]byte(`{"object":"list","data":[
+		  {"id":"anthropic/claude-opus-4-8","native_endpoints":["/v1/messages"],"max_output_tokens":128000,"supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}]},
+		  {"id":"group/fast","supported_reasoning_levels":[]},
+		  {"id":"codex/gpt-6","supported_endpoints":["/responses","/chat/completions"],"supported_reasoning_levels":["low","medium"]},
+		  {"id":"odd","max_output_tokens":"lots","supported_reasoning_levels":{"low":true}}]}`))
+	}))
+	defer srv.Close()
+	ms, _, err := FetchAt(context.Background(), srv.URL+"/v1", "k", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, m := range ms {
+		got[m.ID] = fmt.Sprint(m.APIs, m.Output, m.Efforts)
+	}
+	want := map[string]string{
+		"anthropic/claude-opus-4-8": "[anthropic] 128000 [low high]",
+		"group/fast":                "[] 0 []",
+		"codex/gpt-6":               "[responses chat] 0 [low medium]",
+		"odd":                       "[] 0 []",
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("got %v", got)
 	}
 }
 

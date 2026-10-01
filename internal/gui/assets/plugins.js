@@ -17,6 +17,7 @@
   let hits = null;       // npm's answer for query: { q, list } | { q, loading } | { q, error }
   let searchTimer = 0;
   const busy = new Map(); // package → "add" | "remove" | "upgrade" | "off"
+  let asking = null;     // { pkg, op }: a remove or switch-off waiting on the user's yes
   let shown = "";
 
   const SEARCH = "M7 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8z M10 10l3 3";
@@ -297,10 +298,9 @@
     const ls = market.listings.filter((l) => !f || [l.name, l.package, summary(l), (l.providers || []).join(" "), l.npm?.publisher || ""].join(" ").toLowerCase().includes(f));
     if (!f) {
       body.append(intro());
+      // magpie's community's alone: others' plugins are found by a search
       const ours = ls.filter((l) => l.community);
-      const theirs = ls.filter((l) => !l.community).sort((a, b) => (b.npm?.weekly || 0) - (a.npm?.weekly || 0));
       if (ours.length) body.append(section(t("magpie community"), t("written for magpie, checked against its own sign-ins"), ours));
-      if (theirs.length) body.append(section(t("From OpenCode's community"), t("popular OpenCode plugins that work in magpie"), theirs));
       body.append(manual());
       return;
     }
@@ -397,10 +397,24 @@
     nm.append(el("span", "", l?.name || pkg));
     if (e.version) nm.append(el("span", "pm-ver", "v" + e.version));
     if (e.latest && e.version && newer(e.latest, e.version)) nm.append(el("span", "pm-chip up", t("v{v} out", { v: e.latest })));
+    // the built-in subscriptions moved onto it: taking it away moves them
+    // back, so the row says it carries them
+    const moved = (e.moved || []).map((id) => SUBS.find((x) => x.agent === id)?.name || id);
+    const names = moved.join(t(", "));
+    if (moved.length && !e.off) {
+      const c = el("span", "pm-chip moved");
+      c.append(el("span", "dot"), el("span", "", t("Serves {names}", { names })));
+      c.title = t("{names} runs on this plugin in place of the built-in", { names });
+      nm.append(c);
+    }
     who.append(nm);
     const subs = subsOf(pkg);
     const sub = el("div", "sub");
-    if (e.off) sub.textContent = t("Off");
+    const ask = asking?.pkg === pkg && moved.length && !busy.size ? asking.op : "";
+    if (ask) {
+      sub.textContent = t(ask === "remove" ? "{names} goes back to the built-in, with its accounts, before the plugin is removed." : "{names} goes back to the built-in, with its accounts, before the plugin is switched off.", { names });
+      sub.classList.add("ask");
+    } else if (e.off) sub.textContent = t("Off");
     else if (e.error) { sub.textContent = t("Didn't load: {error}", { error: e.error }); sub.classList.add("bad"); sub.title = e.error; }
     else if (subs.length) {
       for (const [i, x] of subs.entries()) {
@@ -425,13 +439,26 @@
       s.onclick = () => pluginSignIn(subs.find((x) => !x.signedIn).id);
       val.append(s);
     }
-    const onoff = el("button", "text", t(e.off ? "Switch on" : "Switch off"));
+    const back = () => { if (moved.length) status(t("{names} is back on the built-in", { names }), "ok"); };
+    const off = () => act(pkg, "off", { spec: e.spec, off: !e.off }, e.off ? null : back);
+    const remove = () => act(pkg, "remove", { spec: e.spec }, () => { status(t("{name} removed", { name: l?.name || pkg }), "ok"); back(); });
+    if (ask) {
+      // asked in the row, not a dialog: the user sees which go back
+      const yes = el("button", "text primary", t(ask === "remove" ? "Remove" : "Switch off"));
+      yes.onclick = () => { asking = null; ask === "remove" ? remove() : off(); };
+      const no = el("button", "text", t("Cancel"));
+      no.onclick = () => { asking = null; draw(); };
+      val.append(no, yes);
+      r.append(val);
+      return r;
+    }
+    const onoff = el("button", "text", b === "off" && !e.off && moved.length ? t("Moving back…") : t(e.off ? "Switch on" : "Switch off"));
     onoff.disabled = !!b;
-    onoff.onclick = () => act(pkg, "off", { spec: e.spec, off: !e.off });
-    const rm = el("button", "text quiet", b === "remove" ? t("Removing…") : t("Remove"));
-    rm.title = t("Removes the plugin and what it installed; its sign-ins are kept until you sign out");
+    onoff.onclick = () => { if (!e.off && moved.length) { asking = { pkg, op: "off" }; draw(); } else off(); };
+    const rm = el("button", "text quiet", b === "remove" ? t(moved.length ? "Moving back…" : "Removing…") : t("Remove"));
+    rm.title = moved.length ? t("{names} goes back to the built-in first, then the plugin is removed", { names }) : t("Removes the plugin and what it installed; its sign-ins are kept until you sign out");
     rm.disabled = busy.size > 0;
-    rm.onclick = () => act(pkg, "remove", { spec: e.spec }, () => status(t("{name} removed", { name: l?.name || pkg }), "ok"));
+    rm.onclick = () => { if (moved.length) { asking = { pkg, op: "remove" }; draw(); } else remove(); };
     val.append(onoff, rm);
     r.append(val);
     r.onclick = (ev) => { if (!ev.target.closest("button")) detail(l || { package: pkg, name: pkg, npm: { version: e.latest } }); };

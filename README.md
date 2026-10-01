@@ -83,13 +83,14 @@ and there is a terminal version (`magpie tui`) and a plain CLI.
 | Cursor CLI   | `~/.cursor/cli-config.json`       | model           |
 | Copilot CLI  | `~/.copilot/settings.json`        | model           |
 | Crush        | `~/.config/crush/crush.json`      | large, small    |
-| DeepSeek Harness (dsh) | `~/.dsh/config.yaml` (`$DSH_HOME`) | model |
+| DeepSeek Harness (dsh) | `~/.dsh/profiles/*/cordis.patch.yml` (`$DSH_HOME`; a custom provider, Magpie), or `~/.dsh/config.yaml` before dsh 0.1.5 | model, effort |
 | Command Code | `~/.commandcode/settings.json` (+ `providers.json`) | model |
 | fx           | `~/.fx/settings.json`             | model (a keyless `magpie` provider) |
 | omp (oh-my-pi) | `~/.omp/agent/config.yml` (+ `models.yml`) | model |
 | Devin        | `~/.config/devin/config.json` (`%APPDATA%\devin\config.json` on Windows) | model |
 | Hermes Agent | `~/.hermes/config.yaml` (`$HERMES_HOME`) | model |
 | Kimi Code    | `~/.kimi/config.toml` (`$KIMI_SHARE_DIR`) | model (a `magpie` provider; magpie's models in Kimi's /model) |
+| MiniMax Code (mcode) | `~/.minimax/config.yaml` (`$MINIMAX_DATA_DIR`) | model (a `magpie` custom provider; magpie's models in its /model) |
 | Droid (Factory) | `~/.factory/settings.json` (`$FACTORY_HOME_OVERRIDE`) | model (magpie's models as BYOK `customModels`, in Droid's /model) |
 | Cline (CLI)  | `~/.cline/data/settings/providers.json` (`$CLINE_DIR`) | model, effort (magpie takes its openai-compatible provider) |
 | Qoder (CLI)  | `~/.qoder/settings.json` (`$QODER_CONFIG_DIR`) | model, effort (a `magpie` custom provider; needs a Qoder plan with BYOK) |
@@ -129,6 +130,16 @@ Anthropic-compatible base), or both, plus `responses=` when the vendor has a
 separate Responses endpoint, `catalog=` to borrow a models.dev list, and
 `models=` to name the models to expose. Anything a preset does not know can
 be overridden the same way.
+
+One magpie can serve several computers (an office one, a personal one):
+share it on the network (Settings → Share on local network), and on each
+other computer add it as a **Remote magpie** — in the app's Add sheet, or
+`magpie provider add remote-magpie sk-magpie-… url=http://192.168.1.20:3425 id=office`.
+Each computer's own magpie still wires its agents, while the providers,
+routing groups (`office/group/…`) and usage are the shared one's. A request
+goes on in the API the agent spoke — Anthropic Messages, Responses, Chat
+Completions, token counting — and a model the shared magpie's provider serves
+on another API only is turned into that API once, never on both computers.
 
 Baidu Qianfan's [Token Plans](https://cloud.baidu.com/doc/qianfan/s/Dmrabu8b6)
 are available as `baidu-qianfan`: a personal (个人版) and an enterprise (企业版)
@@ -200,6 +211,42 @@ provider and model — usage records do not retain which key or account served
 a call, so a provider charging different tariffs per account cannot be costed
 exactly from a single provider-wide price.
 
+### What a model takes
+
+A provider that serves a model models.dev does not list, or lists at the
+wrong size, has a window and a reply limit magpie cannot know. Say what they
+are:
+
+```sh
+magpie model context relay-a/gpt-5.5 262144    # the window a request may hold, or 1m
+magpie model output  relay-a/gpt-5.5 131072    # the most a reply may hold, or 128k
+magpie model context "relay-a/*" 200000        # every model of that provider
+magpie model output  relay-a/gpt-5.5 --reset   # take your limit off this model
+```
+
+The `*` is quoted because zsh treats a name it cannot expand as a command
+that failed, rather than passing the name on as bash does.
+
+Both are looked for in this order: **this model → this provider's `*` → the
+provider's own list → models.dev.** `--reset` removes only the value this
+model has of its own.
+
+A provider you keep unlisted, or switch off, takes them like any other: the
+numbers are kept, and are what its models take once it is serving again.
+
+A window is a number agents are shown **and a routing input**: at 95% of the
+window a request held on a routing-group member moves to one that takes more,
+so overstating a window makes that move happen too late. A reply limit is
+advertised in `/models` and is what a group advertises the smallest of; the
+gateway does not itself cap a reply by it.
+
+Saving a window or a reply limit writes that number into the model lists magpie
+keeps in the agents' own files — Pi's `contextWindow` and `maxTokens`, OpenCode's
+`limit`, and Crush's, droid's, Cline's, Qoder's and Zcode's — which an agent reads
+at start-up. A session already running therefore keeps the window it began with,
+while the gateway's own `/models` and every request from then on are right at
+once.
+
 ### Routing groups
 
 A routing group is several models, from one provider or many, that an agent
@@ -245,7 +292,9 @@ Keychain or `~/.claude/.credentials.json`), Codex (a ChatGPT login in
 `~/.codex/auth.json`), Copilot (a GitHub login in
 `~/.config/github-copilot/apps.json`), Devin (`devin auth login`, kept in
 `~/.local/share/devin/credentials.toml`) and Qoder (signed in from magpie with
-its OAuth device flow, kept in magpie's own config) appear in `magpie providers` and in
+its OAuth device flow, kept in magpie's own config; Qoder CN is its own
+subscription beside it, for accounts on qoder.cn made with an Alibaba Cloud
+account or a phone number, which can't sign in on qoder.com) appear in `magpie providers` and in
 the Providers tab as *signed in as …*, with their models spelled
 `claude/claude-sonnet-5`, `codex/gpt-5.5`, `copilot/claude-sonnet-4.5` or
 `devin/swe-2-max` in every other agent's picker. magpie reads the agent's own credentials each
@@ -296,7 +345,9 @@ with the app; `magpie serve` runs it alone. It exposes:
 
 Each `/v1/models` entry includes `reasoning` and `supported_reasoning_levels`
 (`[{"effort":"low"}, ...]`). A routing group lists only the levels every
-member supports.
+member supports. `native_endpoints` (`["/v1/messages"]`) names the APIs a
+request for the model is passed straight through on; it is left out of a
+routing group, and of a model every request to is translated anyway.
 
 Requests pass straight through when the vendor speaks the agent's API and
 are translated otherwise, streaming, tool calls and reasoning included. The
@@ -435,11 +486,15 @@ API key, and only then publish the port beyond 127.0.0.1.
 For the browser UI run the image with `magpie web --addr 0.0.0.0:3430 --no-open`
 in place of the default `serve`, and open
 `http://localhost:3430/?k=<key from docker logs magpie>` (set `MAGPIE_WEB_KEY`
-to keep one key across restarts). There you add providers and import
-sign-ins from a file; a subscription sign-in started in the container cannot
-finish, because the vendor sends the browser back to the container's own
-loopback, so sign in on a machine where magpie runs with a browser. Keys and
-sign-ins live in the volume, so a restart keeps them.
+to keep one key across restarts). There you add providers, sign in to
+subscriptions and import sign-ins from a file. The vendor sends a sign-in's
+browser back to `localhost` (ChatGPT to `http://localhost:1455/auth/callback?code=…`),
+which is your own machine, not the container, so that page won't load: copy
+its whole address from the address bar and paste it into the sign-in's
+*Callback URL* field. `docker exec -it magpie /magpie accounts add codex`
+does the same in a terminal: open the link it prints, then paste the address
+the browser ended on. Keys and sign-ins live in the volume, so a restart
+keeps them.
 
 ### Developing
 

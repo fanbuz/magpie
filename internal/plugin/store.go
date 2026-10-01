@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/proc"
@@ -82,7 +83,52 @@ func save(l List) error {
 	if err := os.MkdirAll(settings.Dir(), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(listPath(), append(b, '\n'), 0o600)
+	if err := os.WriteFile(listPath(), append(b, '\n'), 0o600); err != nil {
+		return err
+	}
+	listSeen.Lock()
+	listSeen.stamp, listSeen.set = listStamp(), true
+	listSeen.Unlock()
+	return nil
+}
+
+// listSeen is plugins.json as this magpie last wrote or read it.
+var listSeen struct {
+	sync.Mutex
+	stamp string
+	set   bool
+}
+
+func listStamp() string {
+	fi, err := os.Stat(listPath())
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprint(fi.ModTime().UnixNano(), fi.Size())
+}
+
+// hostStale is set when another magpie changed the plugins (magpie plugin
+// add, remove or move in a terminal while the app runs): the host running
+// has the old ones loaded.
+var hostStale atomic.Bool
+
+// checkList notices plugins.json changed by another magpie: the host is
+// started again with the plugins as they are, and the providers the other
+// magpie last saw asked for are the ones known meanwhile.
+func checkList() {
+	st := listStamp()
+	listSeen.Lock()
+	moved := listSeen.set && listSeen.stamp != st
+	listSeen.stamp, listSeen.set = st, true
+	listSeen.Unlock()
+	if !moved {
+		return
+	}
+	provMu.Lock()
+	provCache = nil
+	provMu.Unlock()
+	hostStale.Store(true)
+	changed()
 }
 
 // IsPath is whether spec names a file or folder rather than a package,

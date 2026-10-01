@@ -1,21 +1,24 @@
 // A plugin as OpenCode's are written, signing in to a made-up provider
-// whose requests go to $FAKE_BASE.
+// whose requests go to $FAKE_BASE; $FAKE_ID names it another's id, as a
+// built-in's plugin does.
+const ID = process.env.FAKE_ID || "fakeco"
+
 export const FakePlugin = async ({ client }) => ({
   config: async (cfg) => {
     cfg.provider = cfg.provider ?? {}
-    cfg.provider.fakeco = {
+    cfg.provider[ID] = {
       name: "FakeCo",
       npm: "@ai-sdk/openai-compatible",
       api: "https://fake.invalid/v1",
       models: {
         "fake-1": { name: "Fake One", limit: { context: 1000, output: 100 } },
-        "fake-claude": { name: "Fake Claude", provider: { npm: "@ai-sdk/anthropic" }, limit: { context: 2000, output: 200 } },
-        "fake-gemini": { name: "Fake Gemini", provider: { npm: "@ai-sdk/google" }, reasoning: true, limit: { context: 3000, output: 300 } },
+        "fake-claude": { name: "Fake Claude", provider: { npm: "@ai-sdk/anthropic" }, modalities: { input: ["text", "image"], output: ["text"] }, limit: { context: 2000, output: 200 } },
+        "fake-gemini": { name: "Fake Gemini", provider: { npm: "@ai-sdk/google" }, reasoning: true, modalities: { input: ["text"], output: ["text"] }, limit: { context: 3000, output: 300 } },
       },
     }
   },
   auth: {
-    provider: "fakeco",
+    provider: ID,
     methods: [
       { type: "api", label: "API key" },
       {
@@ -32,7 +35,9 @@ export const FakePlugin = async ({ client }) => ({
           callback: async (code) =>
             code === "good"
               ? { type: "success", refresh: "r-" + (inputs.team ?? "none"), access: "stale", expires: 0, accountId: (inputs.team ?? "me") + "@fake" }
-              : { type: "failed" },
+              : code === "expired"
+                ? { type: "failed", error: "the sign-in page expired" }
+                : { type: "failed" },
         }),
       },
     ],
@@ -43,11 +48,12 @@ export const FakePlugin = async ({ client }) => ({
         let a = await getAuth()
         if (a.type === "oauth" && a.expires < Date.now()) {
           a = { ...a, access: "fresh-" + a.refresh, expires: Date.now() + 3600e3 }
-          await client.auth.set({ path: { id: "fakeco" }, body: a })
+          await client.auth.set({ path: { id: ID }, body: a })
         }
         const h = new Headers(init.headers)
         h.set("authorization", "Bearer " + (a.type === "oauth" ? a.access : a.key))
         h.set("x-models", Object.keys(provider.models).sort().join(","))
+        h.set("x-body-type", typeof init.body)
         return fetch(url, { ...init, headers: h })
       },
     }),
@@ -55,7 +61,16 @@ export const FakePlugin = async ({ client }) => ({
     // hours, which count only fake-claude
     usage: async (getAuth) => {
       const a = await getAuth()
+      // $FAKE_USAGE: the plan is what the vendor's page there says
+      if (process.env.FAKE_USAGE) {
+        const r = await fetch(process.env.FAKE_USAGE)
+        return { plan: await r.text() }
+      }
       if (a.type !== "oauth") return { error: "an API key has no plan" }
+      if (a.refresh === "r-gone") return { error: `${a.accountId}: the FakeCo sign-in has expired — sign in again` }
+      if (a.refresh === "r-offline") throw new Error("fetch failed")
+      if (a.refresh === "r-kept") return { error: "sign in again to see usage", signIn: "kept" }
+      if (a.refresh === "r-renewed") return { error: "usage is down", signIn: "renewed" }
       const full = a.accountId === "full@fake"
       return {
         plan: "Fake Pro",
@@ -74,17 +89,25 @@ export const FakePlugin = async ({ client }) => ({
   // the models an account has: refused for a dead one; a "rot-" sign-in
   // spends its refresh token asking, as a rotating one does
   provider: {
-    id: "fakeco",
+    id: ID,
     models: async (p, { auth }) => {
       if (auth?.refresh === "r-dead" || auth?.key === "dead") throw new Error("the vendor refused the sign-in")
+      if (auth?.refresh === "r-models-gone") throw Object.assign(new Error("the vendor refused the sign-in"), { signIn: "expired" })
       if (auth?.type === "oauth" && auth.refresh?.startsWith("rot-")) {
-        await client.auth.set({ path: { id: "fakeco" }, body: { ...auth, refresh: auth.refresh + "+" } })
+        await client.auth.set({ path: { id: ID }, body: { ...auth, refresh: auth.refresh + "+" } })
       }
+      // fake-1 costs the plan nothing, as a WorkBuddy model of x0.00 credits
+      p.models["fake-1"].free = true
       if (auth?.key === "few") return { "fake-1": p.models["fake-1"] }
+      // $FAKE_MODELS: the vendor's list, whose answer names one more model
+      if (process.env.FAKE_MODELS && auth) {
+        const r = await fetch(process.env.FAKE_MODELS).then((r) => r.text()).catch(() => "")
+        if (r) p.models["fake-" + r] = { ...p.models["fake-1"], id: "fake-" + r, name: r }
+      }
       return p.models
     },
   },
   "chat.headers": async (input, output) => {
-    if (input.model.providerID === "fakeco") output.headers["x-plugin-model"] = input.model.id
+    if (input.model.providerID === ID) output.headers["x-plugin-model"] = input.model.id
   },
 })

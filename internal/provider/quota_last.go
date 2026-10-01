@@ -40,7 +40,7 @@ func lastQuotasPath() string { return filepath.Join(filepath.Dir(Path()), "quota
 
 // passing is an error that says nothing about the account: the vendor
 // rate limiting, failing or out of reach. A sign-in gone bad is not one.
-var passing = regexp.MustCompile(`(?i)rate.?limit|too many requests|429|internal server error|bad gateway|service unavailable|gateway timeout|deadline exceeded|timeout|timed out|connection (refused|reset)|no such host|network is unreachable|EOF|asks again`)
+var passing = regexp.MustCompile(`(?i)rate.?limit|too many requests|429|internal server error|bad gateway|service unavailable|gateway timeout|deadline exceeded|timeout|timed out|connection (refused|reset)|no such host|network is unreachable|EOF|asks again|fetch failed|unable to connect|ECONN[A-Z]+|ENOTFOUND|EAI_AGAIN|socket hang up|HTTP 5\d\d`)
 
 // keyTag names a key's card among the last readings, by what it is (a
 // plan's windows, a balance) and a digest of the key, never the key: a

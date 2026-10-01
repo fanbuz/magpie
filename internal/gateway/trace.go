@@ -194,6 +194,11 @@ func weighed(c candidate, p provider.Provider, wg weighing, fallback bool, from 
 	switch {
 	case c.p.Account != nil:
 		w.Kind, w.Who, w.Agent, w.Plan = "account", c.p.Account.User, c.p.Account.Agent, c.p.Account.Plan
+		if w.Agent == "plugin" {
+			// a plugin's account is told as its provider's: a moved Grok's
+			// plan reads as the built-in's did
+			w.Agent = c.p.ID
+		}
 	case c.rest != p.ID:
 		w.Kind, w.Who = "key", c.p.KeyName
 		if w.Who == "" {

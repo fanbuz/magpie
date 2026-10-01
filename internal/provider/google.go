@@ -165,18 +165,6 @@ func geminiOwnLogin() (googleAccount, bool) {
 	return googleAccount{app: app, user: user, auth: a, own: true}, true
 }
 
-// AnotherAppsGoogleSignIn reports whether the Google sign-in in the
-// oauth_creds.json at path was minted by an OAuth client other than Gemini
-// CLI's (Antigravity's, #143): the file is then no sign of Gemini CLI.
-func AnotherAppsGoogleSignIn(path string) bool {
-	var id struct {
-		IDToken string `json:"id_token"`
-	}
-	readJSON(path, &id)
-	c := googleClientOf(id.IDToken)
-	return c != "" && c != geminiApp.clientID
-}
-
 // googleClientOf is the OAuth client a Google ID token was minted for, ""
 // when there is none to tell.
 func googleClientOf(idToken string) string {
@@ -1006,6 +994,9 @@ func (g googleAccount) quota(ctx context.Context, plan string) SubscriptionQuota
 		if mi.Name != "" {
 			w.Name = mi.Name
 		}
+		if g.app.agent == "antigravity" {
+			w.Family = antigravityVendor(mi.Model)
+		}
 		if !mi.resets.IsZero() {
 			t := mi.resets
 			w.ResetsAt = &t
@@ -1017,6 +1008,26 @@ func (g googleAccount) quota(ctx context.Context, plan string) SubscriptionQuota
 		q.Plan = p.plan
 	}
 	return q
+}
+
+// antigravityVendor is the family a model of Antigravity's is in — Gemini,
+// Claude, GPT-OSS — as its id begins; one it doesn't know by its name's
+// first word. (antigravityFamily is one model's levels, a narrower thing.)
+func antigravityVendor(m catalog.Model) string {
+	id := strings.ToLower(m.ID)
+	switch {
+	case strings.HasPrefix(id, "gemini"):
+		return "Gemini"
+	case strings.HasPrefix(id, "claude"):
+		return "Claude"
+	case strings.HasPrefix(id, "gpt-oss"):
+		return "GPT-OSS"
+	}
+	if f, _, _ := strings.Cut(strings.TrimSpace(m.Name), " "); f != "" {
+		return f
+	}
+	f, _, _ := strings.Cut(m.ID, "-")
+	return f
 }
 
 // ---- the provider -------------------------------------------------------------

@@ -55,8 +55,12 @@ func pluginCmd(args []string) error {
 		if len(rest) != 1 {
 			return errors.New(pluginUsage)
 		}
-		if err := plugin.Remove(ctx, rest[0]); err != nil {
+		back := provider.MovedOnto(rest[0])
+		if err := provider.RemovePlugin(ctx, rest[0]); err != nil {
 			return err
+		}
+		for _, id := range back {
+			fmt.Println(green.Render("✓"), id, "is back on its built-in")
 		}
 		fmt.Println(green.Render("✓"), "removed", rest[0])
 		return nil
@@ -70,8 +74,15 @@ func pluginCmd(args []string) error {
 		if len(rest) != 1 {
 			return errors.New(pluginUsage)
 		}
-		if err := plugin.SetOff(rest[0], sub == "off"); err != nil {
+		var back []string
+		if sub == "off" {
+			back = provider.MovedOnto(rest[0])
+		}
+		if err := provider.SetPluginOff(ctx, rest[0], sub == "off"); err != nil {
 			return err
+		}
+		for _, id := range back {
+			fmt.Println(green.Render("✓"), id, "is back on its built-in")
 		}
 		fmt.Println(green.Render("✓"), rest[0], "is", sub)
 		return nil

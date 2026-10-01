@@ -50,6 +50,36 @@ func takesCatalog(fields []fieldJSON) bool {
 	return false
 }
 
+// agentFields are an agent's pickers as the Agents page draws them.
+func agentFields(a *agent.Agent, vals map[string]string) []fieldJSON {
+	out := []fieldJSON{}
+	for _, f := range a.Fields {
+		opts := f.Options(vals)
+		if opts == nil {
+			opts = []agent.Option{}
+		}
+		out = append(out, fieldJSON{Key: f.Key, Label: f.Label, Value: vals[f.Key], Options: opts})
+	}
+	return out
+}
+
+// agentModelCount is the line under an agent's name, nil for an agent that
+// doesn't pick among the catalog. Its pickers list only the models shown, so
+// with every one taken out they have no catalog entry left, yet the line is
+// the one way to put them back (#356): it stays while any is hidden.
+func agentModelCount(id string, fields []fieldJSON) *modelCountJSON {
+	if takesCatalog(fields) {
+		return modelCount(id)
+	}
+	if len(provider.HiddenModels(id)) == 0 {
+		return nil
+	}
+	if c := modelCount(id); c.Shown < c.Listed {
+		return c
+	}
+	return nil
+}
+
 func modelCount(id string) *modelCountJSON {
 	listed, _ := provider.ListedFor(id)
 	off := provider.HiddenModels(id)

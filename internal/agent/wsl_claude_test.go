@@ -57,7 +57,7 @@ func TestWSLProbeFindsClaude(t *testing.T) {
 // effort it starts on; one with Codex, Pi and Claude Code has all three,
 // each read as before and kept apart in wsl.json.
 func TestWSLClaudeDiscovered(t *testing.T) {
-	root, home := claudeDistroHome(t, `{"model": "claude-opus-5-5", "effortLevel": "high"}`)
+	root, home := claudeDistroHome(t, `{"model": "claude-opus-5-5", "modelSettings": {"claude-opus-5-5": {"effortLevel": "high"}}}`)
 	allRoot := t.TempDir()
 	os.MkdirAll(filepath.Join(allRoot, "root", ".codex"), 0o755)
 	os.MkdirAll(filepath.Join(allRoot, "root", ".pi", "agent"), 0o755)

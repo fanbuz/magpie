@@ -335,19 +335,25 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /images/generations", s.images(false))
 	mux.HandleFunc("POST /v1/images/edits", s.images(true))
 	mux.HandleFunc("POST /images/edits", s.images(true))
+	mux.HandleFunc("POST /v1/videos", s.videosCreate)
+	mux.HandleFunc("POST /videos", s.videosCreate)
+	mux.HandleFunc("GET /v1/videos/{id}", s.videosGet)
+	mux.HandleFunc("GET /videos/{id}", s.videosGet)
+	mux.HandleFunc("GET /v1/videos/{id}/content", s.videosContent)
+	mux.HandleFunc("GET /videos/{id}/content", s.videosContent)
 	mux.HandleFunc("POST /_magpie/claude-mcp/{token}", s.subscription.mcpCall)
 	mux.HandleFunc(CodexPath+"/", s.codexBackend)
 	mux.HandleFunc("GET /v1beta/models", s.geminiModels)
 	mux.HandleFunc("POST /v1beta/models/{call...}", s.gemini)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, provider.Chat, http.StatusNotFound, "magpie serves /v1/chat/completions, /v1/responses, /v1/messages, /v1/systemone, /v1/images/generations, /v1/images/edits and /v1beta/models/*")
+		writeError(w, provider.Chat, http.StatusNotFound, "magpie serves /v1/chat/completions, /v1/responses, /v1/messages, /v1/systemone, /v1/images/generations, /v1/images/edits, /v1/videos and /v1beta/models/*")
 	})
 	return mux
 }
 
 func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"name": "magpie", "version": Version, "models": len(provider.Catalog()), "window": Window,
-		"apis": []string{"/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/systemone", "/v1beta/models/{model}:generateContent", "/v1/images/generations", "/v1/images/edits", "/v1/magpie/quotas"}})
+		"apis": []string{"/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/systemone", "/v1beta/models/{model}:generateContent", "/v1/images/generations", "/v1/images/edits", "/v1/videos", "/v1/magpie/quotas"}})
 }
 
 // quotas is what is left of every subscription, plan and key magpie has,
@@ -383,7 +389,39 @@ func modelObject(e provider.Entry) map[string]any {
 	if e.Output > 0 {
 		m["max_output_tokens"] = e.Output
 	}
+	// for another magpie that has this one as its provider (remote-magpie):
+	// the APIs a request for the model goes on as it is, so it sends each
+	// one on an API of these rather than having it translated twice, and
+	// whether it takes images
+	if native := nativeEndpoints(e); len(native) > 0 {
+		m["native_endpoints"] = native
+	}
+	if e.Images {
+		m["modalities"] = map[string]any{"input": []string{"text", "image"}}
+	} else if e.ImageInput != nil {
+		m["modalities"] = map[string]any{"input": []string{"text"}}
+	}
 	return m
+}
+
+// nativeEndpoints are the paths a request for the model is relayed on to
+// its provider as it is: the APIs the provider serves it on. None for a
+// routing group, whose members may speak any, or a model every request
+// to is translated anyway (a subscription served through its agent's own
+// API).
+func nativeEndpoints(e provider.Entry) []string {
+	p := e.Provider
+	if e.Group != "" || p.Native(e.Model) == "" {
+		return nil
+	}
+	apis := p.APIs(e.Model)
+	var out []string
+	for _, pr := range p.Speaks() {
+		if slices.Contains(provider.Protocols, pr) && (apis == nil || slices.Contains(apis, pr)) {
+			out = append(out, map[provider.Protocol]string{provider.Chat: "/v1/chat/completions", provider.Responses: "/v1/responses", provider.Anthropic: "/v1/messages"}[pr])
+		}
+	}
+	return out
 }
 
 // catalogFor is the catalog as the agent asking is shown it.
@@ -442,6 +480,11 @@ func unprefixed(id string) string {
 	return rest
 }
 
+// estimatedMoved are the built-ins that estimated a count, as their
+// plugins do once moved; Command Code's whatever its plan, as the plugin
+// alone knows a Go key.
+var estimatedMoved = []string{"cursor", "grok", "devin", "kiro", "qoder", "zed", "factory", provider.CommandCodePlanID}
+
 // countTokens answers Anthropic's count_tokens: through the provider when
 // it implements counting, else a rough estimate. A failed connection or
 // limited key yields to the next key; other failures reach the client.
@@ -463,8 +506,9 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 	p, model, ok := provider.Resolve(unprefixed(model))
 	// Claude Subscription generations run through the Claude Code binary. Its
 	// OAuth token must not take a direct HTTP side path just for token counting.
-	if ok && p.Account != nil && (p.Account.Agent == "claude" || p.Account.Agent == "cursor" || p.Account.Agent == "grok" || p.Account.Agent == "devin" || p.Account.Agent == "kiro" || p.Account.Agent == "qoder" || p.Account.Agent == "zed" || p.Account.Agent == "factory" || p.Account.Agent == "gemini" || p.Account.Agent == "antigravity") ||
-		ok && p.Account != nil && p.Account.Agent == provider.CommandCodePlanID && cmdGoing(r.Context(), p) {
+	if ok && p.Account != nil && (p.Account.Agent == "claude" || p.Account.Agent == "cursor" || p.Account.Agent == "grok" || p.Account.Agent == "devin" || p.Account.Agent == "kiro" || p.Account.Agent == "qoder" || p.Account.Agent == provider.QoderCNID || p.Account.Agent == "zed" || p.Account.Agent == "factory" || p.Account.Agent == "gemini" || p.Account.Agent == "antigravity") ||
+		ok && p.Account != nil && p.Account.Agent == provider.CommandCodePlanID && cmdGoing(r.Context(), p) ||
+		ok && p.IsPlugin() && slices.Contains(estimatedMoved, p.ID) {
 		req, err := parseAnthropic(body)
 		if err != nil {
 			writeError(w, provider.Anthropic, 400, err.Error())
@@ -1068,6 +1112,18 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 			continue
 		}
+		if !last && hw.failed() && shapeRefused(hw.code(), hw.errBody()) {
+			// a request this vendor's API can't read (xAI's 422 over an
+			// input item it doesn't know, #350) another's may: the next is
+			// asked once, as each is, and this one doesn't rest
+			if other == nil {
+				other = &Try{Status: call.Status, Error: call.Error}
+			}
+			try.Fail = failShape
+			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+			skipped = append(skipped, c.label()+": "+call.Error)
+			continue
+		}
 		if wait, ok := passing(hw.code(), hw.header, again); ok && !last && again < lastRetries && hw.failed() && spentAfter(cands[i+1:]) {
 			// the others left are out of their allowance (Discord, waroy: a
 			// Codex account run out, Grok busy a moment): this one is the
@@ -1245,7 +1301,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, from provider.P
 	}
 	// Qoder is served through the API the client talks to, signed with the
 	// COSY envelope, with the account magpie signed in to.
-	if p.Account != nil && p.Account.Agent == "qoder" {
+	if p.Account != nil && (p.Account.Agent == "qoder" || p.Account.Agent == provider.QoderCNID) {
 		call.To = from
 		return s.serveQoder(w, r, from, p, model, body, &call.Usage)
 	}
@@ -1464,6 +1520,11 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	searchFn := false // Codex's tool search sent as a function
 	switch proto {
 	case provider.Responses:
+		// Responses Lite's tools, as an input item, go as OpenAI takes them
+		// only to OpenAI (#350)
+		if (p.Account == nil || p.Account.Agent != "codex") && !strings.HasSuffix(p.Host(), "openai.com") {
+			body = liftAdditionalTools(body)
+		}
 		// only the ChatGPT backend runs Codex's tool search as Codex sends it
 		if p.Account == nil || p.Account.Agent != "codex" {
 			body, searchFn = searchAsFunction(body)
@@ -1598,6 +1659,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		search = &searchTidy{}
 	}
 	buf := make([]byte, 32<<10)
+	var rerr error
 	for {
 		n, err := rd.Read(buf)
 		if n > 0 {
@@ -1617,6 +1679,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			}
 		}
 		if err != nil {
+			rerr = err
 			break
 		}
 	}
@@ -1626,7 +1689,55 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	if search != nil {
 		w.Write(search.flush())
 	}
+	if sse && r.Context().Err() == nil && !sniff.whole() {
+		// the upstream died mid-reply, or ended it short of its last
+		// event: say so in the stream rather than end it as if whole,
+		// which a client reads as a reply cut off for no reason (#370:
+		// dsh's "stream ended before message_stop", not retried). A Chat
+		// stream may end without [DONE] and be whole, so only a read that
+		// failed counts there.
+		var failed string
+		switch {
+		case rerr != nil && rerr != io.EOF:
+			failed = p.Name + ": " + rerr.Error()
+		case proto == provider.Anthropic || proto == provider.Responses:
+			failed = p.Name + ": the reply ended before it was complete"
+		}
+		if failed != "" {
+			w.Write(streamFailure(proto, failed))
+			if f != nil {
+				f.Flush()
+			}
+			return res.StatusCode, failed, true
+		}
+	}
 	return res.StatusCode, "", true
+}
+
+// streamFailure is an error event ending a stream in proto, as each
+// protocol's own server sends one mid-reply.
+func streamFailure(proto provider.Protocol, msg string) []byte {
+	var name string
+	var v map[string]any
+	switch proto {
+	case provider.Chat:
+		v = map[string]any{"error": map[string]any{"message": msg, "type": "api_error"}}
+	case provider.Responses:
+		name = "response.failed"
+		v = map[string]any{"type": name, "response": map[string]any{"object": "response", "status": "failed",
+			"error": map[string]any{"code": "server_error", "message": msg}}}
+	default:
+		name = "error"
+		v = map[string]any{"type": name, "error": map[string]any{"type": "api_error", "message": msg}}
+	}
+	b, _ := json.Marshal(v)
+	var out []byte
+	if name != "" {
+		out = append(out, "event: "+name+"\n"...)
+	}
+	out = append(out, "data: "...)
+	out = append(out, b...)
+	return append(out, "\n\n"...)
 }
 
 // eventStream reports whether a reply is server-sent events. The header
@@ -1709,6 +1820,11 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 		if req.CacheKey != "" && !s.fits(p.ID, cacheKeyField, to) {
 			r := *req
 			r.CacheKey, req = "", &r
+		}
+		if to == provider.Anthropic && p.IsBedrock() && req.Metadata != nil {
+			// not the plain id Bedrock checks metadata.user_id against (#176)
+			r := *req
+			r.Metadata, req = nil, &r
 		}
 		if want := to == provider.Chat && geminiCompat(p.Host(), model) && s.fits(p.ID, thinkingConfigField, to); want != req.GeminiCompat {
 			r := *req

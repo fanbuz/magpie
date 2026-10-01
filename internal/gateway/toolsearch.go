@@ -3,7 +3,6 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
-	"slices"
 )
 
 // Codex's tool search relayed to a Responses API other than the ChatGPT
@@ -37,37 +36,10 @@ func searchAsFunction(body []byte) ([]byte, bool) {
 	if !search {
 		return body, false
 	}
-	have := map[string]map[string]any{}
-	for _, t := range tools {
-		if tm, _ := t.(map[string]any); tm != nil {
-			if n, _ := tm["name"].(string); n != "" {
-				have[n] = tm
-			}
-		}
-	}
 	// a tool found is added once; a namespace found again (another search
 	// in the same MCP server) adds the tools it didn't have
-	add := func(tm map[string]any) {
-		n, _ := tm["name"].(string)
-		old := have[n]
-		if old == nil {
-			have[n] = tm
-			tools = append(tools, tm)
-			return
-		}
-		if old["type"] != "namespace" || tm["type"] != "namespace" {
-			return
-		}
-		nested, _ := old["tools"].([]any)
-		more, _ := tm["tools"].([]any)
-		for _, nt := range more {
-			nm, _ := nt.(map[string]any)
-			if nm != nil && !slices.ContainsFunc(nested, func(o any) bool { om, _ := o.(map[string]any); return om["name"] == nm["name"] }) {
-				nested = append(nested, nm)
-			}
-		}
-		old["tools"] = nested
-	}
+	have := toolsByName(tools)
+	add := func(tm map[string]any) { tools = addTool(tools, have, tm) }
 	if items, ok := m["input"].([]any); ok {
 		for i, it := range items {
 			im, _ := it.(map[string]any)

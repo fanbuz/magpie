@@ -88,8 +88,8 @@ func builtinLogins(agent string) (logins []Login, ok bool) {
 		logins = wbLoginList(wbSiteOf(agent))
 	case CommandCodePlanID:
 		logins = cmdLoginList()
-	case "qoder":
-		logins = loginsOf(qoderLogins())
+	case "qoder", QoderCNID:
+		logins = loginsOf(qoderLoginsOf(agent))
 	case "zed":
 		logins = zedLoginList()
 	case "factory":
@@ -108,12 +108,22 @@ func builtinLogins(agent string) (logins []Login, ok bool) {
 	return logins, true
 }
 
+// loginProvider is the id of the provider l signs in: a plugin's
+// ("plugin:grok") is its provider's, grok for a moved Grok, whose proxy
+// picks are kept under it.
+func loginProvider(l Login) string {
+	if id, ok := strings.CutPrefix(l.Agent, "plugin:"); ok {
+		return PluginID(id)
+	}
+	return l.Agent
+}
+
 func loginQuota(ctx context.Context, l Login) SubscriptionQuota {
-	ctx = ViaLogin(ctx, l.Agent, l.User) // asked through the account's own proxy
+	ctx = ViaLogin(ctx, loginProvider(l), l.User) // asked through the account's own proxy
 	if strings.HasPrefix(l.Agent, "plugin:") {
 		return pluginLoginQuota(ctx, l)
 	}
-	if l.Agent == "qoder" {
+	if l.Agent == "qoder" || l.Agent == QoderCNID {
 		return qoderLoginQuota(ctx, l)
 	}
 	if l.Agent == "zed" {

@@ -187,6 +187,9 @@ type settingsJSON struct {
 	WorkBuddyCheckins []provider.WorkBuddyCheckin `json:"workbuddyCheckins,omitempty"`
 	// FX is the dollar-to-yuan rate the cny currency choice shows costs at
 	FX fxJSON `json:"fx"`
+	// NotifyProblem is why a usage alert set wouldn't be seen: "denied"
+	// (notifications turned off for magpie) or "unavailable"
+	NotifyProblem string `json:"notifyProblem,omitempty"`
 }
 
 func settingsState() settingsJSON {
@@ -198,6 +201,9 @@ func settingsState() settingsJSON {
 		s.TerminalDefault = found.Default
 	}
 	s.FX = currentFX()
+	if (s.UsageAlert > 0 || s.BalanceAlert > 0) && notifyProblem != nil {
+		s.NotifyProblem = notifyProblem()
+	}
 	s.ProxyNow, s.ProxySource = netproxy.Describe()
 	s.Login = autostart.Enabled()
 	if s.LAN {
@@ -503,6 +509,12 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		if (!slices.Equal(settings.Load().TrayUsages, cur.TrayUsages) || in.TrayUsageEvery != cur.TrayUsageEvery) && onTrayUsage != nil {
 			onTrayUsage()
 		}
+		// an alert turned on or moved is looked at now, the Mac asked for its
+		// leave to notify as it is turned on (#368)
+		if (in.UsageAlert != cur.UsageAlert || in.BalanceAlert != cur.BalanceAlert) &&
+			(in.UsageAlert > 0 || in.BalanceAlert > 0) && onAlerts != nil {
+			onAlerts()
+		}
 		// the tray menu follows the page's language (#301)
 		if in.Lang != cur.Lang && onLang != nil {
 			onLang()
@@ -728,17 +740,8 @@ func state() stateJSON {
 	}
 	for _, a := range agent.Detected() {
 		vals := a.Values()
-		aj := agentJSON{ID: a.ID, Name: a.Name, Icon: a.Icon, Path: tilde(a.Path), Fields: []fieldJSON{}}
-		for _, f := range a.Fields {
-			opts := f.Options(vals)
-			if opts == nil {
-				opts = []agent.Option{}
-			}
-			aj.Fields = append(aj.Fields, fieldJSON{Key: f.Key, Label: f.Label, Value: vals[f.Key], Options: opts})
-		}
-		if takesCatalog(aj.Fields) {
-			aj.Models = modelCount(a.ID)
-		}
+		aj := agentJSON{ID: a.ID, Name: a.Name, Icon: a.Icon, Path: tilde(a.Path), Fields: agentFields(a, vals)}
+		aj.Models = agentModelCount(a.ID, aj.Fields)
 		aj.Drift = a.Drift()
 		if a.Import != nil {
 			aj.Import, aj.Added = a.Import(), a.Added != nil && a.Added()

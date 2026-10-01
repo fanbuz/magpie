@@ -61,7 +61,8 @@ func searchFor(ctx context.Context) *CallFor {
 // asked on this API.
 func searchesItself(p provider.Provider, proto provider.Protocol) bool {
 	if p.Account != nil {
-		return (p.Account.Agent == "codex" || p.Account.Agent == "grok") && proto == provider.Responses
+		// Grok by its id: moved to its plugin, its account is the plugin's
+		return (p.Account.Agent == "codex" || p.ID == "grok") && proto == provider.Responses
 	}
 	return slices.Contains(searchHosts[proto], provider.HostOf(p.Base(proto)))
 }

@@ -28,7 +28,12 @@ func sandbox(t *testing.T) string {
 	t.Setenv("HOME", h)
 	t.Setenv("USERPROFILE", h)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(h, ".config"))
-	t.Setenv("PATH", "")
+	// Gemini CLI is found by its binary alone
+	bin := filepath.Join(h, "bin")
+	write(t, filepath.Join(bin, "gemini"), "#!/bin/sh\n")
+	os.Chmod(filepath.Join(bin, "gemini"), 0o755)
+	write(t, filepath.Join(bin, "gemini.exe"), "")
+	t.Setenv("PATH", bin)
 	// never the machine's global node_modules
 	roots := piGlobalRoots
 	piGlobalRoots = func() []string { return nil }

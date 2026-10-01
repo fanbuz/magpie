@@ -444,6 +444,20 @@ var unservedWords = regexp.MustCompile(`(?i)model.{0,80}(not (supported|accessib
 // refusal of the provider, not of the request, another member may serve.
 var refusedWords = regexp.MustCompile(`(?i)unapproved channel|illegal api invocation`)
 
+// shapeWords are how a vendor says it can't read the request's shape — an
+// item, field or parameter it doesn't know, which another vendor's API may
+// take: xAI's 422 "Failed to deserialize the JSON body …: unknown item type"
+// (#350), OpenAI's "Unknown parameter". A request missing what every API
+// requires ("field required") or too long for the model isn't one.
+var shapeWords = regexp.MustCompile(`(?i)failed to deserialize|unknown (item |content |input )?(type|variant|field|parameter)|unknown_parameter|unrecognized (request argument|field|parameter)|extra (inputs|fields) are not permitted|additional properties are not allowed`)
+
+// shapeRefused says a request failed over its shape alone: the next
+// member is asked, and this one doesn't rest, as nothing is wrong with it.
+func shapeRefused(status int, body []byte) bool {
+	return (status == 400 || status == 422) && shapeWords.Match(body) &&
+		!quotaWords.Match(body) && !unservedWords.Match(body) && !refusedWords.Match(body)
+}
+
 // retryable says whether another provider may do better with a request
 // that failed this way: the vendor was busy, out of quota or failing, or
 // this key or provider can't serve it — not the request itself at fault.
@@ -452,7 +466,7 @@ func retryable(status int, body []byte) bool {
 	case status == 401, status == 402, status == 403, status == 404, status == 408, status == 429, status >= 500:
 		return true
 	case status == 400, status == 422:
-		return quotaWords.Match(body) || unservedWords.Match(body) || refusedWords.Match(body)
+		return quotaWords.Match(body) || unservedWords.Match(body) || refusedWords.Match(body) || shapeWords.Match(body)
 	}
 	return false
 }
@@ -546,6 +560,9 @@ type holdWriter struct {
 	// buffered: the vendor said it holds the reply back for safety checks,
 	// which may end in a refusal: held longer (holdBuffered)
 	buffered bool
+	// thinking: the reply has reasoned but said nothing yet, which a
+	// refusal may still end: held longer (holdThinking)
+	thinking bool
 
 	ended bool   // the stream's last event was written: the reply is whole
 	tail  []byte // the end of the last write, for a marker split across two
@@ -645,6 +662,14 @@ const (
 // a stream's next event.
 const holdBuffered = 4 * time.Minute
 
+// holdThinking is how long a stream is held while all it has is reasoning,
+// shown to nobody yet: Claude refused Claude Code after 10–25s of thinking,
+// which had let the stream through, so Claude Code got the refusal ("…'s
+// safeguards stopped the response above") and the next account was never
+// asked (#248). A reply that goes on to say something is let through, its
+// reasoning with it, as soon as it does.
+const holdThinking = 4 * time.Minute
+
 // scan reads the held stream's events so far: an error before any content
 // fails it; content, or waiting too long for it, lets it through.
 func (h *holdWriter) scan() {
@@ -661,6 +686,9 @@ func (h *holdWriter) scan() {
 		case eventBuffering:
 			h.buffered = true
 			continue
+		case eventThinking:
+			h.thinking = true
+			continue
 		case eventError:
 			h.failure, h.failMsg = status, msg
 			return
@@ -674,6 +702,9 @@ func (h *holdWriter) scan() {
 	longest := holdLongest
 	if h.buffered {
 		longest = holdBuffered
+	}
+	if h.thinking {
+		longest = max(longest, holdThinking)
 	}
 	if h.held.Len() > holdMost || time.Since(h.since) > longest {
 		h.flow()
@@ -776,6 +807,7 @@ const (
 	eventError
 	eventRefusal   // the reply's end, by the vendor's safety filter
 	eventBuffering // a lead saying the reply is held back for safety checks
+	eventThinking  // reasoning, before anything is said: a refusal may yet end it
 )
 
 // refusedStatus is what a refusal with nothing said is answered as: a
@@ -818,6 +850,16 @@ type streamPart struct {
 	Summary []struct {
 		Text string `json:"text"`
 	} `json:"summary"`
+}
+
+// thought tells whether a part is reasoning, said or not yet: a thinking
+// block, a reasoning item or its summary. It says nothing to the reader.
+func (p streamPart) thought() bool {
+	switch p.Type {
+	case "thinking", "redacted_thinking", "summary_text", "reasoning_text", "reasoning":
+		return true
+	}
+	return false
 }
 
 // said tells whether a part says anything an agent would show or act on:
@@ -942,6 +984,15 @@ func streamEvent(ev []byte) (kind, status int, msg string) {
 			return eventRefusal, refusedStatus, note
 		}
 		return errOf(v.Error)
+	// reasoning, before a word of the reply: held with it, and longer, for
+	// a refusal after it to go to another as one with nothing said (#248)
+	case typ == "content_block_start" && v.ContentBlock.thought(),
+		typ == "content_block_delta" && anthropicDeltaThinks(v.Delta),
+		(typ == "response.output_item.added" || typ == "response.output_item.done") && v.Item.thought(),
+		(typ == "response.reasoning_summary_part.added" || typ == "response.reasoning_summary_part.done") && v.Part.thought(),
+		typ == "response.reasoning_summary_text.delta", typ == "response.reasoning_text.delta",
+		typ == "response.reasoning_summary_text.done", typ == "response.reasoning_text.done":
+		return eventThinking, 0, ""
 	// what only frames a reply, before anything is said in it — held with
 	// its start, so a refusal after it can still go to another
 	case typ == "content_block_start" && !v.ContentBlock.said(),
@@ -974,10 +1025,16 @@ func streamEvent(ev []byte) (kind, status int, msg string) {
 		if r, ok := filterReasons[v.PromptFeedback.BlockReason]; ok {
 			return refusal(r)
 		}
+		thinks := false
 		for _, c := range *v.Candidates {
 			for _, p := range c.Content.Parts {
 				var part struct {
-					Text string `json:"text"`
+					Text    string `json:"text"`
+					Thought bool   `json:"thought"`
+				}
+				if json.Unmarshal(p, &part) == nil && part.Thought && part.Text != "" {
+					thinks = true // its reasoning, said to nobody yet
+					continue
 				}
 				if json.Unmarshal(p, &part) != nil || part.Text != "" || !bytes.Contains(p, []byte(`"text"`)) {
 					return eventContent, 0, "" // text, or a call
@@ -989,6 +1046,9 @@ func streamEvent(ev []byte) (kind, status int, msg string) {
 			if c.FinishReason != "" {
 				return eventContent, 0, ""
 			}
+		}
+		if thinks {
+			return eventThinking, 0, ""
 		}
 		return eventLead, 0, ""
 	case typ == "" && len(v.PromptFeedback.BlockReason) > 0:
@@ -1014,11 +1074,19 @@ func streamEvent(ev []byte) (kind, status int, msg string) {
 		return eventLead, 0, ""
 	case typ == "" && v.Choices != nil:
 		// a Chat chunk: the first says only who speaks
+		thinks := false
 		for _, c := range *v.Choices {
 			for k, x := range c.Delta {
-				if k != "role" && x != nil && x != "" {
+				if k == "role" || x == nil || x == "" {
+					continue
+				}
+				if k != "reasoning_content" && k != "reasoning" {
 					return eventContent, 0, ""
 				}
+				thinks = true
+			}
+			if thinks && c.FinishReason == nil {
+				continue
 			}
 			if c.FinishReason != nil {
 				if r, ok := filterReasons[*c.FinishReason]; ok {
@@ -1027,9 +1095,22 @@ func streamEvent(ev []byte) (kind, status int, msg string) {
 				return eventContent, 0, ""
 			}
 		}
+		if thinks {
+			return eventThinking, 0, ""
+		}
 		return eventLead, 0, ""
 	}
 	return eventContent, 0, ""
+}
+
+// anthropicDeltaThinks tells whether an Anthropic content_block_delta is
+// reasoning with something in it.
+func anthropicDeltaThinks(raw json.RawMessage) bool {
+	var d struct {
+		Type     string `json:"type"`
+		Thinking string `json:"thinking"`
+	}
+	return json.Unmarshal(raw, &d) == nil && d.Type == "thinking_delta" && d.Thinking != ""
 }
 
 // anthropicDeltaSays tells whether an Anthropic content_block_delta says
@@ -1124,6 +1205,35 @@ func policyRefusal(raw []byte) (string, bool) {
 		return note(c)
 	}
 	return "", false
+}
+
+// refusedCode is the code of a stream's error event (its data) when it is
+// the vendor's safety filter refusing, for a translation of it to keep:
+// said in another protocol as only its message, ChatGPT's bio_policy read
+// to Claude Code as any failure, and the account was set aside for it
+// rather than the next asked as after a refusal (#248).
+func refusedCode(data string) string {
+	var v struct {
+		Error    json.RawMessage `json:"error"`
+		Response struct {
+			Error json.RawMessage `json:"error"`
+		} `json:"response"`
+	}
+	if json.Unmarshal([]byte(data), &v) != nil {
+		return ""
+	}
+	for _, raw := range []json.RawMessage{v.Response.Error, v.Error, json.RawMessage(data)} {
+		if len(raw) == 0 || string(raw) == "null" {
+			continue
+		}
+		if _, ok := policyRefusal(raw); ok {
+			if c := errorCode(raw); c != "" && c != "error" {
+				return c
+			}
+			return "content_filter"
+		}
+	}
+	return ""
 }
 
 // refusedReply tells whether a whole reply, not streamed, is the vendor's

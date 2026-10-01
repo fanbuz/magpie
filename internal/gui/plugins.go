@@ -65,10 +65,13 @@ func pluginSubs() []pluginSubJSON {
 // pluginEntryJSON is a plugin as Settings → Plugins lists it.
 type pluginEntryJSON struct {
 	plugin.Entry
-	Error     string   `json:"error,omitempty"` // why it didn't load
-	Providers []string `json:"providers"`       // the names of those it signs in to
+	Error     string   `json:"error,omitempty"`   // why it didn't load
+	Providers []string `json:"providers"`         // the names of those it signs in to
 	Version   string   `json:"version,omitempty"` // installed
 	Latest    string   `json:"latest,omitempty"`  // on npm, when the market asked
+	// Moved are the built-in subscriptions moved onto it, which go back
+	// to themselves when it is removed or turned off
+	Moved []string `json:"moved"`
 }
 
 type pluginsJSON struct {
@@ -102,6 +105,10 @@ func pluginsState(ctx context.Context) pluginsJSON {
 		if j.Providers == nil {
 			j.Providers = []string{}
 		}
+		j.Moved = provider.MovedOnto(e.Spec)
+		if j.Moved == nil {
+			j.Moved = []string{}
+		}
 		s.Plugins = append(s.Plugins, j)
 	}
 	return s
@@ -111,7 +118,7 @@ func pluginsState(ctx context.Context) pluginsJSON {
 // says of each, and those added.
 type pluginMarketJSON struct {
 	Listings []pluginListingJSON `json:"listings"`
-	State    pluginsJSON   `json:"state"`
+	State    pluginsJSON         `json:"state"`
 }
 
 type pluginListingJSON struct {
@@ -191,13 +198,13 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 		case "add":
 			_, err = plugin.Add(ctx, in.Spec)
 		case "remove":
-			err = plugin.Remove(ctx, in.Spec)
+			err = provider.RemovePlugin(ctx, in.Spec)
 		case "update":
 			err = plugin.Update(ctx)
 		case "upgrade":
 			err = plugin.Upgrade(ctx, plugin.Name(in.Spec))
 		case "off":
-			err = plugin.SetOff(in.Spec, in.Off)
+			err = provider.SetPluginOff(ctx, in.Spec, in.Off)
 		default:
 			http.NotFound(rw, r)
 			return

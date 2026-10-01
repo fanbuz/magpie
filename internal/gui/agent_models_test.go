@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -73,5 +74,48 @@ func TestAgentModelsAPI(t *testing.T) {
 	got = call("POST", `{"hidden":[]}`)
 	if got.Count.Shown != got.Count.Listed {
 		t.Fatalf("%+v", got.Count)
+	}
+}
+
+// Every model taken out of an agent's lists leaves its pickers no catalog
+// entry, yet the line under its name stays, "Showing 0 / N", as the way to
+// put them back (#356).
+func TestAgentModelLineAllHidden(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	os.MkdirAll(filepath.Join(home, ".codex"), 0o755)
+	os.WriteFile(filepath.Join(home, ".codex", "config.toml"), []byte("model = \"gpt-5.5\"\n"), 0o600)
+	if err := provider.Save(provider.Provider{ID: "relay", Name: "Relay", Key: "k", Chat: "http://127.0.0.1:1/v1", Models: []string{"m1", "m2"}}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := agent.Find("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := func() *modelCountJSON { return agentModelCount(a.ID, agentFields(a, a.Values())) }
+	c := line()
+	if c == nil || c.Shown != c.Listed || c.Listed < 2 {
+		t.Fatalf("all shown: %+v", c)
+	}
+	var all []string
+	listed, _ := provider.ListedFor("codex")
+	for _, e := range listed {
+		all = append(all, e.ID)
+	}
+	if err := provider.SetHiddenModels("codex", all); err != nil {
+		t.Fatal(err)
+	}
+	if takesCatalog(agentFields(a, a.Values())) {
+		t.Fatal("a picker still lists a catalog entry; the case isn't reached")
+	}
+	if c := line(); c == nil || c.Shown != 0 || c.Listed != len(all) {
+		t.Fatalf("all hidden: %+v", c)
+	}
+	provider.SetHiddenModels("codex", nil)
+	if c := line(); c == nil || c.Shown != c.Listed {
+		t.Fatalf("put back: %+v", c)
 	}
 }

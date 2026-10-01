@@ -145,7 +145,7 @@
   }
   const tokens = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(Math.round(n));
   const pct = (n) => Math.round(n) + "%";
-  const FAIL = { rate: "rate limited", credit: "out of credit", quota: "quota used up", other: "failed", canceled: "canceled", foreign: "another account's reasoning", floor: "reply too short", verify: "needs verification", refused: "refused (safety filter)" };
+  const FAIL = { rate: "rate limited", credit: "out of credit", quota: "quota used up", other: "failed", canceled: "canceled", foreign: "another account's reasoning", floor: "reply too short", verify: "needs verification", refused: "refused (safety filter)", shape: "request not understood" };
   const failWord = (why) => t(FAIL[why] || "failed");
   const API = { anthropic: "Anthropic", chat: "OpenAI", responses: "OpenAI Responses", gemini: "Gemini" };
   const MODES = {
@@ -484,6 +484,8 @@
       return r.tries[i + 1]
         ? t("{who}'s safety filter refused the request before saying anything, so it goes on to the next before any of the reply reaches {agent}. Nothing is wrong with {who}, so it doesn't rest.", { who: name, agent })
         : t("{who}'s safety filter refused the request before saying anything, and nobody is left to try, so {agent} gets an error saying so, not an empty reply to ask again for.", { who: name, agent });
+    if (tr.fail === "shape")
+      return t("{who} answered {status}: its API couldn't read something in the request that another's may, so it goes on to the next before any of the reply reaches {agent}. Nothing is wrong with {who}, so it doesn't rest.", { who: name, status: tr.status, agent });
     if (tr.again)
       return t("{who} answered {status} · {fail}, and nobody else is left to ask — a failure that may pass, so it is tried again in {d}, before any of the reply reaches {agent}.",
         { who: name, status: tr.status, fail: failWord(tr.fail), d: took(tr.again), agent });
@@ -1238,7 +1240,9 @@
       }
       const row = el("div", "rt-act");
       const name = el("div", "nm");
-      name.append(el("b", "", who(w)), el("span", "", w.kind === "provider" ? w.model : w.plan || (w.kind === "key" ? t("API key") : "")));
+      // a provider's own row: its model, the provider's name is the heading
+      if (w.kind === "provider") name.append(el("b", "", w.model || w.name));
+      else name.append(el("b", "", who(w)), el("span", "", w.plan || (w.kind === "key" ? t("API key") : "")));
       let st, cls = "";
       const resting = a.rest && at(a.rest.until) > n;
       if (resting) { st = `${failWord(a.rest.why)} · ${restWhen(a.rest)}`; cls = "rest"; }
@@ -1255,9 +1259,16 @@
         el("span", "", t("tried {n}", { n: a.tried })),
         el("span", "ok", t("answered {n}", { n: a.ok })),
         ...(fails.length ? [el("span", "bad", fails.join(", "))] : []),
-        ...(a.last ? [el("span", "", t("last answered {time}", { time: clock(a.last) }))] : []),
-        ...[...a.models].map((m) => el("code", "mdl", m)));
+        ...(a.last ? [el("span", "", t("last answered {time}", { time: clock(a.last) }))] : []));
       row.append(name, el("div", "st " + cls, st), tally);
+      // the models it answered, on a line of their own, not wrapped in
+      // among the numbers; a provider's one model is already its name
+      const mdls = [...a.models].filter((m) => !(w.kind === "provider" && m === w.model));
+      if (mdls.length) {
+        const ms = el("div", "mdls");
+        ms.append(...mdls.map((m) => el("code", "mdl", m)));
+        row.append(ms);
+      }
       if (resting && a.rest.why === "verify") {
         // the vendor wants the account verified (#152): where, and a way to
         // stop its rest once it is
@@ -2646,10 +2657,16 @@
     if (v.hidden || !reqs.offsetParent) return;
     const above = reqs.getBoundingClientRect().top - box.getBoundingClientRect().top;
     const room = v.clientHeight - above - 28;
-    reqs.style.maxHeight = Math.round(Math.max(216, Math.min(420, room))) + "px";
+    const h = Math.round(Math.max(216, Math.min(420, room))) + "px";
+    if (reqs.style.maxHeight !== h) reqs.style.maxHeight = h;
   }
-  new ResizeObserver(fitReqs).observe($("#view-routing"));
-  new ResizeObserver(fitReqs).observe(box);
+  // the accounts beside the requests end where they do, so a new height
+  // resizes what the other observers have just been told of: size the
+  // list in the next frame, not inside this round of them
+  let fitting = 0;
+  const fitSoon = () => { if (!fitting) fitting = requestAnimationFrame(() => { fitting = 0; fitReqs(); }); };
+  new ResizeObserver(fitSoon).observe($("#view-routing"));
+  new ResizeObserver(fitSoon).observe(box);
   words();
   requestAnimationFrame(frame);
   poll();

@@ -23,6 +23,7 @@ import (
 
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/filememo"
+	"github.com/yetone/magpie/internal/plugin"
 )
 
 // Login is a remembered subscription account, without its secrets.
@@ -499,8 +500,8 @@ func Logins(agent string) []Login {
 		return wbLoginList(wbSiteOf(agent))
 	case CommandCodePlanID:
 		return cmdLoginList()
-	case "qoder":
-		return loginsOf(qoderLogins())
+	case "qoder", QoderCNID:
+		return loginsOf(qoderLoginsOf(agent))
 	case "zed":
 		return zedLoginList()
 	case "factory":
@@ -519,12 +520,22 @@ func Logins(agent string) []Login {
 			{"grok", grokLoginList}, {"copilot", copilotLoginList}, {"zcode", zcodeLoginList}, {"kiro", kiroLoginList},
 			{"devin", devinLoginList}, {"workbuddy", func() []Login { return wbLoginList(wbCN) }},
 			{WorkBuddyAIID, func() []Login { return wbLoginList(wbAI) }}, {CommandCodePlanID, cmdLoginList},
-			{"qoder", func() []Login { return loginsOf(qoderLogins()) }}, {"zed", zedLoginList}, {"factory", factoryLoginList},
+			{"qoder", func() []Login { return loginsOf(qoderLogins()) }},
+			{QoderCNID, func() []Login { return loginsOf(qoderLoginsOf(QoderCNID)) }}, {"zed", zedLoginList}, {"factory", factoryLoginList},
 			{MiMoID, mimoLoginList}, {"gemini", func() []Login { return googleLoginList("gemini") }},
 			{"antigravity", func() []Login { return googleLoginList("antigravity") }},
 		} {
 			if !Moved(b.id) {
 				side = append(side, b.list()...)
+			}
+		}
+		// a plugin's accounts go by its provider's id (a moved built-in's
+		// by the built-in's), the one in use first marked, as its own page
+		// lists them
+		for _, pp := range plugin.Cached() {
+			for _, l := range pluginLoginList(pp) {
+				l.Agent = PluginID(pp.ID)
+				side = append(side, l)
 			}
 		}
 	}
@@ -540,7 +551,7 @@ func Logins(agent string) []Login {
 	var out []Login
 	ls := readLogins()
 	for _, l := range ls {
-		if (agent != "" && l.Agent != agent) || sideAgent(l.Agent) {
+		if (agent != "" && l.Agent != agent) || sideAgent(l.Agent) || strings.HasPrefix(l.Agent, "plugin:") {
 			continue
 		}
 		using := strings.EqualFold(active[l.Agent], l.User)
@@ -598,8 +609,8 @@ func SwitchLogin(agent, user string) error {
 		return switchWorkBuddyLogin(wbSiteOf(agent), user)
 	case CommandCodePlanID:
 		return switchCommandCodeLogin(user)
-	case "qoder":
-		return switchSideLogin("qoder", user, qoderLogins())
+	case "qoder", QoderCNID:
+		return switchSideLogin(agent, user, qoderLoginsOf(agent))
 	case "zed":
 		return switchZedLogin(user)
 	case "factory":
@@ -741,8 +752,8 @@ func ForgetLogin(agent, user string) error {
 		return forgetWorkBuddyLogin(wbSiteOf(agent), user)
 	case CommandCodePlanID:
 		return forgetCommandCodeLogin(user)
-	case "qoder":
-		return forgetQoderLogin(user)
+	case "qoder", QoderCNID:
+		return forgetQoderLogin(agent, user)
 	case "zed":
 		return forgetZedLogin(user)
 	case "factory":

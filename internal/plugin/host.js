@@ -46,6 +46,61 @@ const sessions = new Map() // oauth sign-in in progress → its authorize result
 const inflight = new Map() // fetch id → AbortController
 let config = { provider: {} } // what the plugins' config hooks made of it
 
+// ---- a provider's own proxy ---------------------------------------------------
+
+// A request made for a provider or an account with a proxy of its own
+// (#237) goes through it, and so does every fetch the plugin makes for
+// it; one for a provider set to "direct" goes through none. Bun reads
+// *_PROXY once, and a fetch given no proxy option can't be told to skip
+// them, so the host is started with them as MAGPIE_*_PROXY and each
+// fetch is given magpie's own here when it has none of its own.
+// Loopback never goes through one.
+const via = new AsyncLocalStorage() // the proxy: "", "direct" or its URL
+const bunFetch = globalThis.fetch
+
+function proxyVar(k) {
+  return process.env["MAGPIE_" + k] || process.env["MAGPIE_" + k.toLowerCase()] || ""
+}
+
+const globalProxy = {
+  https: proxyVar("HTTPS_PROXY") || proxyVar("ALL_PROXY"),
+  http: proxyVar("HTTP_PROXY") || proxyVar("ALL_PROXY"),
+  no: proxyVar("NO_PROXY")
+    .split(",")
+    .map((s) => s.trim().toLowerCase().replace(/^\*?\./, ""))
+    .filter(Boolean),
+}
+
+function hostOf(input) {
+  try {
+    const u = new URL(typeof input === "string" || input instanceof URL ? input : input.url)
+    return { protocol: u.protocol, host: u.hostname.toLowerCase().replace(/^\[|\]$/g, "") }
+  } catch {
+    return null
+  }
+}
+
+function loopback(host) {
+  return host === "localhost" || host.endsWith(".localhost") || host === "::1" || /^127\./.test(host)
+}
+
+// proxyFor is the proxy a fetch of input goes through, "" for none.
+function proxyFor(input) {
+  const u = hostOf(input)
+  if (!u || loopback(u.host)) return ""
+  const own = via.getStore()
+  if (own === "direct") return ""
+  if (own) return own
+  if (globalProxy.no.some((n) => n === "*" || u.host === n || u.host.endsWith("." + n))) return ""
+  return u.protocol === "https:" ? globalProxy.https : u.protocol === "http:" ? globalProxy.http : ""
+}
+
+globalThis.fetch = Object.assign(function fetch(input, init) {
+  if (init && "proxy" in init) return bunFetch(input, init)
+  const p = proxyFor(input)
+  return p ? bunFetch(input, { ...init, proxy: p }) : bunFetch(input, init)
+}, bunFetch)
+
 // ---- auth.json ---------------------------------------------------------------
 
 function readAuth() {
@@ -434,13 +489,20 @@ async function info(id, key, strict) {
   for (const h of hooks) {
     const ph = h.hooks.provider
     if (ph?.id !== id || typeof ph.models !== "function") continue
+    const all = readAuth()
+    const k = key ?? accountsOf(all, id)[0] ?? id
     try {
-      const all = readAuth()
-      const k = key ?? accountsOf(all, id)[0] ?? id
       const next = await inScope(id, k, () => ph.models(JSON.parse(JSON.stringify(out)), { auth: all[k] }))
       out.models = Object.fromEntries(Object.entries(next ?? {}).map(([k, m]) => [k, { ...m, id: k, providerID: id }]))
     } catch (e) {
-      if (strict) throw e
+      // an error the models hook throws may say what it means for the
+      // sign-in, as an answer's X-Magpie-Sign-In does: a built-in whose
+      // model list the vendor refused marked the account
+      if (["expired", "kept", "renewed"].includes(e?.signIn) && all[k]) send({ event: "signIn", provider: id, account: k, said: e.signIn })
+      // strict (a move's check) fails on what the account can't do, but
+      // a sign-in the vendor refused isn't that: it is marked, as the
+      // built-in marked it, and goes along untried, as a lapsed one does
+      if (strict && !(e?.signIn === "expired" && all[k])) throw e
       send({ event: "log", level: "error", message: `${h.spec}: provider.models: ${e?.message ?? e}` })
     }
   }
@@ -458,6 +520,13 @@ async function providers() {
   for (const [id, a] of auths()) {
     const keys = accountsOf(stored, id)
     const p = await info(id)
+    // each account's own models, as the built-ins read each account's: a
+    // plan may serve fewer, or others, than the first account's. One that
+    // can't be read is taken to have them all.
+    const own = await Promise.all(keys.slice(1).map((k) => info(id, k, true).catch(() => null)))
+    const models = { ...p.models }
+    for (const q of own) for (const [k, m] of Object.entries(q?.models ?? {})) models[k] ??= m
+    const ids = (q) => Object.values(q.models).filter((m) => m.status !== "deprecated").map((m) => m.id)
     const first = stored[keys[0]]
     out.push({
       id,
@@ -470,8 +539,14 @@ async function providers() {
       signedIn: keys.length > 0,
       authType: first?.type ?? "",
       accountId: whoOf(first),
-      accounts: keys.map((k) => ({ key: k, type: stored[k]?.type ?? "", accountId: whoOf(stored[k]), hint: hintOf(stored[k]) })),
-      models: Object.values(p.models)
+      accounts: keys.map((k, i) => ({
+        key: k,
+        type: stored[k]?.type ?? "",
+        accountId: whoOf(stored[k]),
+        hint: hintOf(stored[k]),
+        models: own.length === 0 ? undefined : i === 0 ? ids(p) : own[i - 1] ? ids(own[i - 1]) : undefined,
+      })),
+      models: Object.values(models)
         .filter((m) => m.status !== "deprecated")
         .map((m) => ({
           id: m.id,
@@ -484,9 +559,11 @@ async function providers() {
           output: m.limit?.output ?? 0,
           reasoning: !!m.capabilities?.reasoning,
           image: !!m.capabilities?.input?.image,
+          imageSaid: typeof m.capabilities?.input?.image === "boolean",
           released: m.release_date ?? "",
           cost: m.cost,
           variants: Object.keys(m.variants ?? {}),
+          free: m.free === true,
         })),
     })
   }
@@ -570,12 +647,19 @@ async function authorize({ provider, method, inputs, account }) {
   return { session, url: a.url ?? "", instructions: a.instructions ?? "", method: a.method }
 }
 
+// failed is a sign-in's failure, with why, where the plugin tells it
+// ({ type: "failed", error: "…" }; OpenCode's own result has no reason).
+function failed(r) {
+  const why = typeof r?.error === "string" ? r.error.trim() : r?.error instanceof Error ? r.error.message : ""
+  return why ? { ok: false, error: why.slice(0, 500) } : { ok: false }
+}
+
 async function callback({ session, code }) {
   const s = sessions.get(session)
   if (!s) throw new Error("no such sign-in")
   sessions.delete(session)
   const r = await inScope(s.provider, s.key, () => (s.a.method === "code" ? s.a.callback(code ?? "") : s.a.callback()))
-  if (!r || r.type !== "success") return { ok: false }
+  if (!r || r.type !== "success") return failed(r)
   return { ok: true, ...save(s.provider, s.key, r, undefined) }
 }
 
@@ -589,7 +673,7 @@ async function apiKey({ provider, method, inputs, key, account }) {
     return { ok: true, provider, account: settle(provider, at) }
   }
   const r = await inScope(provider, at, () => m.authorize(inputs ?? {}))
-  if (!r || r.type !== "success") return { ok: false }
+  if (!r || r.type !== "success") return failed(r)
   return { ok: true, ...save(provider, at, r, inputs, key) }
 }
 
@@ -636,10 +720,18 @@ async function load({ provider, account }) {
 //       resetSecs?, display?, span? (seconds the window runs), model? (a
 //       word in the ids of the only models it counts), models? / notModels?
 //       (the ids it counts, or all but these), aside? (using it up doesn't
-//       stop the account) }]
+//       stop the account) }],
+//     signIn?: "expired" | "kept" | "renewed" (what the read means for the
+//       account's sign-in, as a model request's X-Magpie-Sign-In says;
+//       without it an error saying to sign in again marks the account and
+//       a clean read clears it)
 //   }
 // Run in the account's scope, a token it renews is saved to that account.
-async function usage({ provider, account }) {
+async function usage({ provider, account, proxy }) {
+  return via.run(proxy ?? "", () => usageOf(provider, account))
+}
+
+async function usageOf(provider, account) {
   const a = auths().get(provider)?.auth
   if (typeof a?.usage !== "function") throw new Error(`${provider}'s plugin doesn't tell its usage`)
   const key = accountKey(provider, account)
@@ -661,6 +753,7 @@ async function usage({ provider, account }) {
     balance: text(u.balance),
     error: text(u.error),
     user: text(u.user),
+    signIn: ["expired", "kept", "renewed"].includes(u.signIn) ? u.signIn : "",
     resets:
       u.resets && typeof u.resets === "object"
         ? { count: num(u.resets.count), until: when(u.resets.until), byWindow: !!u.resets.byWindow, fiveHour: num(u.resets.fiveHour), weekly: num(u.resets.weekly) }
@@ -688,9 +781,22 @@ function sdkHeaders(npm, key) {
   return { authorization: `Bearer ${key}` }
 }
 
+// bodyOf is the body as OpenCode hands it to a plugin's fetch: the string
+// the AI SDK built, as the plugins reshape only a string body. One that
+// isn't UTF-8 text stays bytes.
+function bodyOf(b64) {
+  if (!b64) return undefined
+  const b = Buffer.from(b64, "base64")
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(b)
+  } catch {
+    return b
+  }
+}
+
 async function doFetch(id, params) {
   const key = accountKey(params.provider, params.account)
-  return inScope(params.provider, key, () => fetchAs(id, key, params))
+  return via.run(params.proxy ?? "", () => inScope(params.provider, key, () => fetchAs(id, key, params)))
 }
 
 async function fetchAs(id, key, { provider, model, npm, url, method, headers, body, session }) {
@@ -729,7 +835,7 @@ async function fetchAs(id, key, { provider, model, npm, url, method, headers, bo
     const res = await f(url, {
       method: method ?? "POST",
       headers: h,
-      body: body ? Buffer.from(body, "base64") : undefined,
+      body: bodyOf(body),
       signal: ctl.signal,
     })
     const rh = {}
@@ -769,11 +875,14 @@ const handlers = {
   usage,
   // check tries one account as a request would: its loader, then its
   // models as the plugin lists them for it
-  async check(p) {
-    const key = accountKey(p.provider, p.account)
-    await load({ provider: p.provider, account: key })
-    const pi = await info(p.provider, key, true)
-    return { models: Object.keys(pi.models) }
+  // (through the account's proxy, as its requests go)
+  check(p) {
+    return via.run(p.proxy ?? "", async () => {
+      const key = accountKey(p.provider, p.account)
+      await load({ provider: p.provider, account: key })
+      const pi = await info(p.provider, key, true)
+      return { models: Object.keys(pi.models) }
+    })
   },
   // import keeps a sign-in made elsewhere (a built-in subscription's, moved
   // onto its plugin) as one more account, or as the account it already is

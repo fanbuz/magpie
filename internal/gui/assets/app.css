@@ -477,6 +477,10 @@ body.window .field.solo { grid-column: auto; }
 .reset-ask .reset-idle { color: var(--amber); }
 .quota-balance { display: flex; align-items: baseline; gap: 6px; font-size: 10.5px; color: var(--muted); }
 .quota-windows + .quota-balance { margin-top: 9px; }
+/* "Every model" at the end of the account's line, above its families */
+.text.quota-every { flex: none; margin: -2px -7px -2px 0; padding: 1px 7px; font-size: 10.5px; }
+.subscription-account .plan + .quota-every, .subscription-head .plan + .quota-every { margin-left: 4px; }
+.subscription-account .user + .quota-every, .subscription-head .quota-every { margin-left: auto; }
 .quota-balance b { margin-left: auto; font-size: 15px; color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
 .skeleton { display: block; border-radius: 5px; background: linear-gradient(90deg, var(--skel, var(--pill)) 25%, var(--skel-hi, var(--pill-hover)) 45%, var(--skel, var(--pill)) 65%); background-size: 240% 100%; animation: skeleton-shift 1.4s ease-in-out infinite; }
 @keyframes skeleton-shift { from { background-position: 100% 0; } to { background-position: -100% 0; } }
@@ -1744,6 +1748,11 @@ input.words.rule-match { flex: 1 1 auto; width: auto; min-width: 0; }
 .warm-at input.at { width: auto; height: 27px; padding: 0 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit; font-size: 12.5px; font-variant-numeric: tabular-nums; outline: none; transition: border-color .12s, box-shadow .12s; }
 .warm-at input.at:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 .warm-at input.at::-webkit-calendar-picker-indicator { opacity: .55; }
+/* a usage alert's share or amount: a short number field, its unit beside it */
+.warm-at input.at.num { width: 64px; text-align: right; }
+.warm-at .unit { color: var(--muted); font-size: 12.5px; margin-left: -4px; }
+.row.pref .sub .warn { color: var(--amber); }
+.row.pref .sub.wraps { white-space: normal; }
 /* the field's clock and picker in the page's own palette */
 :root[data-theme="dark"] .warm-at input.at { color-scheme: dark; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .warm-at input.at { color-scheme: dark; } }

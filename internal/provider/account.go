@@ -826,8 +826,10 @@ func Accounts() []Provider {
 	if p, ok := commandCodeAccount(); ok {
 		out = append(out, p)
 	}
-	if p, ok := qoderAccount(); ok {
-		out = append(out, p)
+	for _, agent := range qoderAgents {
+		if p, ok := qoderAccountOf(agent); ok {
+			out = append(out, p)
+		}
 	}
 	if p, ok := zedAccount(); ok {
 		out = append(out, p)
@@ -845,7 +847,35 @@ func Accounts() []Provider {
 	}
 	// a built-in moved onto its plugin is the plugin's now (migrate.go)
 	out = slices.DeleteFunc(out, func(p Provider) bool { return Moved(p.ID) })
-	return append(out, pluginAccounts()...)
+	return placeMoved(out, pluginAccounts())
+}
+
+// builtinOrder is the built-ins' ids in the order Accounts lists them.
+var builtinOrder = slices.Concat([]string{"claude", "codex", "copilot", "cursor", "grok", "devin", "kiro", "zcode",
+	"workbuddy", WorkBuddyAIID, CommandCodePlanID}, qoderAgents, []string{"zed", "factory", MiMoID, "gemini", "antigravity"})
+
+// placeMoved adds the plugins' accounts to the built-ins': one a built-in
+// was moved onto stands where the built-in stood, the others go last.
+func placeMoved(out, plugins []Provider) []Provider {
+	at := func(id string) int {
+		if i := slices.Index(builtinOrder, id); i >= 0 {
+			return i
+		}
+		return len(builtinOrder)
+	}
+	var rest []Provider
+	for _, p := range plugins {
+		if !Moved(p.ID) || !slices.Contains(builtinOrder, p.ID) {
+			rest = append(rest, p)
+			continue
+		}
+		i := slices.IndexFunc(out, func(q Provider) bool { return !q.IsPlugin() && at(q.ID) > at(p.ID) })
+		if i < 0 {
+			i = len(out)
+		}
+		out = slices.Insert(out, i, p)
+	}
+	return append(out, rest...)
 }
 
 func readJSON(path string, v any) bool {

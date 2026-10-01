@@ -26,6 +26,11 @@ type QuotaWindow struct {
 	ResetsAt  *time.Time `json:"resetsAt,omitempty"`
 	ResetSecs int64      `json:"resetSecs,omitempty"`
 	Display   string     `json:"display,omitempty"`
+	// Family is the model family a per-model window belongs to (Antigravity's
+	// "Gemini 3.1 Pro (High)" is Gemini's), for the GUI to show one figure a
+	// family, the tightest; each window is still here, and routing reads
+	// them one by one.
+	Family string `json:"family,omitempty"`
 
 	// For routing (see Allowances): how long the window runs, zero when
 	// not known; the only models it counts, by a word in their ids
@@ -77,7 +82,8 @@ var OnSubscriptionUsage func()
 
 // subscriptionTimeout bounds one refresh; the vendors' endpoints can be
 // unreachable without a proxy, and then each fetch would hang to it.
-var subscriptionTimeout = 10 * time.Second
+// A plugin's account waits as long as the plugin itself does (20s).
+var subscriptionTimeout = 20 * time.Second
 
 // SubscriptionUsage returns rolling quotas for signed-in first-party agents.
 // Results are cached because these private account endpoints are aggressively
@@ -270,6 +276,9 @@ func fetchSubscriptionUsage() []SubscriptionQuota {
 	}
 	if !moved("qoder") && !hidden["qoder"] {
 		fetches = append(fetches, perLogin(via("qoder"), loginsOf(qoderLogins()), "Qoder", "qoder")...)
+	}
+	if !moved(QoderCNID) && !hidden[QoderCNID] {
+		fetches = append(fetches, perLogin(via(QoderCNID), loginsOf(qoderLoginsOf(QoderCNID)), "Qoder CN", "qoder")...)
 	}
 	if !moved("zed") && !hidden["zed"] {
 		fetches = append(fetches, perLogin(via("zed"), zedLoginList(), "Zed", "zed")...)

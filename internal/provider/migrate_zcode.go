@@ -12,30 +12,27 @@ import (
 // the requests need as its refresh, as the plugin's own sign-in keeps
 // them. Nothing here rotates: a key lasts until it is deleted.
 //
-// ZCode's own sign-in is kept encrypted, where the plugin can't read it,
-// so it goes as a copy of what magpie reads now. A key or a team seat
-// lasts, and the copy with it; ZCode's session token alone (the Start
-// Plan) is renewed by ZCode, and a copy would lapse behind it, so such an
-// account stops the move and the built-in carries on.
+// ZCode's own sign-in goes marked as ZCode's (source "zcode"), with a copy
+// of what magpie reads now: the plugin, 0.1.2 on (the move installs no
+// older), reads ZCode's own credentials in its place for each request, as
+// the built-in does, so it follows ZCode's switches and the session token
+// ZCode renews (the Start Plan).
 func init() {
 	movers["zcode"] = &mover{
 		pkg:    "@magpie-community/opencode-zcode-auth",
+		min:    "0.1.4", // a failure's status and its sign-in mark as the built-in's
 		agents: []string{"zcode"},
 		out: func() ([]Moving, error) {
 			var out []Moving
 			for _, l := range zcodeLogins() {
-				k := l.key
-				if l.Own && k.Key == "" && !k.team() {
-					return nil, errors.New("ZCode's own sign-in has no coding plan key, only ZCode's session, which the plugin can't follow")
-				}
 				// the own account's copy goes back to nothing: ZCode keeps it
-				out = append(out, Moving{User: l.User, First: l.Active, On: l.On, Lapsed: l.Lapsed != "", Own: l.Own, Auth: zcodeOut(l.User, l.Plan, k)})
+				out = append(out, Moving{User: l.User, First: l.Active, On: l.On, Lapsed: l.Lapsed != "", Plan: l.Plan, Own: l.Own, Auth: zcodeOut(l.User, l.Plan, l.key, l.Own)})
 			}
 			return out, nil
 		},
 		back: func(ls []savedLogin, user string, auth map[string]any) ([]savedLogin, string, error) {
 			var s struct {
-				Site, Device, Key, Base, JWT, Token, Org, Project, Plan string
+				Site, Device, Key, Base, JWT, Token, Org, Project, Plan, Source string
 			}
 			if json.Unmarshal([]byte(str(auth["refresh"])), &s) != nil {
 				// a key signed in to in the plugin
@@ -48,6 +45,10 @@ func init() {
 				}
 			} else if s.Key == "" && s.JWT == "" {
 				s.Key = str(auth["access"])
+			}
+			// ZCode's own goes back to nothing: ZCode keeps it
+			if _, _, ok := zcodeOwn(); ok && s.Source == "zcode" {
+				return ls, ownUser(ls, "zcode", firstNonEmpty(user, str(auth["accountId"]))), nil
 			}
 			k := zcodeKey{Key: s.Key, Base: s.Base, JWT: s.JWT, Token: s.Token, Org: s.Org, Project: s.Project}
 			if k.Base == "" {
@@ -76,20 +77,24 @@ func init() {
 	}
 }
 
-// zcodeOut is a ZCode account as the plugin's sign-in keeps one.
-func zcodeOut(user, plan string, k zcodeKey) map[string]any {
+// zcodeOut is a ZCode account as the plugin's sign-in keeps one;
+// ZCode's own is marked as ZCode's, for the plugin to follow.
+func zcodeOut(user, plan string, k zcodeKey, own bool) map[string]any {
 	site := "zai"
 	if strings.Contains(k.Base, "bigmodel.cn") {
 		site = "bigmodel"
 	}
 	state := map[string]any{"site": site, "device": zcodeDeviceMid(), "base": k.Base}
+	if own {
+		state["source"] = "zcode"
+	}
 	for name, v := range map[string]string{"key": k.Key, "jwt": k.JWT, "token": k.Token, "org": k.Org, "project": k.Project, "plan": plan} {
 		if v != "" {
 			state[name] = v
 		}
 	}
 	expires := int64(0)
-	if k.Key == "" && !k.team() {
+	if k.Key == "" && !k.team() && !own { // ZCode's own is read anew each time
 		if exp, _ := jwtClaims(k.JWT)["exp"].(float64); exp > 0 {
 			expires = int64(exp) * 1000
 		}

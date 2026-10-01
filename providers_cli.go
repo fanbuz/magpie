@@ -43,6 +43,9 @@ const providerUsage = `usage:
   e.g. magpie provider add "My Relay" url=https://relay.example.com/v1 key=sk-…
        magpie provider add "Own Claude" anthropic=https://gw.example.com key=sk-… catalog=anthropic
        magpie provider add "My Relay" url=https://relay.example.com/v1 key=sk-… header.X-Org-Id=acme
+       magpie provider add remote-magpie sk-magpie-… url=http://192.168.1.20:3425 id=office
+                                   (another computer's magpie, shared on its network: its models and routing
+                                    groups as office/…, each request sent on in the API the agent spoke)
        magpie provider add anthropic sk-… id=anthropic-ws2 name="Anthropic WS2" header.anthropic-workspace-id=wrkspc_…
        magpie provider set my-relay models.url=https://relay.example.com/api/models catalog=
        magpie provider add "My Relay" url=https://relay.example.com/v1 key=sk-… balance=https://relay.example.com/api/usage/token balance.path='$data.total_available / 500000'
@@ -545,7 +548,8 @@ func announce(id string) error {
 
 func showProvider(p provider.Provider) error {
 	kv := func(k, v string) {
-		if v != "" {
+		// a plugin's provider is reached through the plugin, not a URL
+		if v != "" && !strings.HasPrefix(v, "plugin://") {
 			fmt.Printf("  %s %s\n", muted.Render(pad(k, 10)), v)
 		}
 	}
@@ -563,7 +567,14 @@ func showProvider(p provider.Provider) error {
 		if p.Account.Plan != "" {
 			who += muted.Render("  " + p.Account.Plan)
 		}
-		kv("account", who+muted.Render("  from "+p.Account.Agent+"'s own sign-in"))
+		from := p.Account.Agent + "'s own sign-in"
+		if p.IsPlugin() {
+			from = p.Name + "'s sign-in"
+			if provider.Moved(p.ID) {
+				from = p.ID + "'s own sign-in" // as the built-in said
+			}
+		}
+		kv("account", who+muted.Render("  from "+from))
 	case p.Key != "":
 		kv("key", muted.Render(provider.Mask(p.Key)))
 	case p.Ready():

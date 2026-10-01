@@ -319,3 +319,20 @@ func TestSearchToldAsAnthropics(t *testing.T) {
 		t.Fatalf("%+v", events)
 	}
 }
+
+// Grok moved to its plugin searches by itself as the built-in did: it is
+// known by its id, its account being the plugin's.
+func TestMovedGrokSearchesItself(t *testing.T) {
+	for _, agent := range []string{"grok", "plugin"} {
+		p := provider.Provider{ID: "grok", Responses: "plugin://grok/v1", Account: &provider.Account{Agent: agent}}
+		if !searchesItself(p, provider.Responses) {
+			t.Errorf("Grok as %q's account doesn't search by itself", agent)
+		}
+		if searchesItself(p, provider.Chat) {
+			t.Errorf("Grok as %q's account searches by itself on chat", agent)
+		}
+	}
+	if searchesItself(provider.Provider{ID: "fakeco", Responses: "plugin://fakeco/v1", Account: &provider.Account{Agent: "plugin"}}, provider.Responses) {
+		t.Error("another plugin's provider searches by itself")
+	}
+}

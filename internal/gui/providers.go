@@ -441,6 +441,20 @@ func ago(t time.Time) string {
 	}
 }
 
+// moveProvider and moveBackProvider are provider.Move and MoveBack, for
+// tests to stand in for.
+var (
+	moveProvider     = provider.Move
+	moveBackProvider = provider.MoveBack
+)
+
+// moveContext keeps a move going though the page that asked for it goes
+// (closed, reloaded): stopped halfway, a move leaves accounts in neither
+// place until it is run again.
+func moveContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
+}
+
 func providerRoutes(mux *http.ServeMux, w Windows) {
 	importAppsRoutes(mux)
 	pluginRoutes(mux, w)
@@ -550,12 +564,16 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			}
 		case "move":
 			// a built-in subscription's accounts onto its community plugin
-			if err := provider.Move(r.Context(), in.ID); err != nil {
+			ctx, cancel := moveContext(r)
+			defer cancel()
+			if err := moveProvider(ctx, in.ID); err != nil {
 				fail(rw, err)
 				return
 			}
 		case "moveback":
-			if err := provider.MoveBack(r.Context(), in.ID); err != nil {
+			ctx, cancel := moveContext(r)
+			defer cancel()
+			if err := moveBackProvider(ctx, in.ID); err != nil {
 				fail(rw, err)
 				return
 			}

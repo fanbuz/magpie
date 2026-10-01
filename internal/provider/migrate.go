@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -118,6 +119,9 @@ type Moving struct {
 	// Lapsed is an account the vendor already refused: it goes along, but
 	// isn't tried.
 	Lapsed bool
+	// Plan is the plan the account showed, kept beside it until the
+	// plugin tells it anew.
+	Plan string
 	// Own is the agent's own sign-in (its CLI's, its app's), which the
 	// plugin reads where the agent keeps it, as the built-in did.
 	Own  bool
@@ -142,6 +146,10 @@ type mover struct {
 	// has, and put it back.
 	take func() (json.RawMessage, error)
 	give func(json.RawMessage) error
+	// settle finishes the sign-ins handed back once logins.json is let go:
+	// what else of the built-in's they carry (a key onto its provider),
+	// whose saving syncs the agents, which read the accounts.
+	settle func(auths map[string]map[string]any) error
 }
 
 var movers = map[string]*mover{}
@@ -185,6 +193,17 @@ func MigrationOf(id string) (Migration, bool) {
 func Moved(id string) bool {
 	m, ok := MigrationOf(id)
 	return ok && m.State == MovePlugin
+}
+
+// movedAgent is whether the logins.json agent's accounts are a moved
+// built-in's, its plugin's now.
+func movedAgent(agent string) bool {
+	for id, mv := range movers {
+		if slices.Contains(mv.agents, agent) && Moved(id) {
+			return true
+		}
+	}
+	return false
 }
 
 // OnPlugins are the built-ins moved onto their plugins.
@@ -231,11 +250,20 @@ func lockMoves() (func(), error) {
 	for range 2 {
 		f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
+			fmt.Fprint(f, os.Getpid())
 			f.Close()
 			return func() { os.Remove(p) }, nil
 		}
+		// one left by a magpie that died moving (killed, or stopped
+		// mid-move) holds nothing
+		if b, rerr := os.ReadFile(p); rerr == nil {
+			if pid, perr := strconv.Atoi(strings.TrimSpace(string(b))); perr == nil && pid != os.Getpid() && !update.Alive(pid) {
+				os.Remove(p)
+				continue
+			}
+		}
 		if fi, serr := os.Stat(p); serr == nil && time.Since(fi.ModTime()) > 15*time.Minute {
-			os.Remove(p) // left by a magpie that died moving
+			os.Remove(p)
 			continue
 		}
 		return nil, errors.New("another magpie is moving subscriptions to plugins")
@@ -374,7 +402,8 @@ func move(ctx context.Context, id string, mv *mover) (err error) {
 		if a.Lapsed {
 			continue
 		}
-		models, err := plugin.Check(ctx, id, moved[i].Key)
+		// through the account's proxy, as its requests go
+		models, err := plugin.Check(ViaLogin(ctx, id, a.User), id, moved[i].Key)
 		if err != nil {
 			return fmt.Errorf("%s through the plugin: %w", a.User, err)
 		}
@@ -411,7 +440,11 @@ func keepOrder(pp plugin.Provider, accts []Moving, moved []movedAccount) error {
 			continue
 		}
 		ls = slices.DeleteFunc(ls, func(l savedLogin) bool { return l.Agent == agent && l.Home == ma.Key })
-		ls = append(ls, savedLogin{Agent: agent, User: a.User, Home: ma.Key, On: a.On || a.First, First: ma.Key == first, Seen: time.Now().UTC().Truncate(time.Second)})
+		l := savedLogin{Agent: agent, User: a.User, Plan: a.Plan, Home: ma.Key, On: a.On || a.First, First: ma.Key == first, Seen: time.Now().UTC().Truncate(time.Second)}
+		if a.Lapsed {
+			l.Lapsed = lapsedText(pp, a.User)
+		}
+		ls = append(ls, l)
 	}
 	if first != "" {
 		for i := range ls {
@@ -570,8 +603,23 @@ func handBack(ctx context.Context, id string, mv *mover, accts []movedAccount, k
 		}
 		return users, nil, writeLogins(arrange(ls, users))
 	}
+	settle := func(auths map[string]map[string]any) error {
+		if mv.settle == nil {
+			return nil
+		}
+		mine := map[string]map[string]any{}
+		for _, k := range keys {
+			if a := auths[k]; a != nil && !byKey[k].Own {
+				mine[k] = a
+			}
+		}
+		return mv.settle(mine)
+	}
 	seen := plugin.Auths(id)
 	users, errs, err := write(seen)
+	if err == nil && len(errs) == 0 {
+		err = settle(seen)
+	}
 	if err != nil || len(errs) > 0 {
 		return users, errs, err
 	}
@@ -585,7 +633,11 @@ func handBack(ctx context.Context, id string, mv *mover, accts []movedAccount, k
 	}
 	for _, k := range keys {
 		if t := taken[k]; t != nil && jsonText(t) != jsonText(seen[k]) {
-			return write(taken)
+			users, errs, err := write(taken)
+			if err == nil && len(errs) == 0 {
+				err = settle(taken)
+			}
+			return users, errs, err
 		}
 	}
 	return users, nil, nil
@@ -625,6 +677,12 @@ func MoveBack(ctx context.Context, id string) error {
 	// the backup first, for back to write into the accounts it came from
 	prep := func(ls []savedLogin, _ map[string]string) []savedLogin {
 		for _, b := range m.Backup {
+			// the agent's own sign-in is one row: one written while moved
+			// (the agent signed in to another account meanwhile) gives
+			// way to the one set aside, which takes the agent's user anew
+			if b.own() {
+				ls = slices.DeleteFunc(ls, func(l savedLogin) bool { return l.Agent == b.Agent && l.own() && !sameMoved(l, b) })
+			}
 			if !slices.ContainsFunc(ls, func(l savedLogin) bool { return sameMoved(l, b) }) {
 				ls = append(ls, b)
 			}
@@ -632,6 +690,15 @@ func MoveBack(ctx context.Context, id string) error {
 		return ls
 	}
 	arrange := func(ls []savedLogin, users map[string]string) []savedLogin {
+		// an account the vendor refused through the plugin goes back
+		// marked, as the built-in had marked it: back writes the plugin's
+		// sign-in as one just made, but the plugin's mark is the newer word
+		lapsed := map[string]string{}
+		for _, l := range ls {
+			if u := users[l.Home]; l.Agent == "plugin:"+id && u != "" && l.Lapsed != "" {
+				lapsed[strings.ToLower(u)] = l.Lapsed
+			}
+		}
 		// the plugin's rows of the accounts going back go with them, or
 		// the accounts page lists each twice, the plugin's copy empty
 		ls = slices.DeleteFunc(ls, func(l savedLogin) bool {
@@ -653,6 +720,11 @@ func MoveBack(ctx context.Context, id string) error {
 						ls[j].On = on
 					}
 				}
+			}
+		}
+		for j := range ls {
+			if t := lapsed[strings.ToLower(ls[j].User)]; t != "" && slices.Contains(mv.agents, ls[j].Agent) && !ls[j].own() {
+				ls[j].Lapsed = t
 			}
 		}
 		if firstUser != "" {
@@ -737,14 +809,27 @@ func MoveRetiring(ctx context.Context) map[string]error {
 	return out
 }
 
+// keepMovedCurrent updates the plugin of each built-in moved onto one to
+// the version its move needs, when older: a built-in came up to date with
+// magpie, and its plugin does too. One turned off or run from a folder is
+// left as it is.
+func keepMovedCurrent(ctx context.Context) {
+	for _, id := range OnPlugins() {
+		mv := movers[id]
+		if mv.min == "" {
+			continue
+		}
+		if err := installPlugin(ctx, mv.pkg, mv.min); err != nil {
+			log.Printf("updating %s's plugin: %s", id, err)
+		}
+	}
+}
+
 // KeepRetiringMoved moves the built-ins being retired, run by the magpie
 // serving the gateway (one magpie, never two at once): a little after it
 // starts, then every hour, so a failed move is tried again once moveRetry
-// has gone.
+// has gone. It also keeps each moved built-in's plugin up to date.
 func KeepRetiringMoved(ctx context.Context) {
-	if len(Retiring) == 0 {
-		return
-	}
 	t := time.NewTimer(20 * time.Second)
 	defer t.Stop()
 	for {
@@ -753,6 +838,7 @@ func KeepRetiringMoved(ctx context.Context) {
 			return
 		case <-t.C:
 		}
+		keepMovedCurrent(ctx)
 		for id, err := range MoveRetiring(ctx) {
 			if err != nil {
 				log.Printf("moving %s to its plugin: %s (it stays built-in)", id, err)
@@ -762,4 +848,53 @@ func KeepRetiringMoved(ctx context.Context) {
 		}
 		t.Reset(time.Hour)
 	}
+}
+
+// MovedOnto are the built-ins moved onto the plugin named (its spec or
+// package name).
+func MovedOnto(name string) []string {
+	var out []string
+	for _, e := range plugin.Load().Plugins {
+		if plugin.Name(e.Spec) != name && e.Spec != name {
+			continue
+		}
+		pkg := plugin.PackageName(e.Spec)
+		for _, id := range OnPlugins() {
+			if m, _ := MigrationOf(id); m.Package == pkg && !slices.Contains(out, id) {
+				out = append(out, id)
+			}
+		}
+	}
+	return out
+}
+
+// releasePlugin moves the built-ins on the plugin named back first, so
+// taking the plugin away leaves none of them without its accounts.
+func releasePlugin(ctx context.Context, name string) error {
+	for _, id := range MovedOnto(name) {
+		if err := MoveBack(ctx, id); err != nil {
+			return fmt.Errorf("moving %s back to the built-in: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// RemovePlugin removes the plugin named, the built-ins moved onto it moved
+// back to themselves first.
+func RemovePlugin(ctx context.Context, name string) error {
+	if err := releasePlugin(ctx, name); err != nil {
+		return err
+	}
+	return plugin.Remove(ctx, name)
+}
+
+// SetPluginOff turns the plugin named off, the built-ins moved onto it
+// moved back to themselves first, or back on.
+func SetPluginOff(ctx context.Context, name string, off bool) error {
+	if off {
+		if err := releasePlugin(ctx, name); err != nil {
+			return err
+		}
+	}
+	return plugin.SetOff(name, off)
 }

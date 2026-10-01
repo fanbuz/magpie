@@ -13,12 +13,13 @@ import (
 func init() {
 	movers["zed"] = &mover{
 		pkg:    "@magpie-community/opencode-zed-auth",
+		min:    "0.1.5", // a failure's status and its sign-in mark as the built-in's
 		agents: []string{"zed"},
 		out: func() ([]Moving, error) {
 			var out []Moving
 			for _, l := range zedLogins() {
 				c := l.creds
-				out = append(out, Moving{User: l.User, First: l.Active, On: l.On, Lapsed: l.Lapsed != "", Auth: map[string]any{
+				out = append(out, Moving{User: l.User, First: l.Active, On: l.On, Lapsed: l.Lapsed != "", Plan: l.Plan, Auth: map[string]any{
 					"type":      "oauth",
 					"access":    c.Access,
 					"refresh":   jsonText(map[string]any{"userId": c.UserID, "systemId": c.SystemID, "org": c.Org, "plan": c.Plan, "login": c.Login, "name": c.Name}),

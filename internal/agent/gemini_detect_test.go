@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"encoding/base64"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -9,7 +8,8 @@ import (
 )
 
 // TestGeminiNotAntigravity: a ~/.gemini holding only what Antigravity keeps
-// there is no Gemini CLI (#330); what Gemini CLI writes, or its binary, is.
+// there is no Gemini CLI (#330), nor one holding what Gemini CLI left when
+// it was uninstalled (#230); its binary is.
 func TestGeminiNotAntigravity(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -27,26 +27,14 @@ func TestGeminiNotAntigravity(t *testing.T) {
 		t.Fatal("agy not detected from ~/.gemini/antigravity-cli")
 	}
 
-	// a sign-in Antigravity's OAuth client minted there isn't Gemini CLI's
-	creds := filepath.Join(dir, "oauth_creds.json")
-	claims := base64.RawURLEncoding.EncodeToString([]byte(`{"azp":"other.apps.googleusercontent.com","aud":"other.apps.googleusercontent.com"}`))
-	os.WriteFile(creds, []byte(`{"refresh_token":"r","id_token":"e30.`+claims+`.sig"}`), 0o600)
+	// what Gemini CLI leaves behind when it is uninstalled (#230): its
+	// settings, its sign-in, its ids, all of it
+	os.WriteFile(filepath.Join(dir, "oauth_creds.json"), []byte(`{"refresh_token":"r"}`), 0o600)
+	for _, f := range []string{"settings.json", ".env", "google_accounts.json", "installation_id", "trustedFolders.json", "mcp-oauth-tokens.json"} {
+		os.WriteFile(filepath.Join(dir, f), []byte("{}"), 0o644)
+	}
 	if gemini(home).Detected() {
-		t.Fatal("another app's sign-in taken for Gemini CLI")
-	}
-	os.WriteFile(creds, []byte(`{"refresh_token":"r"}`), 0o600)
-	if !gemini(home).Detected() {
-		t.Fatal("Gemini CLI's sign-in not detected")
-	}
-	os.Remove(creds)
-
-	for _, f := range []string{"settings.json", ".env", "google_accounts.json", "installation_id"} {
-		p := filepath.Join(dir, f)
-		os.WriteFile(p, []byte("{}"), 0o644)
-		if !gemini(home).Detected() {
-			t.Fatalf("%s not taken for Gemini CLI", f)
-		}
-		os.Remove(p)
+		t.Fatal("an uninstalled Gemini CLI's leftovers taken for it")
 	}
 
 	if runtime.GOOS == "windows" {
