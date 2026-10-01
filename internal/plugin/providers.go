@@ -80,6 +80,9 @@ type Provider struct {
 	AuthType  string  `json:"authType"`
 	AccountID string  `json:"accountId"`
 	Models    []Model `json:"models"`
+	// FellBack says the plugin's models hook couldn't fetch its vendor's
+	// list and gave the default one back.
+	FellBack bool `json:"fellBack,omitempty"`
 	// Accounts are the accounts signed in to it, the one kept under its
 	// own id first; SignedIn, AuthType and AccountID are that one's.
 	Accounts []Account `json:"accounts"`
@@ -95,7 +98,8 @@ type Account struct {
 	Hint string `json:"hint,omitempty"`
 	// Models are the ids of the provider's models this account has, when
 	// the provider has more than one account; none, it has them all.
-	Models []string `json:"models,omitempty"`
+	Models   []string `json:"models,omitempty"`
+	FellBack bool     `json:"fellBack,omitempty"`
 }
 
 var (
@@ -130,6 +134,7 @@ func Providers(ctx context.Context) ([]Provider, error) {
 		return nil, err
 	}
 	provMu.Lock()
+	ps = keepListed(ps, provCache)
 	ps = keepUnloaded(ps, provCache)
 	provCache, provGood = ps, true
 	provMu.Unlock()
@@ -137,6 +142,42 @@ func Providers(ctx context.Context) ([]Provider, error) {
 		_ = writeWhole(providersPath(), b)
 	}
 	return ps, nil
+}
+
+// keepListed is ps with a list a plugin fell back to replaced by the one
+// it told last: a built-in whose fetch fails keeps the list it fetched
+// last too, so a vendor's hiccup never shrinks the models to the plugin's
+// short defaults.
+func keepListed(ps, last []Provider) []Provider {
+	if last == nil {
+		if b, err := steady.ReadFile(providersPath()); err == nil {
+			_ = json.Unmarshal(b, &last)
+		}
+	}
+	was := map[string]Provider{}
+	for _, p := range last {
+		was[p.Spec+"\x00"+p.ID] = p
+	}
+	for i, p := range ps {
+		l, ok := was[p.Spec+"\x00"+p.ID]
+		if !ok {
+			continue
+		}
+		if p.FellBack && !l.FellBack && len(l.Models) > 0 {
+			ps[i].Models, ps[i].FellBack = l.Models, false
+		}
+		for j, a := range p.Accounts {
+			if !a.FellBack {
+				continue
+			}
+			for _, b := range l.Accounts {
+				if b.Key == a.Key && !b.FellBack && len(b.Models) > 0 {
+					ps[i].Accounts[j].Models, ps[i].Accounts[j].FellBack = b.Models, false
+				}
+			}
+		}
+	}
+	return ps
 }
 
 // keepUnloaded is ps with the providers last known of an installed

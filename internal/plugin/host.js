@@ -105,10 +105,27 @@ function sent(input, init) {
   return p ? bunFetch(input, { ...init, proxy: p }) : bunFetch(input, init)
 }
 
+// listing is what a models hook's fetches came to: whether it asked any,
+// and whether the last it asked answered
+const listing = new AsyncLocalStorage()
+
+function asked(input, init) {
+  const l = listing.getStore()
+  if (!l) return sent(input, init)
+  l.tried = true
+  return sent(input, init).then(
+    (res) => ((l.lastOk = res.ok), res),
+    (e) => {
+      l.lastOk = false
+      throw e
+    },
+  )
+}
+
 globalThis.fetch = Object.assign(function fetch(input, init) {
   const r = reach.getStore()
-  if (!r) return sent(input, init)
-  return sent(input, init).then(
+  if (!r) return asked(input, init)
+  return asked(input, init).then(
     (res) => ((r.reached = true), res),
     (e) => {
       r.failed ??= e
@@ -533,7 +550,13 @@ async function info(id, key, strict) {
     const all = readAuth()
     const k = key ?? accountsOf(all, id)[0] ?? id
     try {
-      const next = await inScope(id, k, () => ph.models(JSON.parse(JSON.stringify(out)), { auth: all[k] }))
+      const given = JSON.parse(JSON.stringify(out))
+      const l = { tried: false, lastOk: false }
+      const next = await listing.run(l, () => inScope(id, k, () => ph.models(given, { auth: all[k] })))
+      // a hook that asked its vendor, got no list and gave back the one it
+      // was given fell back: magpie keeps the list it had, as a built-in
+      // whose fetch failed keeps the one it fetched last
+      out.fellBack = next === given.models && l.tried && !l.lastOk
       out.models = Object.fromEntries(Object.entries(next ?? {}).map(([k, m]) => [k, { ...m, id: k, providerID: id }]))
     } catch (e) {
       // an error the models hook throws may say what it means for the
@@ -610,12 +633,14 @@ async function providers() {
       signedIn: keys.length > 0,
       authType: first?.type ?? "",
       accountId: whoOf(first),
+      fellBack: keys.length > 0 && !!p.fellBack,
       accounts: keys.map((k, i) => ({
         key: k,
         type: stored[k]?.type ?? "",
         accountId: whoOf(stored[k]),
         hint: hintOf(stored[k]),
         models: own.length === 0 ? undefined : i === 0 ? ids(p) : own[i - 1] ? ids(own[i - 1]) : undefined,
+        fellBack: i === 0 ? !!p.fellBack : !!own[i - 1]?.fellBack,
       })),
       models: Object.values(models)
         .filter((m) => m.status !== "deprecated")

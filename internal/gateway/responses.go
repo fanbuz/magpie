@@ -692,11 +692,14 @@ func (e *responsesEncoder) send(typ string, fields map[string]any) {
 }
 
 func (e *responsesEncoder) response(status string, extra map[string]any) map[string]any {
-	out := map[string]any{"id": e.id, "object": "response", "created_at": e.created, "status": status,
-		"model": e.model, "output": e.output, "parallel_tool_calls": true, "tool_choice": "auto", "tools": []any{}}
-	if out["output"] == nil {
-		out["output"] = []any{}
+	// a list, never null, before any item: Muse Code refuses a stream whose
+	// response.created has output null (its nil slice in an any isn't nil)
+	output := e.output
+	if output == nil {
+		output = []map[string]any{}
 	}
+	out := map[string]any{"id": e.id, "object": "response", "created_at": e.created, "status": status,
+		"model": e.model, "output": output, "parallel_tool_calls": true, "tool_choice": "auto", "tools": []any{}}
 	for k, v := range extra {
 		out[k] = v
 	}

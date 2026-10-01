@@ -97,7 +97,7 @@ func init() {
 	// names, as the built-in does: the homes stay where they are.
 	movers["grok"] = &mover{
 		pkg:    "@magpie-community/opencode-grok-auth",
-		min:    "0.1.4", // a failure's status and its sign-in mark as the built-in's; grok-4.7's reasoning levels
+		min:    "0.1.5", // a failure's status and its sign-in mark as the built-in's; grok-4.7's reasoning levels; a token Grok refuses early reads as expired
 		agents: []string{"grok"},
 		out: func() ([]Moving, error) {
 			var out []Moving

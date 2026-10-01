@@ -22,10 +22,12 @@ import (
 
 // Record is one call.
 type Record struct {
-	Time     time.Time `json:"t"`
-	Agent    string    `json:"agent"` // magpie agent id, or the client's product name
-	Provider string    `json:"provider"`
-	Host     string    `json:"host,omitempty"` // where the call went: provider.Where then
+	Time            time.Time `json:"t"`
+	Agent           string    `json:"agent"` // magpie agent id, or the client's product name
+	Provider        string    `json:"provider"`
+	Host            string    `json:"host,omitempty"`          // where the call went: provider.Where then
+	ProviderKeyID   string    `json:"providerKeyId,omitempty"` // fingerprint of the API key actually used
+	ProviderKeyName string    `json:"providerKeyName,omitempty"`
 	// SessionProvider is the provider ID recorded by the agent. SessionAccount
 	// identifies the session's creator, not the account used for an API request.
 	// Neither field establishes an upstream route from today's configuration.
@@ -283,9 +285,11 @@ func (t *Totals) add(r Record, price *catalog.Price) {
 
 // Group is the share of one agent or model.
 type Group struct {
-	ID       string `json:"id"`
-	Provider string `json:"provider,omitempty"` // models only
-	Model    string `json:"model,omitempty"`
+	ID              string `json:"id"`
+	Provider        string `json:"provider,omitempty"` // models only
+	Model           string `json:"model,omitempty"`
+	ProviderKeyID   string `json:"providerKeyId,omitempty"`
+	ProviderKeyName string `json:"providerKeyName,omitempty"`
 	// Host is where the calls went, when the provider's id has gone to
 	// more than one place, or elsewhere than the provider goes now: its
 	// calls are then told apart by it, not summed under the id.
@@ -319,10 +323,11 @@ type Summary struct {
 	Period Period    `json:"period"`
 	Since  time.Time `json:"since"`
 	Totals
-	Bucket string  `json:"bucket"` // hour | day | week
-	Series []Point `json:"series"`
-	Agents []Group `json:"agents"`
-	Models []Group `json:"models"`
+	Bucket       string  `json:"bucket"` // hour | day | week
+	Series       []Point `json:"series"`
+	Agents       []Group `json:"agents"`
+	Models       []Group `json:"models"`
+	ProviderKeys []Group `json:"providerKeys"`
 	// Sessions are the calls that named their session, by session.
 	Sessions []Group `json:"sessions"`
 }
@@ -342,7 +347,7 @@ func summarize(p Period, now time.Time, recs []Record) Summary {
 			}
 		}
 	}
-	s := Summary{Period: p, Bucket: "day", Agents: []Group{}, Models: []Group{}, Sessions: []Group{}, Series: []Point{}}
+	s := Summary{Period: p, Bucket: "day", Agents: []Group{}, Models: []Group{}, ProviderKeys: []Group{}, Sessions: []Group{}, Series: []Point{}}
 	var first time.Time
 	for _, r := range recs {
 		if !r.IsRejected() && (first.IsZero() || r.Time.Before(first)) {
@@ -369,11 +374,19 @@ func summarize(p Period, now time.Time, recs []Record) Summary {
 		}
 	}
 	goesNow := map[string]string{}
+	keyProviders := map[string]bool{}
 	for _, p := range provider.All() {
 		goesNow[p.ID] = who(p.Where())
+		keyProviders[p.ID] = p.Account == nil && p.Key != ""
+	}
+	for _, r := range recs {
+		if r.ProviderKeyID != "" {
+			keyProviders[r.Provider] = true
+		}
 	}
 	agents := map[string]*Group{}
 	models := map[string]*Group{}
+	keys := map[string]*Group{}
 	sessions := map[string]*Group{}
 	for _, r := range recs {
 		if r.IsRejected() {
@@ -406,6 +419,16 @@ func summarize(p Period, now time.Time, recs []Record) Summary {
 			models[k] = m
 		}
 		m.add(r, pr)
+		if keyProviders[r.Provider] {
+			id := r.Provider + "#" + r.ProviderKeyID
+			g := keys[id]
+			if g == nil {
+				g = &Group{ID: id, Provider: r.Provider, ProviderKeyID: r.ProviderKeyID}
+				keys[id] = g
+			}
+			g.ProviderKeyName = r.ProviderKeyName
+			g.add(r, pr)
+		}
 		if r.Session != "" {
 			g := sessions[id+"|"+r.Session]
 			if g == nil {
@@ -434,6 +457,10 @@ func summarize(p Period, now time.Time, recs []Record) Summary {
 	}
 	byTokens(s.Agents)
 	byTokens(s.Models)
+	for _, g := range keys {
+		s.ProviderKeys = append(s.ProviderKeys, *g)
+	}
+	byTokens(s.ProviderKeys)
 	for _, g := range sessions {
 		s.Sessions = append(s.Sessions, *g)
 	}

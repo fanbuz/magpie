@@ -310,7 +310,8 @@ function renderAgents() {
       v.append(el("span", "vt", main ? (opt?.label || main.value || t("default")) : ""));
       sum.append(v);
       // how much effort as three bars, in a column of its own down the list:
-      // none lit for the default, or for an agent that has no such setting
+      // none lit for the default, off, none or auto, or for an agent that has
+      // no such setting
       const ef = a.fields.find(effortOf);
       sum.append(effortBars(ef));
       const c = el("span", "chev");
@@ -1578,12 +1579,36 @@ function effortName(option) {
   return t(option.label || option.value);
 }
 
-// An effort level as four bars filled up to it: none for the default or
-// off, all four for the highest the agent offers.
-function effortIcon(f) {
-  const levels = (f.options || []).filter((o) => o.value && o.value !== "off");
+// The thinking levels agents name, lowest first; off and none are no
+// thinking at all.
+const EFFORT_ORDER = ["off", "none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+// effortStops are an effort field's options with its value among them when
+// it isn't one, as the panel's slider has its stops: a level in its place
+// (max above high), anything else — unset, auto, one magpie doesn't know —
+// first.
+function effortStops(f) {
+  const options = f?.options || [];
+  if (!f || options.some((o) => o.value === f.value)) return options;
+  const r = EFFORT_ORDER.indexOf(f.value);
+  const i = r < 0 ? 0 : options.findIndex((o) => EFFORT_ORDER.indexOf(o.value) > r);
+  const cut = i < 0 ? options.length : i;
+  return [...options.slice(0, cut), { value: f.value }, ...options.slice(cut)];
+}
+
+// effortLit: how many of n bars an effort lights, as far as its stop goes
+// among the levels: none for the default, off, none, auto or a value that
+// isn't a level, all n for the highest.
+function effortLit(f, n) {
+  const levels = effortStops(f).filter((o) => o.value && !["off", "none", "auto"].includes(o.value) &&
+    (EFFORT_ORDER.includes(o.value) || f.options?.includes(o)));
   const at = levels.findIndex((o) => o.value === f.value);
-  const lit = at < 0 ? 0 : Math.max(1, Math.round(((at + 1) / levels.length) * 4));
+  return at < 0 ? 0 : Math.max(1, Math.round(((at + 1) / levels.length) * n));
+}
+
+// An effort level as four bars filled up to it.
+function effortIcon(f) {
+  const lit = effortLit(f, 4);
   const e = el("span", "ic effort-ic");
   const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   s.setAttribute("viewBox", "0 0 16 16");
@@ -1595,10 +1620,8 @@ function effortIcon(f) {
 
 // effortBars: the panel's effort at a glance, three bars lit up to it.
 function effortBars(f) {
-  const levels = (f?.options || []).filter((o) => o.value && o.value !== "off");
-  const at = f ? levels.findIndex((o) => o.value === f.value) : -1;
   const e = el("span", "eff");
-  e.dataset.l = at < 0 ? 0 : Math.max(1, Math.round(((at + 1) / levels.length) * 3));
+  e.dataset.l = effortLit(f, 3);
   e.append(el("i"), el("i"), el("i"));
   if (f) e.title = t("{label}: {value}", { label: t(f.label), value: effortName(optionFor(f, f.value) || { value: f.value }) });
   return e;
@@ -1609,10 +1632,10 @@ function effortBars(f) {
 // shows at once, bars and all; the write follows, in order, so a slow agent
 // config never holds the thumb (巨卡).
 function effortSeg(a, f) {
-  // a value that isn't one of the levels (unset, or one magpie doesn't list)
-  // is a stop of its own, as the picker's current value is: shown as the
-  // lowest level, a touch wrote that level over it
-  const options = f.options.some((o) => o.value === f.value) ? f.options : [{ value: f.value }, ...f.options];
+  // a value that isn't one of the levels offered is a stop of its own, as
+  // the picker's current value is (shown as the lowest level, a touch wrote
+  // that level over it)
+  const options = effortStops(f);
   const last = Math.max(1, options.length - 1);
   const box = el("div", "effort-control");
   const head = el("div", "effort-head");

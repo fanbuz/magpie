@@ -65,7 +65,7 @@ func (f Filter) keeps(r Record) bool {
 		return false
 	}
 	if q := strings.ToLower(strings.TrimSpace(f.Query)); q != "" {
-		return slices.ContainsFunc([]string{r.Requested, r.Model, r.Served, r.Provider, r.Host, r.Session, r.Effort, r.SessionProvider, r.SessionAccount}, func(s string) bool {
+		return slices.ContainsFunc([]string{r.Requested, r.Model, r.Served, r.Provider, r.Host, r.Session, r.Effort, r.SessionProvider, r.SessionAccount, r.ProviderKeyID, r.ProviderKeyName}, func(s string) bool {
 			return strings.Contains(strings.ToLower(s), q)
 		})
 	}
@@ -134,9 +134,38 @@ func (l Ledgered) Filtered(f Filter) Ledgered {
 	return out
 }
 
-// Ledger is LedgerOf's rows, sum and agents. Model comparisons use the
-// current upstream names and recorded effort; historical records do not
-// retain the exact name sent to the vendor.
+// Ledger is LedgerOf's rows, sum and agents.
+//
+// A row's swapped is judged by the upstream names in force now, not by the
+// one its call went out under: the names are read from the settings here,
+// once, so a name given or changed since a call was recorded re-judges that
+// call — one recorded under the name magpie knows the model by, and read
+// after a name was set for it, reads as a swap although the vendor answered
+// with the very model that was asked for. A record keeps the canonical id
+// and the name the vendor's own reply gave (served_model) and not the name
+// the request was sent under, so this is the only name there is to judge by
+// — read as the name that went out, which the effort a record keeps of
+// makes exact: an Antigravity account is asked for the variant of the model
+// that level picks, so a reply naming that one is the model that was asked
+// for and not another, whatever the family it is a level of.
+// It is how ledgerWith's loop already treats the rest of a row: a provider
+// renamed since is put back to the id it has now, and the names in force now
+// are what the catalog lists the models under as well.
+//
+// Storing the name that was sent would judge each call by what it was
+// really sent under, and it is the better answer, but it is not this
+// function's to make: it is a field on every record the gateway writes, and
+// so a change to the file's format — a column a row written by an older
+// magpie has no value for, and a decision about whether an empty one means
+// "no upstream name" or "unknown" — rather than a row of a report. The rows
+// here are what a reader sets beside a bill, and a name in force today is
+// the one whose reply a bill's model column is read against.
+//
+// The names are read here, once for the lot, rather than asked for a row
+// at a time, so a caller already holding them — a report over the
+// provider/model it was given — reads them the same way and reaches the
+// same judgement: what a row says is the same however the rows were asked
+// for.
 func Ledger(p Period, f Filter) (rows []Row, sum Totals, agents []string) {
 	l := LedgerOf(p, f)
 	return l.Rows, l.Sum, l.Agents
@@ -244,6 +273,9 @@ func gatewayMatches(recs []Record, logs []sessions.Call) map[int]bool {
 
 func ledgerWith(since time.Time, f Filter, recs []Record, logs []sessions.Call) (rows []Row, sum Totals, agents, providers []string) {
 	renamed := provider.Renamed()
+	// the upstream names in force now, read once for the lot: a row is
+	// judged by the names standing today, which is what Ledger says, and
+	// the rows here are what a reader compares a bill against
 	wires := settings.Load().ModelWires
 	priceOf := pricer()
 	rows = make([]Row, 0, len(recs)+len(logs))
@@ -329,7 +361,7 @@ func pricer() func(Record) *catalog.Price {
 // CSVHeader is the ledger's columns, as WriteCSV writes them.
 var CSVHeader = []string{"time", "agent", "requested_model", "provider", "host", "model", "served_model", "swapped",
 	"effort", "input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens", "reasoning_tokens",
-	"cost_usd", "duration_ms", "ttft_ms", "status", "error", "session", "kind",
+	"cost_usd", "duration_ms", "ttft_ms", "status", "error", "session", "kind", "provider_key_id", "provider_key_name",
 	"request_id", "endpoint", "error_message", "error_type", "source", "rejected", "session_provider", "session_account", "session_official_login"}
 
 // WriteCSV writes rows as CSV, a header first: times in RFC 3339 with
@@ -351,7 +383,7 @@ func WriteCSV(w io.Writer, rows []Row) error {
 		}
 		cw.Write([]string{r.Time.Format(time.RFC3339), r.Agent, r.Requested, r.Provider, r.Host, r.Model, r.Served,
 			strconv.FormatBool(r.Swapped), r.Effort, n(r.Input), n(r.Output), n(r.CacheWrite), n(r.CacheRead), n(r.Reasoning),
-			cost, strconv.FormatInt(r.Millis, 10), ttft, n(r.Status), strconv.FormatBool(r.Failed()), r.Session, r.Kind,
+			cost, strconv.FormatInt(r.Millis, 10), ttft, n(r.Status), strconv.FormatBool(r.Failed()), r.Session, r.Kind, r.ProviderKeyID, r.ProviderKeyName,
 			r.RequestID, r.Endpoint, r.Error, r.ErrType, r.Source, strconv.FormatBool(r.IsRejected()), r.SessionProvider, r.SessionAccount, strconv.FormatBool(r.SessionOfficialLogin)})
 	}
 	cw.Flush()

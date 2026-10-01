@@ -515,6 +515,7 @@ func (u Usage) chat() map[string]any {
 type chatDecoder struct {
 	started bool
 	tool    int    // index of the open tool call, -1 for none
+	toolID  string // id of the open tool call, as some relays repeat it on every fragment
 	choice  string // index of the first choice seen; an empty string means none yet
 	// Gemini's OpenAI-compatible API, asked for thoughts, may give them
 	// in the text as a leading <thought>…</thought>: lead holds the text
@@ -650,11 +651,14 @@ func (d *chatDecoder) decode(data string, emit func(Event)) error {
 			if tc.Index != nil {
 				idx = *tc.Index
 			}
-			if tc.ID != "" || tc.Function.Name != "" || idx != d.tool {
-				if idx != d.tool || tc.ID != "" {
-					d.tool = idx
-					emit(Event{Kind: KToolStart, ID: tc.ID, Name: tc.Function.Name})
-				}
+			// A delta carrying the id the open call already goes by — some
+			// relays repeat it on every fragment, where the spec sends it
+			// only on the first — or one more fragment of the open index,
+			// continues that call; only a new id or a new index starts the
+			// next one.
+			if idx != d.tool || (tc.ID != "" && tc.ID != d.toolID) {
+				d.tool, d.toolID = idx, tc.ID
+				emit(Event{Kind: KToolStart, ID: tc.ID, Name: tc.Function.Name})
 			}
 			if tc.Function.Arguments != "" {
 				emit(Event{Kind: KToolArgs, Text: tc.Function.Arguments})

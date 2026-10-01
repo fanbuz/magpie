@@ -40,7 +40,7 @@ type RequestPage struct {
 
 type packedRow struct {
 	Time                           time.Time
-	Text                           [19]uint32
+	Text                           [21]uint32
 	Tokens                         [5]int64
 	Millis, TTFT, FirstText, Order int64
 	Cost                           float64
@@ -58,8 +58,8 @@ type rowChunk struct {
 	Used      uint64
 }
 
-func rowText(r *Row) [18]*string {
-	return [18]*string{&r.Agent, &r.Provider, &r.Host, &r.SessionProvider, &r.SessionAccount, &r.Model, &r.Requested, &r.Served, &r.Effort, &r.Error, &r.ErrType, &r.RequestID, &r.Endpoint, &r.Session, &r.NativeSession, &r.Kind, &r.Source, &r.Via}
+func rowText(r *Row) [20]*string {
+	return [20]*string{&r.Agent, &r.Provider, &r.Host, &r.SessionProvider, &r.SessionAccount, &r.Model, &r.Requested, &r.Served, &r.Effort, &r.Error, &r.ErrType, &r.RequestID, &r.Endpoint, &r.Session, &r.NativeSession, &r.Kind, &r.Source, &r.Via, &r.ProviderKeyID, &r.ProviderKeyName}
 }
 func (c *rowChunk) add(r Row, msg string, order int64, failed bool) {
 	if c.dict == nil {
@@ -80,7 +80,7 @@ func (c *rowChunk) add(r Row, msg string, order int64, failed bool) {
 	for i, s := range rowText(&r) {
 		p.Text[i] = intern(*s)
 	}
-	p.Text[18] = intern(msg)
+	p.Text[20] = intern(msg)
 	if r.Priced {
 		p.Flags |= 1
 	}
@@ -435,7 +435,7 @@ func visibleLocal(chunks []*rowChunk) map[rowRef]bool {
 	seen := map[string]bool{}
 	for _, c := range chunks {
 		for i, p := range c.Rows {
-			msg := c.Strings[p.Text[18]]
+			msg := c.Strings[p.Text[20]]
 			if msg == "" {
 				continue
 			}
