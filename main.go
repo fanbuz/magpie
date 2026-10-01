@@ -77,6 +77,8 @@ const usage = `magpie — one place to pick every agent's model
   magpie accounts project <gemini|antigravity> <email> <project>   the Google Cloud project a Google account's requests go to
   magpie plugin [add <package>|rm|update|on|off|login <provider>|logout <provider>]
                                   OpenCode provider plugins: subscriptions signed in to, and served, through a plugin
+  magpie plugin move|migrate <subscription>   run a built-in subscription's accounts on its community plugin
+  magpie plugin move-back|unmigrate <subscription>   go back to the built-in, with its accounts
 
   magpie serve                    run the gateway alone (the app runs it too)
   magpie mcp image                the image and video generation MCP server an agent is given from the library (stdio)

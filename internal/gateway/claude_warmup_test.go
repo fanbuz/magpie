@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // fakeWarmClaude is a claude that writes what it was run with to log and
@@ -65,5 +67,19 @@ func TestWarmClaudeSaysWhyNot(t *testing.T) {
 	fakeWarmClaude(t, `not json`, 2)
 	if err := warmClaude(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "not json") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// A Claude account's model test runs Claude Code at the model tested.
+func TestClaudeTestRunsClaudeCode(t *testing.T) {
+	log := fakeWarmClaude(t, `{"type":"result","is_error":false,"result":"Hi!"}`, 0)
+	p := provider.Provider{Name: "Claude", Account: &provider.Account{Agent: "claude"}}
+	r := p.TestModels(context.Background(), []string{"claude-sonnet-4-5"})
+	if len(r) != 1 || !r[0].OK || r[0].Model != "claude-sonnet-4-5" {
+		t.Fatalf("result %+v", r)
+	}
+	b, _ := os.ReadFile(log)
+	if got := string(b); !strings.Contains(got, "[--model][claude-sonnet-4-5]") || !strings.Contains(got, "stdin:hi") {
+		t.Fatalf("run:\n%s", got)
 	}
 }

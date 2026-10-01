@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -92,6 +93,15 @@ func (p Provider) firstCatalog() string {
 func (p Provider) Fetched() (time.Time, bool) {
 	_, t, ok := p.live()
 	return t, ok
+}
+
+// Listed is when the models listed now were had from the vendor: fetched
+// for a built-in, listed by its plugin for a plugin's.
+func (p Provider) Listed() (time.Time, bool) {
+	if p.IsPlugin() {
+		return plugin.ListedAt()
+	}
+	return p.Fetched()
 }
 
 // live is the list last fetched from the vendor. A plugin's provider has

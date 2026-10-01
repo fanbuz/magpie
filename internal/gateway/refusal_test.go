@@ -108,6 +108,10 @@ func TestRefusalFailsOverToTheNextMember(t *testing.T) {
 		t.Fatalf("usage: %+v", recs)
 	}
 
+	if recs[0].Error == "" || recs[0].Error != keepMsg(r.Tries[0].Error) || recs[1].Error != "" {
+		t.Fatalf("refusal reason missing or leaked into the successful attempt: %+v", recs)
+	}
+
 	for i, r := range recs {
 		if r.Session != "override-session" || r.NativeSession != "native-session" || r.RequestID != []string{"req-a", "req-b"}[i] || r.Endpoint != "/v1/responses → /v1/messages" {
 			t.Fatalf("attempt %d lost request identity: %+v", i, r)

@@ -28,7 +28,12 @@ func claudeProxy(ctx context.Context) string {
 // servers, nothing kept on disk, at Haiku, the least an account's window
 // is started by. oauth is a saved account's sign-in, "" for the one
 // Claude Code is signed in to.
-func warmClaude(ctx context.Context, oauth string) error {
+func warmClaude(ctx context.Context, oauth string) error { return askClaude(ctx, oauth, "haiku") }
+
+// askClaude has Claude Code answer one "hi" at model, as warmClaude does;
+// it is how a Claude account's model test runs (provider.ProbeClaudeVia),
+// so the test asks Anthropic as Claude Code does, through Claude Code.
+func askClaude(ctx context.Context, oauth, model string) error {
 	binary, err := claudeBinary()
 	if err != nil {
 		return err
@@ -38,7 +43,7 @@ func warmClaude(ctx context.Context, oauth string) error {
 		return err
 	}
 	defer os.RemoveAll(tmp)
-	cmd := proc.CommandContext(ctx, binary, claudeWarmArgs()...)
+	cmd := proc.CommandContext(ctx, binary, claudeWarmArgs(model)...)
 	cmd.Dir = tmp
 	cmd.Stdin = strings.NewReader("hi")
 	cmd.Env = netproxy.EnvWith(claudeProxy(ctx), cleanClaudeEnv(os.Environ()))
@@ -68,8 +73,10 @@ func warmClaude(ctx context.Context, oauth string) error {
 	return nil
 }
 
-func claudeWarmArgs() []string {
-	return []string{"-p", "--output-format", "json", "--model", "haiku",
+func init() { provider.ProbeClaudeVia(askClaude) }
+
+func claudeWarmArgs(model string) []string {
+	return []string{"-p", "--output-format", "json", "--model", model,
 		"--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence"}
 }
 

@@ -85,6 +85,10 @@ type Account struct {
 	// carries its requests: the plugin's fetch.
 	plugin    *plugin.Provider
 	pluginKey string // the account's key in plugin-auth.json
+	// wasHost is the built-in's API host, for a moved one's to show as it
+	// did; moved says there is one to show ("" too: Zed's had none).
+	wasHost   string
+	moved     bool
 	transport func(req *http.Request) (*http.Response, error)
 }
 
@@ -222,20 +226,7 @@ func Excluded() []Exclusion {
 	return append(out, savedButSignedOut()...)
 }
 
-const (
-	claudeClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-	// These values mirror the genuine Claude Code release used by Alma. The
-	// installed CLI version wins when it is newer, keeping UA and cc_version in
-	// lockstep as Claude's model gates require.
-	claudeVersionFloor           = "2.1.280"
-	claudeSDKVersion             = "0.112.1"
-	claudeRuntimeVersion         = "v22.13.0"
-	claudeFingerprintSalt        = "59cf53e54c78"
-	claudeCCHSeed         uint64 = 0x6e52736ac806831e
-)
-
-var claudeHaikuBetas = "oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,claude-code-20250219"
-var claudeDefaultBetas = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24"
+const claudeClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 
 // claudeBase is Anthropic's API root. A var so tests can point it elsewhere.
 var claudeBase = "https://api.anthropic.com"
@@ -602,24 +593,10 @@ func claudeAccount() (Provider, bool) {
 		}
 	}
 	acct := &Account{Agent: "claude", User: user, Plan: plan}
-	acct.sign = func(ctx context.Context, req *http.Request, body []byte) error {
-		tok, err := claudeToken(ctx)
-		if err != nil {
-			return err
-		}
-		req.Header.Set("Authorization", "Bearer "+tok)
-		req.Header.Set("User-Agent", claudeUserAgent())
-		req.Header.Set("X-Claude-Code-Session-Id", claudeSessionID())
-		req.Header.Set("anthropic-beta", claudeBetaHeader(claudeModelOf(body)))
-		req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
-		req.Header.Set("x-app", "cli")
-		req.Header.Set("x-client-request-id", randomUUID())
-		for k, v := range claudeStainlessHeaders() {
-			req.Header.Set(k, v)
-		}
-		return nil
-	}
-	acct.body = claudeBody
+	// nothing is sent to Anthropic in Claude Code's name: a request on the
+	// account runs Claude Code itself (the gateway's bridge, a test), so
+	// one that would go straight to the API with its sign-in is refused
+	acct.sign = func(context.Context, *http.Request, []byte) error { return errClaudeViaCLI }
 	acct.models = func() []catalog.Model { return catalog.Provider("anthropic") }
 	acct.fetch = func(ctx context.Context) ([]catalog.Model, error) {
 		ms, err := claudeModels(ctx)
@@ -654,9 +631,9 @@ func claudeModels(ctx context.Context) ([]catalog.Model, error) {
 		}
 		req.Header.Set("Authorization", "Bearer "+tok)
 		req.Header.Set("anthropic-version", "2023-06-01")
-		req.Header.Set("anthropic-beta", claudeBetaHeader(""))
+		req.Header.Set("anthropic-beta", "oauth-2025-04-20")
 		req.Header.Set("Accept", "application/json")
-		req.Header.Set("User-Agent", claudeUserAgent())
+		req.Header.Set("User-Agent", "magpie")
 		res, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return nil, errors.New("Claude model list: " + err.Error())
@@ -869,7 +846,9 @@ func placeMoved(out, plugins []Provider) []Provider {
 			rest = append(rest, p)
 			continue
 		}
-		i := slices.IndexFunc(out, func(q Provider) bool { return !q.IsPlugin() && at(q.ID) > at(p.ID) })
+		// moved ones placed already count too: two moved in the plugins'
+		// order (WorkBuddy AI before WorkBuddy) keep the built-ins'
+		i := slices.IndexFunc(out, func(q Provider) bool { return at(q.ID) > at(p.ID) })
 		if i < 0 {
 			i = len(out)
 		}

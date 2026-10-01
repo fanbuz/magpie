@@ -97,6 +97,13 @@ type Provider struct {
 	// ignore them: their auth is the agent's own.
 	Headers map[string]string `json:"headers,omitempty"`
 
+	// Searches says the vendor answers a web search tool offered on its
+	// Anthropic or Responses API by itself (web_search_20250305,
+	// web_search): a relay in front of Anthropic's or OpenAI's API, which
+	// magpie can't tell from its host. A request offering one then goes to
+	// it as the client sent it, rather than given magpie's search (#359).
+	Searches bool `json:"searches,omitempty"`
+
 	// Proxy is the proxy magpie's requests to this provider go through
 	// (#237: Codex through one, a vendor at home without): "" follows
 	// the global one (Settings' Proxy, the environment's, the system's),
@@ -427,6 +434,7 @@ func AddCopy(p Provider, from string) (string, error) {
 		p.Fallback = slices.Clone(src.Fallback)
 	}
 	p.Unlisted = p.Unlisted || src.Unlisted
+	p.Searches = p.Searches || src.Searches
 	if p.Website == "" {
 		p.Website = src.Website
 	}
@@ -784,6 +792,9 @@ func (p Provider) Native(model string) Protocol {
 
 // Host is the vendor's API host, for display.
 func (p Provider) Host() string {
+	if p.Account != nil && p.Account.moved {
+		return p.Account.wasHost // not plugin://<id>
+	}
 	for _, pr := range p.Speaks() {
 		if u := p.Base(pr); u != "" {
 			return HostOf(u)

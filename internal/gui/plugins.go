@@ -79,10 +79,13 @@ type pluginsJSON struct {
 	Bun     bool              `json:"bun"` // Bun is here; adding the first plugin downloads it otherwise
 	BunVer  string            `json:"bunVersion"`
 	Error   string            `json:"error,omitempty"` // the plugins couldn't be asked
+	// Movable are the built-ins with accounts a plugin could run, which
+	// its card and its row offer to move
+	Movable []provider.MoveCandidate `json:"movable"`
 }
 
 func pluginsState(ctx context.Context) pluginsJSON {
-	s := pluginsJSON{Plugins: []pluginEntryJSON{}, Bun: plugin.HasBun(), BunVer: plugin.BunVersion}
+	s := pluginsJSON{Plugins: []pluginEntryJSON{}, Bun: plugin.HasBun(), BunVer: plugin.BunVersion, Movable: provider.MoveCandidates()}
 	l := plugin.Load()
 	errs := map[string]string{}
 	names := map[string][]string{}

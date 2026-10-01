@@ -1103,12 +1103,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			skipped = append(skipped, c.label()+": "+call.Error)
 			matesFirst(cands[i+1:], c)
 			if call.To != "" {
-				usage.Append(usage.Record{Time: began, Agent: call.Agent, Provider: call.Provider, Host: where, Model: c.model,
+				rec := usage.Record{Time: began, Agent: call.Agent, Provider: call.Provider, Host: where, Model: c.model,
 					Requested: call.Model, Served: call.Usage.Served,
 					Input: call.Usage.Input, Output: call.Usage.Output, CacheRead: call.Usage.CacheRead,
 					CacheWrite: call.Usage.CacheWrite, Reasoning: call.Usage.Reasoning, Effort: sent, Millis: time.Since(began).Milliseconds(), Status: call.Status,
 					TTFT: try.TTFT, FirstText: try.FirstText, Session: sessionOf(r.Header), NativeSession: nativeSessionOf(r.Header), Kind: call.Kind,
-					RequestID: call.Usage.RequestID, Endpoint: endpointOf(r, from, call.To)})
+					RequestID: call.Usage.RequestID, Endpoint: endpointOf(r, from, call.To)}
+				failedWith(&rec, call.Status, call.Error, call.Usage.ErrType)
+				usage.Append(rec)
 			}
 			continue
 		}
