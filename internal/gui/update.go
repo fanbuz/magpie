@@ -236,7 +236,8 @@ func (u *updater) json() updateJSON {
 		j.Done, j.Total = u.done, u.total
 	}
 	if u.latest != nil {
-		j.Latest, j.Notes, j.URL = u.latest.Version, u.latest.Notes, u.latest.URL
+		// the notes without their download links: magpie downloads it itself
+		j.Latest, j.Notes, j.URL = u.latest.Version, update.StripInstall(u.latest.Notes), u.latest.URL
 	}
 	return j
 }

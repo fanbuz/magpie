@@ -31,6 +31,17 @@
   const isPath = (p) => /^file:\/\//.test(p) || /^\./.test(p) || /^\//.test(p) || /^[A-Za-z]:[\\/]/.test(p);
   // ...and is known by the folder's name, not its whole path
   const label = (spec) => { const n = name(spec); return isPath(n) ? n.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || n : n; };
+  // one added from a git repository (github:owner/repo, git+https://…), as
+  // the plugin store tells them apart: known by the package it installed
+  const isGit = (p) => !isPath(p) && (/^(?:(?:github|gitlab|bitbucket):|git\+[a-z]+:\/\/|git:\/\/)\S+$/.test(p) || /^https?:\/\/(?:www\.)?(?:github\.com|gitlab\.com|bitbucket\.org)\/\S+$/.test(p) || /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+(?:#\S+)?$/.test(p));
+  // ...and its page on the web, for the plugin's Source link
+  const gitWeb = (p) => {
+    const s = p.replace(/#.*$/, "");
+    const m = /^(github|gitlab|bitbucket):(.+)$/.exec(s) || (/^[^:]+\/[^:]+$/.test(s) && ["", "github", s]);
+    if (m) return "https://" + { github: "github.com", gitlab: "gitlab.com", bitbucket: "bitbucket.org" }[m[1]] + "/" + m[2];
+    const u = s.replace(/^git\+/, "").replace(/\.git$/, "");
+    return /^https?:\/\//.test(u) ? u : "";
+  };
   const lang = () => (document.documentElement.lang || "").startsWith("zh") ? "zh" : "en";
   const summary = (l) => l.summary?.[lang()] || l.summary?.en || l.npm?.description || "";
   const count = (n) => n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k" : String(n || 0);
@@ -398,7 +409,7 @@
     const box = el("form", "pm-manual");
     box.append(el("span", "pm-mlabel", t("Have one in mind?")));
     const spec = el("input", "pm-minput");
-    spec.placeholder = t("npm package or a folder on this computer");
+    spec.placeholder = t("npm package, GitHub repo (github:owner/repo) or a folder");
     spec.spellcheck = false;
     spec.autocomplete = "off";
     spec.setAttribute("aria-label", t("Plugin"));
@@ -459,8 +470,16 @@
       body.append(none);
       return;
     }
+    // by name, in the order the reader picked (#481), not the order they
+    // were installed in
     const list = el("div", "list pm-list");
-    for (const e of es) list.append(installedRow(e));
+    const fill = () => list.replaceChildren(...[...es].sort(byName(sortOf("plugins"), shownName)).map(installedRow));
+    if (es.length > 1) {
+      const h = el("div", "row-head pm-listhead");
+      h.append(el("span", "grow"), sortBy("plugins", NAME_SORTS, fill));
+      body.append(h);
+    }
+    fill();
     body.append(list);
     const foot = el("div", "pm-foot");
     const outdated = es.filter((e) => e.latest && e.version && newer(e.latest, e.version));
@@ -474,13 +493,20 @@
     body.append(foot);
   }
 
+  // an installed plugin's name as its row shows it: the market's, else the
+  // package's or the folder's
+  function shownName(e) {
+    const pkg = name(e.spec);
+    return market.listings.find((x) => x.package === pkg)?.name || (isGit(e.spec) && e.package) || label(e.spec);
+  }
+
   function installedRow(e) {
     const pkg = name(e.spec);
     const l = market.listings.find((x) => x.package === pkg);
     const r = el("div", "row pm-row" + (e.off ? " off" : ""));
     const who = el("div", "who");
     const nm = el("div", "name");
-    nm.append(el("span", "", l?.name || label(e.spec)));
+    nm.append(el("span", "", shownName(e)));
     if (e.version) nm.append(el("span", "pm-ver", "v" + e.version));
     if (e.latest && e.version && newer(e.latest, e.version)) nm.append(el("span", "pm-chip up", t("v{v} out", { v: e.latest })));
     else if (e.autoUpdated && e.autoUpdated.to === e.version) {
@@ -532,6 +558,14 @@
       up.disabled = busy.size > 0;
       up.onclick = () => act(pkg, "upgrade", { spec: e.spec }, () => status(t("{name} updated to v{v}", { name: l?.name || pkg, v: e.latest }), "ok"));
       val.append(up);
+    } else if (isGit(e.spec) && !e.off) {
+      // npm has no newer version of a git one to offer: Update fetches
+      // its repository again
+      const up = el("button", "text", b === "upgrade" ? t("Updating…") : t("Update"));
+      up.title = t("Fetches it from {repo} again", { repo: e.spec });
+      up.disabled = busy.size > 0;
+      up.onclick = () => act(pkg, "upgrade", { spec: e.spec }, () => status(t("{name} is up to date", { name: e.package || e.spec }), "ok"));
+      val.append(up);
     }
     const here = !e.off && !e.error && !subs.some((x) => x.signedIn) && cands[0];
     if (here && !ask) {
@@ -571,14 +605,15 @@
     rm.onclick = () => { if (moved.length) { asking = { pkg, op: "remove" }; draw(); } else remove(); };
     val.append(onoff, rm);
     r.append(val);
-    r.onclick = (ev) => { if (!ev.target.closest("button")) detail(l || { package: pkg, name: label(e.spec), npm: { version: e.latest } }); };
+    r.onclick = (ev) => { if (!ev.target.closest("button")) detail(l || (isGit(e.spec) ? { package: e.spec, name: e.package || e.spec, npm: { version: e.version, repository: gitWeb(e.spec) } } : { package: pkg, name: label(e.spec), npm: { version: e.latest } })); };
     return r;
   }
 
   // the plugin's page: what it is, what npm says of it, and its README
   async function detail(l) {
-    // a folder plugin: what it is comes from the folder, not from npm
-    const local = isPath(l.package);
+    // a folder plugin: what it is comes from the folder, not from npm; a
+    // git one's from the folder it was installed to
+    const local = isPath(l.package) || isGit(l.package);
     const ed = el("div", "editor pm-detail");
     const hd = el("div", "ehead pm-dhead");
     hd.append(logo(l.icon, true));

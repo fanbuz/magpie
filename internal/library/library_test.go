@@ -1045,3 +1045,75 @@ func TestDshImportKeepsJS(t *testing.T) {
 		t.Errorf("patch list:\n%s", s)
 	}
 }
+
+// Every skill on for the agents named at once, and off again; an agent not
+// named keeps what it has (#443).
+func TestEverySkillAgents(t *testing.T) {
+	h := sandbox(t)
+	src := filepath.Join(h, "src/skills")
+	skill(t, filepath.Join(src, "pdf"), "pdf", "Read PDFs")
+	skill(t, filepath.Join(src, "xlsx"), "xlsx", "Sheets")
+	ok(t)(InstallSkills(src, []string{"pdf"}, []string{"gemini"}))
+	ok(t)(InstallSkills(src, []string{"xlsx"}, nil))
+	has := func(d string) bool { _, err := os.Stat(filepath.Join(h, d, "SKILL.md")); return err == nil }
+	ok(t)(EverySkillAgents([]string{"claude", "codex"}, true))
+	for _, d := range []string{".claude/skills/pdf", ".codex/skills/pdf", ".gemini/skills/pdf", ".claude/skills/xlsx", ".codex/skills/xlsx"} {
+		if !has(d) {
+			t.Errorf("%s isn't there", d)
+		}
+	}
+	ok(t)(EverySkillAgents([]string{"claude", "codex"}, false))
+	for _, d := range []string{".claude/skills/pdf", ".codex/skills/pdf", ".claude/skills/xlsx", ".codex/skills/xlsx"} {
+		if has(d) {
+			t.Errorf("%s is still there", d)
+		}
+	}
+	if !has(".gemini/skills/pdf") {
+		t.Error("gemini, not named, lost pdf")
+	}
+	v, _ := Read(nil)
+	for _, s := range v.Skills {
+		if want := map[string][]string{"pdf": {"gemini"}, "xlsx": {}}[s.Name]; !slices.Equal(s.Agents, want) {
+			t.Errorf("%s: %v, want %v", s.Name, s.Agents, want)
+		}
+	}
+	if _, err := EverySkillAgents(nil, true); err == nil {
+		t.Error("no agents named was taken")
+	}
+}
+
+// Every server on for one agent at once, and off again; the others keep
+// theirs, and an agent isn't given a server it can't reach (#475).
+func TestEveryServerAgents(t *testing.T) {
+	h := sandbox(t)
+	ok(t)(SaveServer("", Server{Name: "fs", Transport: "stdio", Command: "fs", Agents: []string{"claude"}}))
+	ok(t)(SaveServer("", Server{Name: "web", Transport: "sse", URL: "http://localhost:9/sse", Agents: []string{"claude"}}))
+	ok(t)(EveryServerAgents([]string{"codex"}, true))
+	agents := func() map[string][]string {
+		v, _ := Read(nil)
+		m := map[string][]string{}
+		for _, s := range v.Servers {
+			m[s.Name] = s.Agents
+		}
+		return m
+	}
+	if m := agents(); !slices.Equal(m["fs"], []string{"claude", "codex"}) || !slices.Equal(m["web"], []string{"claude"}) {
+		t.Errorf("on for codex: %v", m)
+	}
+	if c := read(t, filepath.Join(h, ".codex/config.toml")); !strings.Contains(c, "[mcp_servers.fs]") || strings.Contains(c, "web") {
+		t.Errorf("codex's config:\n%s", c)
+	}
+	ok(t)(EveryServerAgents([]string{"claude"}, false))
+	if m := agents(); !slices.Equal(m["fs"], []string{"codex"}) || len(m["web"]) != 0 {
+		t.Errorf("off for claude: %v", m)
+	}
+	if c := read(t, filepath.Join(h, ".claude.json")); strings.Contains(c, `"fs"`) || strings.Contains(c, `"web"`) {
+		t.Errorf("claude still has them:\n%s", c)
+	}
+	if !strings.Contains(read(t, filepath.Join(h, ".codex/config.toml")), "[mcp_servers.fs]") {
+		t.Error("codex, not named, lost fs")
+	}
+	if _, err := EveryServerAgents(nil, false); err == nil {
+		t.Error("no agents named was taken")
+	}
+}

@@ -78,6 +78,16 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         page.on("pageerror", (e) => errors.push(e.message));
         await page.route("**/*", server(lang));
         await page.goto("http://magpie.test/?view=providers");
+        // Direct editor actions must not open an unrequested add sheet on cancel.
+        for (const label of [lang === "zh" ? "复制" : "Duplicate", lang === "zh" ? "再添加一个 Anthropic" : "Add another Anthropic"]) {
+          await page.locator('#providers .row[data-id="anthropic"]').click();
+          await page.locator("#modal .bar").getByRole("button", { name: label, exact: true }).click();
+          await page.locator("#modal .editor.new").waitFor();
+          assert(await page.locator("#addBackdrop").isHidden(), "direct editor leaves sheet closed");
+          await page.keyboard.press("Escape");
+          await page.locator("#modal").waitFor({ state: "hidden" });
+          assert(await page.locator("#addBackdrop").isHidden(), "cancel returns to list");
+        }
         await page.locator("#addProvider").click();
         const sheet = page.locator("#addSheet");
         await sheet.locator(".tile").first().waitFor();
@@ -181,6 +191,17 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert(Math.abs(box.y + box.height / 2 + dy - (kimi.y + kimi.height / 2)) < 2, "to Kimi's row down");
         assert(sc < 1);
         await page.locator("#modal").waitFor({ state: "hidden" });
+
+        assert(await row("Kimi").evaluate(e => e === document.activeElement), "return focus to the re-rendered option");
+        await page.keyboard.press("Tab");
+        assert(await sheet.evaluate(e => e.contains(document.activeElement)), "Tab remains in the sheet");
+        // Keyboard activation and a mouse close also restore the option.
+        await row("Kimi").focus();
+        await page.keyboard.press("Enter");
+        await page.locator("#modal .editor.new").waitFor();
+        await page.locator("#modal").click({ position: { x: 2, y: 2 } });
+        await page.locator("#modal").waitFor({ state: "hidden" });
+        assert(await row("Kimi").evaluate(e => e === document.activeElement));
 
         // a row opens what it did: a new preset's editor, grown out of the row on a spring
         await row("DeepSeek").click();

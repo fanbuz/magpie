@@ -56,6 +56,8 @@ func TestDesktopSessionAccountMetadata(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	root := sessions.DesktopDataDirs()[0]
 	root3p := sessions.DesktopDataDirs()[1]
@@ -101,6 +103,8 @@ func TestLedgerResolvesOAuthIdentityAndExportsIt(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	if err := os.MkdirAll(sessions.CodexDir(), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +127,7 @@ func TestLedgerResolvesOAuthIdentityAndExportsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, err := csv.NewReader(&out).ReadAll()
-	if err != nil || len(data) != 2 || data[1][3] != UnknownProvider || data[1][4] != "" || data[1][len(data[1])-3] != "custom" || data[1][len(data[1])-2] != "matched@example.com" || data[1][len(data[1])-1] != "true" {
+	if err != nil || len(data) != 2 || data[1][3] != UnknownProvider || data[1][4] != "" || data[1][slices.Index(CSVHeader, "session_provider")] != "custom" || data[1][slices.Index(CSVHeader, "session_account")] != "matched@example.com" || data[1][slices.Index(CSVHeader, "session_official_login")] != "true" {
 		t.Fatal("CSV lost the resolved provider/account")
 	}
 }
@@ -136,6 +140,8 @@ func TestModelsNeverEstablishProviderOrAccount(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	at := time.Now()
 	logs := []sessions.Call{
 		{Time: at, Agent: "claude", Model: "claude-opus-5", Requested: "claude-opus-5[1m]"},
@@ -164,7 +170,7 @@ func TestModelsNeverEstablishProviderOrAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, err := csv.NewReader(&out).ReadAll()
-	if err != nil || data[1][3] != UnknownProvider || data[1][len(CSVHeader)-3] != "relay" || data[1][len(CSVHeader)-2] != "" || data[1][len(CSVHeader)-1] != "false" {
+	if err != nil || data[1][3] != UnknownProvider || data[1][slices.Index(CSVHeader, "session_provider")] != "relay" || data[1][slices.Index(CSVHeader, "session_account")] != "" || data[1][slices.Index(CSVHeader, "session_official_login")] != "false" {
 		t.Fatalf("unconfirmed CSV route misattributed %+v: %v", data, err)
 	}
 	gateway := []Record{
@@ -222,6 +228,8 @@ func TestLedgerKeepsLocalAccountsSeparateFromGatewayProviders(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	if err := os.MkdirAll(sessions.CodexDir(), 0700); err != nil {
 		t.Fatal(err)
 	}

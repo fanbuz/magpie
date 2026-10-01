@@ -156,6 +156,54 @@ Its list is the models the shared magpie's agents are shown, each named with
 its provider there (`Claude Sonnet 5 · Relay A · office`), and its image
 models are listed under Settings → Images and draw through it.
 
+The gateway issues **gateway keys** for clients, separate from a provider's
+upstream API keys. Turn on **Settings → Share on local network**, then open
+**Gateway → Gateway keys → Add gateway key**. This block appears only while
+sharing is on. Create a named key for each client and copy it from its row.
+Rename, disable, rotate or remove keys independently; rotation and removal
+ask for confirmation. Rotation keeps the name, enabled state and usage
+history; other keys are unchanged. While sharing is on, **Gateway → Connect**
+offers loopback and shared addresses, plus enabled gateway keys, for all
+connection examples. With sharing off, Connect keeps the original **API key**
+field and local `magpie` token, without a gateway-key picker. Its arbitrary
+local option is **This computer**, distinct from the named **Magpie** key.
+
+For a headless gateway, use the CLI before exposing the port:
+
+```sh
+magpie gateway-key add "Remote laptop" # prints the new credential once
+magpie gateway-key list                # ids, names, enabled state and masked keys
+magpie gateway-key rotate <id>         # prints the replacement; identity stays the same
+magpie gateway-key remove <id>         # revokes remote access
+```
+
+While LAN sharing is enabled, remote requests require an enabled gateway key
+sent as Bearer, `x-api-key`, `x-goog-api-key` or `?key=`. Loopback remains
+permissive: any token works, including a stale or disabled gateway key.
+Only a valid, enabled key is attributed to its named identity.
+Without sharing, an explicitly exposed `MAGPIE_ADDR` keeps its original open
+access, including old `sk-magpie-…` tokens, without key authentication.
+
+**Usage → Overview → Gateway keys** groups calls by the client's key, never
+the provider's credential. **Usage → Requests** offers the same filter;
+CSV includes `caller_key_id` and `caller_key_name`. Deleted keys keep their
+history. The usual local `magpie` token and older records stay unattributed.
+Caller attribution includes chat, images, video creation and System One.
+Provider attribution stays independent; CSV puts `provider_key_*` before
+`caller_key_*`.
+An existing LAN key becomes **Magpie** without changing the credential.
+`lanKey` remains in settings for older Magpie versions. Disabling or removing
+the default key replaces that mirror with a random non-empty revoked value;
+rotation does not re-enable it. The key store records migration completion,
+even if `lanKeyId` cannot be saved, so reads do not keep retrying that write.
+A migration write failure is logged without preventing gateway startup,
+CLI key management, or the Settings and key-list pages from opening.
+If settings are read-only, changing the default key fails without changing
+it: make `settings.json` writable and retry so older versions cannot keep
+accepting its old credential. Independent named keys remain manageable.
+Gateway credentials stay in `~/.config/magpie/caller-keys.json` (XDG-aware,
+mode `0600`), never in usage records or list responses.
+
 Baidu Qianfan's [Token Plans](https://cloud.baidu.com/doc/qianfan/s/Dmrabu8b6)
 are available as `baidu-qianfan`: a personal (个人版) and an enterprise (企业版)
 plan and pay as you go, each with its own Chat Completions, Responses and
@@ -460,7 +508,22 @@ adding one; use an account you can afford to lose.
 ### Connecting anything else
 
 The gateway listens on `127.0.0.1:3425` (`MAGPIE_ADDR` changes it) and starts
-with the app; `magpie serve` runs it alone. It exposes:
+with the app; `magpie serve` runs it alone. For reverse-proxied or container
+deployments, set `MAGPIE_PUBLIC_URL=https://magpie.example.com` to the base
+URL shown in the console and CLI, including connection examples. Local
+agent configs still use the local gateway address.
+
+A reverse proxy must enforce authentication itself, or you must enable
+Settings → Share on local network and use an enabled gateway key
+(Gateway → Gateway keys) for external clients. A public URL with no port of
+its own — a reverse proxy's `https://magpie.example.com` — is the address
+`magpie web` prints for its own page too, so the proxy must forward `/v1`
+and `/v1beta` to the gateway's port and the rest to the page's. When the
+proxy and magpie run on the same machine, requests forwarded over loopback
+are treated as local and need no key, so the proxy must authenticate those
+clients itself.
+
+It exposes:
 
 | Path                     | API                        |
 | ------------------------ | -------------------------- |
@@ -631,13 +694,18 @@ docker run -d --name magpie -p 127.0.0.1:3425:3425 -p 127.0.0.1:3430:3430 -v mag
 published on the host's loopback only; Docker's `-p 3425:3425` would put it
 on every interface of the host, past its firewall. To reach it from other
 machines, turn on Settings → Share on local network in the browser UI (or
-put `"lan": true, "lanKey": "sk-magpie-…"` in `/config/magpie/settings.json`):
-from then on a request from outside the container must carry that key as its
-API key, and only then publish the port beyond 127.0.0.1. Inside the container
+put `"lan": true` in `/config/magpie/settings.json`). Turning it on in Settings
+creates a named **Magpie** key. With settings edited by hand, run
+`magpie gateway-key add "Docker client"` in the container to create a key
+without the browser UI. A request from outside the container must carry one of
+those keys as its API key. Only then publish the port beyond 127.0.0.1.
+Inside the container
 magpie only sees the container's own address (Docker's 172.17.x), so set
 `-e MAGPIE_PUBLIC_URL=http://<the host's or NAS's address>:3425` (the port
 published on the host) for the address it shows and prints to be the one
-other machines use.
+other machines use; behind a reverse proxy, set it to that external base URL
+and follow the [authentication requirements above](#connecting-anything-else),
+especially when the proxy reaches magpie over loopback.
 
 For the browser UI run the image with `magpie web --addr 0.0.0.0:3430 --no-open`
 in place of the default `serve`, and open
@@ -755,6 +823,10 @@ pictures picked for them, the settings, the profiles, every agent's model and
 the library (unless `--no-library`): the instruction sets, the MCP servers and
 the skills with their files (a file over 2 MB is left out). Without keys, a
 server's environment variables and headers that look like a key go empty.
+Gateway credentials, their names, ids and disabled state travel encrypted
+with Settings too. Restoring Settings replaces the gateway-key store with
+the backed-up one. `--no-keys` leaves gateway credentials and their legacy
+mirror out; restoring it preserves the destination's existing keys instead.
 Restoring the library replaces the one there — what it replaces is kept with
 the library's backups — and writes it into the agents on that machine.
 It is encrypted on your machine (AES-256-GCM, the key derived from the
@@ -801,6 +873,52 @@ For S3:
   needs to list the bucket.
 - A server without conditional writes is supported. There magpie checks the
   object's ETag just before each write.
+
+## OTLP export
+
+Settings → Observability can export gateway request metadata over OTLP/HTTP
+(JSON). Export is off by default. Set the collector's base URL and optional
+headers, then enable **OTLP export**. **Export metrics** is separately off by
+default; enable it for a collector that accepts duration and token histograms.
+No restart is needed for saved settings.
+
+For `magpie serve`, environment variables override the saved preferences:
+
+```sh
+MAGPIE_OTEL_ENABLED=true MAGPIE_OTEL_ENDPOINT=http://localhost:4318 magpie serve
+```
+
+- `MAGPIE_OTEL_ENABLED`: `true` or `false`; an endpoint alone does not enable export.
+- `MAGPIE_OTEL_ENDPOINT`: an HTTP(S) base URL; `/v1/traces` and `/v1/metrics` are appended.
+- `MAGPIE_OTEL_HEADERS`: comma-separated `name=value` pairs, for example
+  `Authorization=Bearer%20token`. Percent-encode spaces and commas in values.
+- `MAGPIE_OTEL_METRICS`: `true` or `false`, off by default.
+
+For Langfuse, use `https://<your-langfuse-host>/api/public/otel` as the base
+URL and `Authorization=Basic%20<base64(public-key:secret-key)>` as the header.
+Leave metrics off. This uses Langfuse's OTLP ingestion endpoint.
+
+Traces include agent, provider, model, token counts (including cache and
+reasoning), HTTP status, timing, and route ID. Attempts with the same route ID
+share a trace ID. Metrics group duration and input/output token histograms by
+agent, provider, model, operation and error status. Prompt/reply text, tool
+arguments, sessions and provider account names/keys are never exported.
+
+Export runs in the background with a bounded queue (128 records) and batches
+of up to 32 records, flushed every five seconds. A full queue drops telemetry
+without delaying gateway requests. Network errors and HTTP 429/502/503/504
+are retried up to two times, with retry delays capped at 60 seconds; other
+errors and partial rejection are logged
+without the collector's response body. Each HTTP attempt times out after
+three seconds. Graceful gateway shutdown allows at most three seconds to
+drain; `magpie serve` currently exits on SIGTERM without draining, so its last
+batch may be lost. This is best-effort export; local usage records remain
+available if it fails.
+Requests follow magpie's proxy setting, with loopback collectors going direct.
+Queued records are discarded if export is disabled or the destination or
+credentials change before sending. Redirects are not followed.
+Backups without keys omit OTLP headers; restoring one preserves this machine's
+headers only when the collector endpoint is unchanged.
 
 ## Files
 

@@ -23,6 +23,7 @@ import (
 func TestLedger(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	// a maker's API list price for sol: $2 in, $8 out, $0.5 a
@@ -89,8 +90,8 @@ func TestLedger(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := strings.Join(CSVHeader, ",") + "\n" +
-		rows[1].Time.Format(time.RFC3339) + ",codex,relay/sol,relay,relay.example,sol,sol-2026-01-01,false,,10,1,0,0,0,0.000028,100,,200,false,,,,,,,,,,,false,,,false\n" +
-		rows[2].Time.Format(time.RFC3339) + ",codex,fast,relay,relay.example,sol,luna,true,high,2000,500,1000,4000,0,0.012500,3200,400,200,false,s1,,,,123,,,,,,false,,,false\n"
+		rows[1].Time.Format(time.RFC3339) + ",codex,relay/sol,relay,relay.example,sol,sol-2026-01-01,false,,10,1,0,0,0,0.000028,100,,200,false,,,,,,,,,,,false,,,false,,\n" +
+		rows[2].Time.Format(time.RFC3339) + ",codex,fast,relay,relay.example,sol,luna,true,high,2000,500,1000,4000,0,0.012500,3200,400,200,false,s1,,,,123,,,,,,false,,,false,,\n"
 	if b.String() != want {
 		t.Fatalf("csv:\n%s\nwant:\n%s", b.String(), want)
 	}
@@ -102,6 +103,7 @@ func TestLedger(t *testing.T) {
 func TestSubscriptionListPrice(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755)
@@ -173,6 +175,7 @@ func TestSubscriptionListPrice(t *testing.T) {
 func TestLedgerWithSessionLogCalls(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	// a models.dev catalog pricing Claude Sonnet 5: $3 in, $15 out, $0.3 a cached read, $3.75 a cache write, per million
@@ -257,7 +260,7 @@ func TestLedgerWithSessionLogCalls(t *testing.T) {
 	if err := WriteCSV(&b, rows[2:4]); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{",req_log,,,,log,false,,,false\n", ",true,s2,,,,,req_lim,,You've hit your limit,rate_limit,log,false,,,false\n"} {
+	for _, want := range []string{",req_log,,,,log,false,,,false,,\n", ",true,s2,,,,,req_lim,,You've hit your limit,rate_limit,log,false,,,false,,\n"} {
 		if !strings.Contains(b.String(), want) {
 			t.Fatalf("csv lacks %q:\n%s", want, b.String())
 		}
@@ -439,6 +442,7 @@ func TestLedgerLogModels(t *testing.T) {
 func TestLedgerUsesTheStatedPrice(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755)
@@ -474,6 +478,7 @@ func TestLedgerUsesTheStatedPrice(t *testing.T) {
 func TestLedgerConfiguredPricesAndRefresh(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	catalog.Reset()
@@ -547,6 +552,7 @@ func TestLedgerConfiguredPricesAndRefresh(t *testing.T) {
 func TestLedgerJudgesAnAntigravityCallByTheVariantItWentOutUnder(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	// Antigravity's ids of one model at three levels, as its fetch left them
@@ -597,5 +603,55 @@ func TestLedgerJudgesAnAntigravityCallByTheVariantItWentOutUnder(t *testing.T) {
 		if row.Swapped {
 			t.Errorf("the call went out at %q and was answered with %q, which is that very model: %+v", row.Effort, row.Served, row)
 		}
+	}
+}
+
+// Antigravity answers a call that went out as a level of a model with the
+// model's own name in modelVersion (#462: gemini-3.8-flash at medium went
+// out as gemini-3.8-flash-medium and the reply named gemini-3.8-flash),
+// which is the model asked for at the level asked for, not another one
+// swapped in; a reply naming another level still is.
+func TestLedgerAntigravityReplyNamingTheFamilyIsNoSwap(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	var raw []catalog.Model
+	for _, id := range []string{"flash-9-low", "flash-9-medium", "flash-9-high", "flash-9-extra-low"} {
+		raw = append(raw, catalog.Model{ID: id})
+	}
+	if err := catalog.SaveLive("antigravity", "", raw); err != nil {
+		t.Fatal(err)
+	}
+	catalog.Reset()
+	t.Cleanup(catalog.Reset)
+	os.MkdirAll(filepath.Dir(Path()), 0o755)
+	now := time.Now()
+	for i, c := range []struct{ effort, served string }{
+		{"medium", "flash-9"}, {"minimal", "flash-9"}, {"", "models/flash-9"}, {"low", "flash-9-low"},
+		{"medium", "flash-9-high"}, // another level answered: a swap
+	} {
+		Append(Record{Time: now.Add(time.Duration(i) * time.Minute), Provider: "antigravity",
+			Host: "antigravity.example", Model: "flash-9", Effort: c.effort,
+			Served: c.served, Input: 10, Output: 1, Status: 200})
+	}
+	rows, _, _ := Ledger(All, Filter{})
+	page := QueryPage(All, Filter{}, 0, 100)
+	for _, got := range [][]Row{rows, page.Rows} {
+		if len(got) != 5 {
+			t.Fatalf("rows %d: %+v", len(got), got)
+		}
+		if !got[0].Swapped {
+			t.Errorf("another level answering is a swap: %+v", got[0])
+		}
+		for _, row := range got[1:] {
+			if row.Swapped {
+				t.Errorf("flash-9 at %q answered as %q is the model asked for: %+v", row.Effort, row.Served, row)
+			}
+		}
+	}
+	if !Swapped("flash-9-medium", "flash-8") || !Swapped("flash-9-medium", "flash-9-high") {
+		t.Error("another model or level is still a swap")
 	}
 }

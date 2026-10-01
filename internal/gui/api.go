@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/autostart"
 	"github.com/yetone/magpie/internal/catalog"
@@ -110,6 +111,9 @@ type profileJSON struct {
 	// Library is what the profile gives out from the library, for one
 	// saved with its setup
 	Library *profileLibraryJSON `json:"library,omitempty"`
+	// Agents is what it holds, by agent, to be read before it is applied
+	// (#467); a value that reads as a key or a token is left out
+	Agents []profile.Group `json:"agents"`
 }
 
 type profileLibraryJSON struct {
@@ -196,6 +200,7 @@ type settingsJSON struct {
 	// Mac apps that explicitly handle .command files, for resumed sessions.
 	TerminalApps    []terminalChoice `json:"terminalApps,omitempty"`
 	TerminalDefault string           `json:"terminalDefault,omitempty"`
+	OTelEnv         bool             `json:"otelEnv,omitempty"`
 	// the proxy vendor requests go through now, and where it came from:
 	// settings, environment, system, off or none
 	ProxyNow    string `json:"proxyNow"`
@@ -269,6 +274,7 @@ func searchState(s *settingsJSON) {
 
 func settingsState() settingsJSON {
 	s := settingsJSON{Settings: settings.Load(), Version: Version, Dir: tilde(settings.Dir()), Gateway: gateway.URL()}
+	s.LANKey = "" // the retained credential belongs on disk, not in UI state
 	if found, err := discoverTerminals(); err == nil {
 		for _, app := range found.Apps {
 			s.TerminalApps = append(s.TerminalApps, terminalChoice{ID: app.ID, Name: app.Name})
@@ -280,6 +286,11 @@ func settingsState() settingsJSON {
 		s.NotifyProblem = notifyProblem()
 	}
 	s.ProxyNow, s.ProxySource = netproxy.Describe()
+	for _, name := range []string{"MAGPIE_OTEL_ENABLED", "MAGPIE_OTEL_ENDPOINT", "MAGPIE_OTEL_HEADERS", "MAGPIE_OTEL_METRICS"} {
+		if _, ok := os.LookupEnv(name); ok {
+			s.OTelEnv = true
+		}
+	}
 	s.Login = autostart.Enabled()
 	if s.LAN {
 		s.LANURLs, s.LANContainer = gateway.LANURLs(), gateway.ContainerAddrs()
@@ -399,6 +410,10 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 	})
 	omarchyRoutes(mux, w)
 	mux.HandleFunc("GET /api/state", func(rw http.ResponseWriter, r *http.Request) {
+		// the panel and its model picker load from here: an account still
+		// without its vendor's list (one whose try at start-up failed) is
+		// asked again in the background, not only from the Providers page
+		provider.FetchNewSoon(8 * time.Second)
 		writeJSON(rw, state())
 	})
 	mux.HandleFunc("POST /api/set", func(rw http.ResponseWriter, r *http.Request) {
@@ -546,12 +561,16 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 	providerRoutes(mux, w)
 	importRoutes(mux)
 	usageRoutes(mux, w)
+	callerKeyRoutes(mux)
 	sessionRoutes(mux, w)
+	sessionManageRoutes(mux, w)
 	backupRoutes(mux, w)
 	archiveRoutes(mux)
 	libraryRoutes(mux, w)
 	updateRoutes(mux, w)
+	whatsNewRoutes(mux)
 	mux.HandleFunc("GET /api/settings", func(rw http.ResponseWriter, r *http.Request) {
+		access.MigrateLegacyLANKeyBestEffort()
 		writeJSON(rw, settingsState())
 	})
 	mux.HandleFunc("POST /api/settings", func(rw http.ResponseWriter, r *http.Request) {
@@ -576,12 +595,14 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		in.Visible, in.HiddenModels = cur.Visible, cur.HiddenModels
 		settings.CarryPerModel(&in, &cur)
 		in.LAN, in.LANKey = cur.LAN, cur.LANKey
-		in.RequestArchive = cur.RequestArchive // the Gateway page's, set on its own
-		in.RedactRules = cur.RedactRules       // the masking rules, set on their own
+		in.LANKeyID = cur.LANKeyID
+		in.RequestArchive = cur.RequestArchive           // the Gateway page's, set on its own
+		in.RequestArchiveMaxMB = cur.RequestArchiveMaxMB // in settings.json only
+		in.RedactRules = cur.RedactRules                 // the masking rules, set on their own
 		// used or left is the Usage page's toggle as much as Settings', set on its own
 		in.QuotaLeft = cur.QuotaLeft
 		// how agents' lists name models, set on its own for the agents to be told
-		in.PlainNames = cur.PlainNames
+		in.PlainNames, in.PlainOwnNames = cur.PlainNames, cur.PlainOwnNames
 		// which Codex accounts spend a reset by themselves, set on the Usage card
 		in.CodexAutoReset = cur.CodexAutoReset
 		// and the text size, which the keyboard changes too (text-size below)
@@ -671,12 +692,21 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 	// whether the agents' lists name a model with its provider's after it or
 	// alone (#335): their files are written again, and Codex asks again
 	mux.HandleFunc("POST /api/settings/plain-names", func(rw http.ResponseWriter, r *http.Request) {
-		var in struct{ On bool }
+		// Mode is on, own (#92: not on the names the user gave) or off; a
+		// body of On alone is the two-way switch's, On meaning plain
+		var in struct {
+			On   bool
+			Mode string
+		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			fail(rw, err)
 			return
 		}
-		if err := provider.SetPlainNames(in.On); err != nil {
+		set := func() error { return provider.SetPlainNames(in.On) }
+		if in.Mode != "" {
+			set = func() error { return provider.SetSuffixMode(in.Mode) }
+		}
+		if err := set(); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -750,20 +780,15 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		}
 		writeJSON(rw, settingsState())
 	})
-	// sharing the gateway on the local network: on makes its key the first
-	// time, new asks for another (the old one stops working)
+	// Sharing controls exposure; the gateway's named caller keys authenticate
+	// remote clients just as they do local ones.
 	mux.HandleFunc("POST /api/settings/lan", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ On, NewKey bool }
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			fail(rw, err)
 			return
 		}
-		s := settings.Load()
-		s.LAN = in.On
-		if s.LANKey == "" || in.NewKey {
-			s.LANKey = gateway.NewLANKey()
-		}
-		if err := settings.Save(s); err != nil {
+		if err := access.ConfigureLAN(in.On, in.NewKey); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -878,7 +903,7 @@ func state() stateJSON {
 	}
 	if ps, err := profile.Load(); err == nil {
 		for _, n := range profile.Names(ps) {
-			pj := profileJSON{Name: n, Summary: profile.Summary(ps[n])}
+			pj := profileJSON{Name: n, Summary: profile.Summary(ps[n]), Agents: profile.Details(ps[n])}
 			if l := ps[n].Library; l != nil {
 				servers, skills := l.On()
 				pj.Library = &profileLibraryJSON{Servers: servers, Skills: skills, Instructions: l.GivesInstructions()}

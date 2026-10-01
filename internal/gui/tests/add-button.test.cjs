@@ -1,4 +1,8 @@
 // Run with Node's test runner and Playwright on the module path; see README.md.
+// Original request, Image #28: 添加供应商要固定在底栏底部，然后点击的时候
+// 要自动滚动到供应商列表。现在只有第二次点击的时候才会滚到供应商列表。
+// The overlay now replaces that scrolling interaction while keeping the fixed button.
+// Logo regression: 每次打开或者关闭弹窗的时候，Provider的logo都会重新刷新一遍。
 // The add sheet overlays a long provider list without changing its geometry or
 // scroll position. Closing it restores access to the same rows; nested editors
 // still preserve logos. The API is faked here.

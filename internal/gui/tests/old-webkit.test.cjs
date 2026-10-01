@@ -132,10 +132,12 @@ test("no built-in newer than Safari 15.0 unless compat.js fills it in", async ()
 
 test("compat.js is the first of the page's own scripts", async () => {
   const html = await read("index.html");
-  // boot.js and omarchy.js run in the head, before the first paint:
-  // omarchy.js does nothing off Omarchy, whose WebKitGTK is a current one
+  // boot.js, theme.js and omarchy.js run in the head, before the first
+  // paint: theme.js is ES5 with nothing newer than Safari 10.1's
+  // URLSearchParams, and omarchy.js does nothing off Omarchy, whose
+  // WebKitGTK is a current one
   const all = [...html.matchAll(/<script\s+src="([^"]+)"/g)].map((m) => m[1]);
-  const srcs = all.filter((s) => s !== "boot.js" && s !== "omarchy.js");
+  const srcs = all.filter((s) => s !== "boot.js" && s !== "theme.js" && s !== "omarchy.js");
   assert.equal(srcs[0], "compat.js", "loaded first: " + srcs.join(", "));
   for (const f of await scripts()) assert(all.includes(f), f + " is not loaded by index.html");
 });
@@ -193,6 +195,13 @@ async function serve(route) {
     return json({ mine: true, now: new Date().toISOString(), seq: 0, totals: { requests: 0, rerouted: 0, errors: 0 }, routes: [] });
   }
   if (url.pathname === "/api/gateway/history") return json({ cut: false, days: [], routes: [] });
+  if (url.pathname === "/api/sessions/manage") {
+    const last = new Date(Date.now() - 3600e3).toISOString();
+    return json({
+      agents: [{ agent: "claude", count: 1, deletable: true, name: "Claude Code", icon: "claudecode-color" }], agent: "claude", terminal: false, trashDir: "~/x/trash/sessions", trash: [],
+      sessions: [{ agent: "claude", id: "s1", cwd: "/work/app", title: "fix the build", start: last, last, resume: "cd /work/app && claude --resume s1", path: "~/.claude/projects/-work-app/s1.jsonl", size: 2048, messages: 4, files: 1, deletable: true }],
+    });
+  }
   if (url.pathname.startsWith("/api/")) return json({});
   const file = path.join(assets, url.pathname === "/" ? "index.html" : url.pathname);
   const contentType = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png" }[path.extname(file)];
@@ -224,7 +233,7 @@ test("with Safari 15.0's built-ins, the panel and the window draw every page", a
         await page.locator("#save").click();
         assert(await page.locator(".profiles.naming > .chip-input").isVisible(), "Save current opens the name field");
       } else {
-        for (const v of ["providers", "gateway", "routing", "usage", "library", "agents"]) {
+        for (const v of ["providers", "gateway", "routing", "usage", "sessions", "library", "agents"]) {
           await page.locator(`#nav [data-view="${v}"]`).click();
           await page.locator(`#view-${v}`).waitFor();
           await page.waitForTimeout(200);

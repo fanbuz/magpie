@@ -16,8 +16,12 @@ func effortHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	// where Windows keeps Goose's, Crush's and Devin's: the sandbox's, never the machine's
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	t.Setenv("HERMES_HOME", "")
 	t.Setenv("MIMOCODE_HOME", "")
 	t.Setenv("HANA_HOME", "")
@@ -84,8 +88,8 @@ func TestEffortFields(t *testing.T) {
 	writeFile(t, filepath.Join(home, ".omp", "agent", "config.yml"), "modelRoles:\n  default: a/b\n")
 	setEffort(t, omp(home), "xhigh", "default: a/b")
 
-	writeFile(t, filepath.Join(cfg, "goose", "config.yaml"), "GOOSE_MODEL: m\nGOOSE_PROVIDER: p\n")
 	g := goose(home, cfg)
+	writeFile(t, g.Path, "GOOSE_MODEL: m\nGOOSE_PROVIDER: p\n")
 	setEffort(t, g, "max", "GOOSE_MODEL: m")
 	if v, _ := edit.GetYAMLTop(g.Path, "GOOSE_PROVIDER"); v != "p" {
 		t.Fatalf("goose provider: %q", v)
@@ -144,6 +148,49 @@ func TestCommandCodeEffort(t *testing.T) {
 	}
 	if strings.Contains(readFile(path), "reasoningEffort") {
 		t.Fatalf("left the map:\n%s", readFile(path))
+	}
+}
+
+// #473: a model through magpie listing no levels (LongCat-2.5-Preview) had
+// dsh's own off, low, high and max offered on the Agents page, and each was
+// turned away with "takes an effort of  for this model". It has none in dsh:
+// none is offered, and one asked for says so.
+func TestDshEffortModelWithoutLevels(t *testing.T) {
+	home := effortHome(t)
+	if err := catalog.SaveLive("deepseek", "https://api.deepseek.com/v1", []catalog.Model{
+		{ID: "pro", Name: "pro", Efforts: []string{"none", "low", "high", "max"}},
+		{ID: "plain", Name: "plain"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	patch := filepath.Join(home, ".dsh", "profiles", "web", "cordis.patch.yml")
+	writeFile(t, patch, "[]\n")
+	a := dsh(home)
+	f := a.Field("effort")
+	if err := a.Field("model").Set("magpie/deepseek/plain"); err != nil {
+		t.Fatal(err)
+	}
+	cur := map[string]string{"model": "magpie/deepseek/plain"}
+	if got := f.Options(cur); len(got) != 0 {
+		t.Fatalf("offered %+v for a model with no levels", got)
+	}
+	err := f.Set("low")
+	if err == nil || strings.Contains(err.Error(), "of  for") || !strings.Contains(err.Error(), "deepseek/plain") {
+		t.Fatalf("low: %v", err)
+	}
+	if err := f.Set(""); err != nil || f.Get() != "" {
+		t.Fatalf("default: %v %q", err, f.Get())
+	}
+	// every level offered for any model is one dsh takes
+	for _, m := range []string{"magpie/deepseek/pro", "magpie/deepseek/plain", "deepseek-v4-pro"} {
+		if err := a.Field("model").Set(m); err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range f.Options(map[string]string{"model": m}) {
+			if err := f.Set(o.Value); err != nil {
+				t.Fatalf("%s offered %q and turned it away: %v", m, o.Value, err)
+			}
+		}
 	}
 }
 
