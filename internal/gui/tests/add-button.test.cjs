@@ -1,14 +1,7 @@
 // Run with Node's test runner and Playwright on the module path; see README.md.
-// The Providers page's "Add provider" (Image #28: 添加供应商要固定在底栏底部，
-// 然后点击的时候要自动滚动到供应商列表。现在只有第二次点击的时候才会滚到
-// 供应商列表): the button stays at the view's foot over a long list, one click
-// with the list scrolled to its end opens the sheet and takes the view down
-// to it (WebKit clamped the view as the sheet began at no height and the
-// unroll took that for the reader), the button steps aside while the sheet's
-// head is in sight and, scrolled back up, takes the view down to it again.
-// And a dialog opened and closed over the page keeps every logo it drew (a
-// logo made afresh loads again and blinks: 每次打开或者关闭弹窗的时候，
-// Provider的logo都会重新刷新一遍). No backend, the API is faked here.
+// The add sheet overlays a long provider list without changing its geometry or
+// scroll position. Closing it restores access to the same rows; nested editors
+// still preserve logos. The API is faked here.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -41,13 +34,14 @@ function server(lang) {
 }
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
-  test(engine + ": Add provider stays at the foot and takes the view to the sheet", async (t) => {
+  test(engine + ": Add provider overlays the list and leaves its position unchanged", async (t) => {
     assert(["chromium", "webkit"].includes(engine), "BROWSER must be chromium or webkit");
     const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
     t.after(() => browser.close());
     for (const lang of ["en", "zh"]) {
       await t.test(lang, async () => {
         const page = await (await browser.newContext({ viewport: { width: 900, height: 800 } })).newPage();
+        page.setDefaultTimeout(5000);
         const errors = [];
         page.on("pageerror", (e) => errors.push(e.message));
         await page.route("**/*", server(lang));
@@ -64,11 +58,21 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           };
         });
 
-        // the sheet's head 12px under the view's top, or as near as the view goes
-        const reached = () => {
-          const v = document.querySelector("#view-providers"), sh = document.querySelector("#addSheet");
-          const y = sh.getBoundingClientRect().top - v.getBoundingClientRect().top;
-          return !sh.hidden && sh.offsetHeight > 300 && y < v.clientHeight / 3 && (Math.abs(y - 12) <= 2 || v.scrollTop >= v.scrollHeight - v.clientHeight - 1);
+        const geometry = () => page.evaluate(() => {
+          const v = document.querySelector("#view-providers");
+          return { top: v.scrollTop, height: v.scrollHeight,
+            rows: [...v.querySelectorAll("#providers .row")].map(r => r.getBoundingClientRect().y) };
+        });
+        const openAndClose = async () => {
+          const before = await geometry();
+          await page.locator("#addProvider").click();
+          await page.waitForTimeout(350);
+          assert.deepEqual(await geometry(), before, "opening leaves the list in place");
+          await page.locator("#addSheet .row-head button").last().click();
+          await page.locator("#addBackdrop").waitFor({ state: "hidden" });
+          await page.waitForTimeout(350);
+          assert.deepEqual(await geometry(), before, "closing leaves no empty space");
+          assert(await page.locator("#addProvider").evaluate(e => e === document.activeElement));
         };
 
         // at the top of a long list the button is at the view's foot, over the rows
@@ -77,6 +81,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert(Math.abs(s.bar) <= 1, "the bar sits on the view's foot: " + s.bar);
         assert(!s.away);
         assert(await page.locator("#addProvider").isVisible());
+        await openAndClose();
         // and at the end, where it is, not a pixel off
         await page.mouse.move(450, 400);
         for (let i = 0; i < 12; i++) await page.mouse.wheel(0, 400);
@@ -85,20 +90,18 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert(s.top >= s.end - 1, "scrolled to the end");
         assert(Math.abs(s.bar) <= 1, "the bar at the end: " + s.bar);
 
-        // one click: the sheet opens and the view goes down to it
+        await openAndClose();
+        await openAndClose(); // repeated cycles must not accumulate blank space
+        const before = await geometry();
         await page.locator("#addProvider").click();
-        await page.waitForFunction(reached, null, { timeout: 3000 });
-        await page.waitForTimeout(300);
-        s = await at();
-        assert(s.away, "the button steps aside while the sheet's head is in sight");
-
-        // scrolled back up, the button is there again and takes the view to the sheet
-        for (let i = 0; i < 12; i++) await page.mouse.wheel(0, -400);
-        await page.waitForTimeout(500);
-        s = await at();
-        assert(s.top < 5 && s.sheet > 700 && !s.away, JSON.stringify(s));
+        await page.keyboard.press("Escape");
+        await page.locator("#addBackdrop").waitFor({ state: "hidden" });
+        assert.deepEqual(await geometry(), before);
         await page.locator("#addProvider").click();
-        await page.waitForFunction(reached, null, { timeout: 3000 });
+        await page.locator("#addBackdrop").click({ position: { x: 2, y: 2 } });
+        await page.locator("#addBackdrop").waitFor({ state: "hidden" });
+        assert.deepEqual(await geometry(), before);
+        await page.locator("#addProvider").click();
 
         // a dialog opened and closed keeps every logo on the page
         await page.evaluate(() => document.querySelectorAll("#providers .ic, #addSheet .ic").forEach((e) => { e.dataset.was = "1"; }));
@@ -111,6 +114,24 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.locator("#modal").waitFor({ state: "hidden" });
         assert.equal(await page.locator("#providers .ic[data-was], #addSheet .ic[data-was]").count(), count, "every logo kept as it closed");
         assert.equal(await page.locator("#providers .ic:not([data-was]), #addSheet .ic:not([data-was])").count(), 0);
+        if (process.env.ARTIFACT_DIR) {
+          await fs.mkdir(process.env.ARTIFACT_DIR, { recursive: true });
+          await page.screenshot({ path: path.join(process.env.ARTIFACT_DIR, `add-overlay-${engine}-${lang}.png`) });
+        }
+        // A short, narrow window scrolls choices inside the overlay.
+        await page.setViewportSize({ width: 460, height: 540 });
+        await page.waitForTimeout(350);
+        const compact = await geometry();
+        const sheet = page.locator("#addSheet");
+        const box = await sheet.boundingBox();
+        assert(box.x >= 0 && box.y >= 0 && box.x + box.width <= 460 && box.y + box.height <= 540);
+        await sheet.locator(".tiles").hover();
+        await page.mouse.wheel(0, 600);
+        await page.waitForTimeout(350);
+        assert.deepEqual(await geometry(), compact, "only the choices scroll");
+        await sheet.locator(".row-head button").last().click();
+        await page.waitForTimeout(350);
+        assert.deepEqual(await geometry(), compact, "compact window closes without a gap");
         assert.deepEqual(errors, []);
       });
     }

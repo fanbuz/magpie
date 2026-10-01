@@ -945,7 +945,7 @@ body.panel .row.agent.open { background: var(--card-2); }
 .row.agent:hover .ag-sum .mi { width: calc(var(--w, 16px) + 4px); margin-right: 4px; transition: width .46s var(--row-spring), margin-right .46s var(--row-spring); }
 .row.agent:hover .ag-sum .mi-in { opacity: 1; transform: none; transition: opacity .28s ease .08s, transform .52s var(--row-spring) .04s; }
 @media (prefers-reduced-motion: reduce) { .ag-sum .mi, .ag-sum .mi-in, .row.agent:hover .ag-sum .mi, .row.agent:hover .ag-sum .mi-in { transition: none; } }
-#addSheet { scroll-margin-top: 12px; }
+
 .ag-sum .v.empty { color: var(--muted); }
 .ag-sum .chev { display: inline-flex; width: 10px; color: var(--faint); transform: rotate(-90deg); transition: transform .4s var(--row-spring); }
 .row.agent.open .ag-sum .chev { transition-duration: .48s; }
@@ -1570,7 +1570,22 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .after-list { display: flex; align-items: center; gap: 8px; padding: 8px 4px 0; flex: none; }
 /* the Providers page's add button stays at the view's foot over a long list */
 #view-providers .after-list { position: sticky; bottom: -8px; z-index: 2; margin: 0 -12px -8px; padding: 14px 16px 12px; background: linear-gradient(to bottom, transparent, var(--bg) 12px); transition: opacity .18s ease, visibility .18s; }
-#view-providers .after-list.away { opacity: 0; visibility: hidden; }
+/* The add sheet floats above the existing list; it never adds scroll space. */
+#addBackdrop { flex: none; }
+#addBackdrop.add-overlay {
+  position: fixed; inset: 0; z-index: 15;
+  display: flex; align-items: flex-end; justify-content: center;
+  padding: 64px 16px 16px; background: rgba(0, 0, 0, .28);
+  overscroll-behavior: contain;
+}
+.add-overlay #addSheet {
+  width: min(900px, 100%); max-height: 100%; min-height: 0;
+  display: flex; flex-direction: column; padding: 16px;
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--card); box-shadow: 0 12px 40px rgba(0, 0, 0, .2);
+}
+.add-overlay #addSheet > .row-head { flex: none; flex-wrap: wrap; height: auto; min-height: 26px; }
+.add-overlay #addSheet > .tiles { overflow-y: auto; min-height: 0; overscroll-behavior: contain; }
 #movable { margin: 0 0 8px; }
 #fileError { margin: 0 0 10px; }
 #fileError .signing { border: 1px solid var(--line); border-radius: 10px; }
