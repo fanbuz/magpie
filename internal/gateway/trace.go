@@ -27,6 +27,7 @@ type Route struct {
 	ID       int64     `json:"id"`
 	Time     time.Time `json:"time"`
 	Agent    string    `json:"agent"`
+	Session  string    `json:"-"`                // the session it named (sessionOf), for GET /v1/magpie/route alone
 	Kind     string    `json:"kind,omitempty"`   // what the call is for, as Call's
 	For      *CallFor  `json:"for,omitempty"`    // the request it was made for, as Call's
 	Model    string    `json:"model"`            // as the agent asked
@@ -74,6 +75,8 @@ type GroupRef struct {
 	// Via: for each of Members, the groups in the group it is of, as
 	// "fast>cheap" ("" for the group's own), when it has groups in it
 	Via []string `json:"via,omitempty"`
+	// Fast: those of Members sent in their vendor's fast mode
+	Fast []string `json:"fast,omitempty"`
 }
 
 // SubGroup is a routing group in the group a request asked for.
@@ -98,6 +101,9 @@ func groupRef(g provider.Group, ms []provider.Member) *GroupRef {
 	seen := map[string]bool{}
 	for _, m := range ms {
 		ref.Members = append(ref.Members, provider.WithMemberEffort(m.Provider.ID+"/"+m.Model, m.Effort))
+		if m.Fast {
+			ref.Fast = append(ref.Fast, ref.Members[len(ref.Members)-1])
+		}
 		ref.Via = append(ref.Via, strings.Join(m.Groups(), ">"))
 		in := g.ID
 		for _, v := range m.Via {
@@ -127,6 +133,7 @@ type Weighed struct {
 	Plan     string            `json:"plan,omitempty"`
 	Model    string            `json:"model"`
 	Fixed    string            `json:"fixed,omitempty"` // the effort the group's member it is of is fixed at
+	Fast     bool              `json:"fast,omitempty"`  // the group's member it is of is sent fast
 	Routing  string            `json:"routing"`         // its provider's: "", order, rotate, usage
 	Fallback bool              `json:"fallback,omitempty"`
 	Shared   bool              `json:"shared,omitempty"` // its provider has more than one on
@@ -157,6 +164,7 @@ type Try struct {
 	// Fixed: the effort the group's member it went to is fixed at, which
 	// Effort is (fitted to the model's levels) whatever was asked
 	Fixed  string    `json:"fixed,omitempty"`
+	Fast   bool      `json:"fast,omitempty"` // sent in its vendor's fast mode, as the group's member it went to is
 	Start  time.Time `json:"start"`
 	Done   bool      `json:"done"`
 	Status int       `json:"status,omitempty"`
@@ -194,7 +202,7 @@ type planned struct {
 }
 
 func weighed(c candidate, p provider.Provider, wg weighing, fallback bool, from provider.Protocol) Weighed {
-	w := Weighed{ID: c.rest, Provider: p.ID, Name: p.Name, Icon: p.Icon, Preset: p.Preset, Model: c.model, Fixed: c.effort,
+	w := Weighed{ID: c.rest, Provider: p.ID, Name: p.Name, Icon: p.Icon, Preset: p.Preset, Model: c.model, Fixed: c.effort, Fast: c.fast,
 		Routing: p.Routing, Fallback: fallback, Shared: c.rest != p.ID}
 	switch {
 	case c.p.Account != nil:

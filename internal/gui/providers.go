@@ -157,7 +157,8 @@ type gatewayJSON struct {
 	Window  bool           `json:"window"` // the magpie serving it shows its routing
 	Models  int            `json:"models"`
 	Calls   []gateway.Call `json:"calls"`
-	Groups  []gwGroupJSON  `json:"groups"` // the catalog's routing groups, listed before the models
+	Groups  []gwGroupJSON  `json:"groups"`  // the catalog's routing groups, listed before the models
+	Archive archiveJSON    `json:"archive"` // the request archive's switch, and where it goes
 }
 
 // gwGroupJSON is a routing group as the Gateway view lists it.
@@ -438,6 +439,7 @@ func providersState() providersJSON {
 	} else {
 		s.Gateway.Running, s.Gateway.Window = gateway.Serving()
 	}
+	s.Gateway.Archive = archiveState()
 	s.CodexDaemon = provider.CodexDaemonStale()
 	s.Plugins = pluginSubs()
 	return s

@@ -65,6 +65,10 @@ type Settings struct {
 	// key magpie makes when LAN is first turned on.
 	LAN    bool   `json:"lan,omitempty"`
 	LANKey string `json:"lanKey,omitempty"`
+	// RequestArchive keeps each call the gateway serves — its headers and
+	// bodies both ways, secrets taken out — in the S3 bucket sync keeps
+	// its backup in (gateway/archive.go), for looking into a request later.
+	RequestArchive bool `json:"requestArchive,omitempty"`
 	// CodexWarmup starts a ChatGPT account's next window as soon as the
 	// last one resets, with one tiny request, so it counts from then (a
 	// Codex window starts at its first use): "" off, "week" the weekly

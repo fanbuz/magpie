@@ -2243,8 +2243,22 @@ function renderProvidersLoading() {
     row.append(el("span", "skeleton pv-sk-icon"), who, el("span", "skeleton pv-sk-key"));
     list.append(row);
   }
+  $("#offHead").hidden = $("#offProviders").hidden = true;
   $("#excluded").replaceChildren();
 }
+
+// Providers switched off are kept apart, below the ones on, under a
+// "Turned off (N)" fold that starts folded: among the rest they took the
+// room of the ones in use (01huadalang on Discord). The fold is
+// remembered, per viewer.
+let offFolded = true;
+try { offFolded = localStorage.getItem("magpie.offProvidersOpen") !== "1"; } catch {}
+$("#foldOff").prepend(svg(CHEV_R, 11, 1.6));
+$("#foldOff").onclick = () => {
+  offFolded = !offFolded;
+  try { localStorage.setItem("magpie.offProvidersOpen", offFolded ? "0" : "1"); } catch {}
+  renderProviders();
+};
 
 // One row per provider: logo, name, the agents pointed at it, key status.
 // Everything else lives in the editor, a dialog over the page.
@@ -2253,16 +2267,25 @@ function renderProviders() {
   // scroll to the top; put it back so closing the editor leaves the reader
   // where they were.
   const view = $("#view-providers"), top = view.scrollTop;
-  keepIcons($("#providers"), $("#addSheet"), $("#excluded"));
+  keepIcons($("#providers"), $("#offProviders"), $("#addSheet"), $("#excluded"));
   view.classList.remove("loading");
   view.removeAttribute("aria-busy");
   closeProtoMenu();
   syncURL();
-  const list = $("#providers");
-  list.replaceChildren();
-  list.hidden = !providers.providers.length;
+  const onList = $("#providers"), offList = $("#offProviders");
+  onList.replaceChildren();
+  offList.replaceChildren();
+  const offs = providers.providers.filter((p) => p.off).length;
+  onList.hidden = offs === providers.providers.length;
+  $("#offHead").hidden = !offs;
+  offList.hidden = !offs || offFolded;
+  const fold = $("#foldOff");
+  fold.setAttribute("aria-expanded", String(!offFolded));
+  fold.title = t(offFolded ? "Show the providers turned off" : "Fold the providers turned off away");
+  $("#offCount").textContent = offs ? String(offs) : "";
   let dialog = null; // the editor, if one is open
   for (const p of providers.providers) {
+    const list = p.off ? offList : onList;
     const open = editing === p.id;
     const row = el("div", "row provider" + (open ? " selected" : "") + (p.off ? " off" : ""));
     row.dataset.id = p.id;
@@ -2571,6 +2594,7 @@ function renderGatewayView() {
   renderGateway();
   renderConnect();
   renderGatewayModels();
+  renderArchive();
   renderActivity();
 }
 
@@ -3142,6 +3166,79 @@ function callBodyPanel(label, raw, truncated, id) {
   return panel;
 }
 
+// The request archive: with it on, each call's headers and bodies, secrets
+// taken out, go to the S3 bucket sync keeps its backup in, and a call's row
+// reads its own back from there (gateway/archive.go).
+function renderArchive() {
+  const a = providers.gateway.archive || {};
+  const box = $("#archiveList");
+  box.replaceChildren();
+  const r = el("div", "row pref");
+  const who = el("div", "who");
+  who.append(el("div", "name", t("Request archive")));
+  const failed = a.on && a.error;
+  const sub = el("div", "sub" + (failed ? " err" : ""), failed ? t("Last upload failed: {e}", { e: a.error })
+    : a.bucket ? t("Keeps each call’s headers and bodies, secrets taken out, in {where}", { where: a.bucket })
+    : t("Keeps each call’s headers and bodies, secrets taken out, in your S3 bucket. Set up Sync and backup in Settings with an s3:// address first"));
+  who.append(sub);
+  const val = el("div", "val");
+  val.append(segs([["off", t("Off")], ["on", t("On")]], a.on ? "on" : "off", (v) =>
+    api("settings/archive", { on: v === "on" }).then((na) => { providers.gateway.archive = na; renderArchive(); })
+      .catch((e) => { status(t(e.message), "err"); renderArchive(); })));
+  r.append(who, val);
+  box.append(r);
+}
+
+// What was read back from the archive, by "<date>/<id>": the archive's
+// copy, or {busy} while it is read, or {error}.
+const archivedCalls = new Map();
+
+function headersPanel(label, first, headers) {
+  const panel = el("section", "call-body");
+  const head = el("div", "call-body-head");
+  const lines = [first, ...Object.keys(headers || {}).sort().flatMap((k) => headers[k].map((v) => `${k}: ${v}`))].filter(Boolean);
+  head.append(el("span", "call-body-label", label), el("span", "grow"), copyBtn(lines.join("\n"), label));
+  const pre = el("pre");
+  pre.append(el("code", "", lines.join("\n")));
+  panel.append(head, pre);
+  return panel;
+}
+
+function archivePanel(c, id) {
+  const box = el("section", "call-archive");
+  const [date, aid] = c.archive.split("/");
+  const got = archivedCalls.get(c.archive);
+  const head = el("div", "call-body-head");
+  head.append(el("span", "call-body-label", t("Request archive")), el("code", "call-archive-id", c.archive), el("span", "grow"));
+  box.append(head);
+  if (!got || got.busy || got.error) {
+    const b = el("button", "text", t(got?.busy ? "Fetching…" : "Fetch from archive"));
+    b.disabled = !!got?.busy;
+    b.onclick = (ev) => {
+      ev.stopPropagation();
+      archivedCalls.set(c.archive, { busy: true });
+      renderActivity();
+      api(`archive?date=${encodeURIComponent(date)}&id=${encodeURIComponent(aid)}`)
+        .then((a) => archivedCalls.set(c.archive, a))
+        .catch((e) => archivedCalls.set(c.archive, { error: t(e.message) }))
+        .finally(renderActivity);
+    };
+    head.append(b);
+    if (got?.error) box.append(el("div", "call-archive-err", got.error));
+    return box;
+  }
+  head.append(el("span", "call-body-truncated call-archive-note", t("Secrets taken out")));
+  const grid = el("div", "call-details");
+  grid.append(
+    headersPanel(t("Request Headers"), `${got.request.method || ""} ${got.request.path || ""}`.trim(), got.request.headers),
+    headersPanel(t("Response Headers"), got.response.status ? `HTTP ${got.response.status}` : "", got.response.headers),
+    callBodyPanel("Request Body", got.request.body, got.request.truncated),
+    callBodyPanel("Response Body", got.response.body, got.response.truncated, id + "|archive"),
+  );
+  box.append(grid);
+  return box;
+}
+
 function renderActivity() {
   const g = providers.gateway;
   const box = $("#activity");
@@ -3185,6 +3282,7 @@ function renderActivity() {
         callBodyPanel("Request Body", c.requestBody, c.requestTruncated),
         callBodyPanel("Response Body", c.responseBody, c.responseTruncated, id),
       );
+      if (c.archive) details.append(archivePanel(c, id));
       item.dataset.id = id;
       item.append(details);
     }
@@ -3957,7 +4055,9 @@ function drawEditor(p, presetID) {
     h.append(icon(p?.icon || (copyOf && draft.icon) || pr?.icon || "generic"), el("b", "", p ? p.name : copyOf ? t("Copy of {name}", { name: copyOf.name }) : pr ? pr.name : t("Custom provider")));
     if (pr?.note) h.append(el("span", "note", t(pr.note)));
     h.append(el("span", "grow"));
-    const site = pr?.website || p?.website || (p?.host ? "https://" + p.host : "");
+    // a plugin's provider has plugin://<id> for its base, and its id is no
+    // address to open: only a host with a dot or a port makes a link
+    const site = pr?.website || p?.website || (/[.:]/.test(p?.host || "") ? "https://" + p.host : "");
     if (site) { const b = el("button", "link", hostOf(site) + " ↗"); b.onclick = () => api("open", { url: site }); h.append(b); }
     if (p) h.append(providerSwitch(p));
     ed.append(h);
@@ -5137,10 +5237,11 @@ function renderRouting(p) {
   });
   // what Codex or Claude Code sends past magpie goes to the account it is
   // signed in to, which magpie moves on once Smart would count it spent
-  // (provider.KeepOnAnAccountWithRoom, #209)
+  // and back once the first has room (provider.KeepOnAnAccountWithRoom,
+  // #209, #408)
   const a = p.account;
   const own = a && (a.agent === "codex" || a.agent === "claude")
-    ? " " + t("Routing picks the account for each request through magpie; {agent} on its own uses the one it is signed in to, which magpie moves to the next ticked account with room once it is 98% used.", { agent: a.agentName })
+    ? " " + t("Routing picks the account for each request through magpie; {agent} on its own uses the one it is signed in to, which magpie moves to the next ticked account with room once it is 98% used, and back to the first once that has room again.", { agent: a.agentName })
     : "";
   return field(t("Routing"), pick, t(cur[2]) + own);
 }
@@ -5662,6 +5763,7 @@ function renderSigning(sub) {
   tt.append(el("span", "n", t("Finish signing in to {name} in your browser", { name: sub.name })),
     el("span", "s", signing.state === "starting" ? t("Starting the sign-in…")
       : sub.plugin ? (signing.instructions || (signing.pasteCode ? t("magpie opened the sign-in page. Paste the code it shows below.") : t("magpie opened the sign-in page. The account shows up here as soon as you're done.")))
+      : signing.pasteCode ? t("magpie opened the sign-in page. Paste the code it shows below.")
       : signing.code && sub.agent === "factory" ? t("magpie opened Factory's sign-in page. Check it shows this code and confirm it; the account shows up here as soon as you're done.")
       : signing.code ? t("magpie opened GitHub's device page. Enter this code there; the account shows up here as soon as you're done.") : t("magpie opened the sign-in page. The account shows up here as soon as you're done.")));
   if (signing.code) {
@@ -5761,6 +5863,9 @@ function renderAccounts(a) {
   // to it (#263)
   const pausable = (a.agent === "claude" || a.agent === "codex") && ls.some((l) => !l.active && l.on);
   const quota = loginUsageOf(a.agent);
+  // the first, which magpie signed the agent out of while it was spent:
+  // it is signed back in once it has room (#408)
+  const back = ls.find((l) => l.returns && !l.active);
   for (const l of ls) {
     const on = !l.paused && (l.active || l.on);
     const row = el("div", "acc" + (on ? " in-use" : " off") + (l.user === justAdded ? " new" : ""));
@@ -5778,7 +5883,9 @@ function renderAccounts(a) {
     }
     row.append(dot, el("span", "n", l.user), el("span", "plan", accountPlan({ agent: a.agent, plan: l.plan })), el("span", "grow"));
     if (l.active) {
-      row.append(el("span", "using", l.paused ? t("Paused") : several ? t("First") : t("Current")));
+      const using = el("span", "using", l.paused ? t("Paused") : back ? t("First for now") : several ? t("First") : t("Current"));
+      if (back && !l.paused) using.title = t("{user} was nearly used up, so magpie signed {agent} in to this one; it goes back to {user} once that has room again", { user: back.user, agent: a.agentName });
+      row.append(using);
       if (a.agent === "qoder" || a.agent === "qoder-cn" || l.own) {
         const forget = el("button", "text quiet", t("Remove"));
         if (l.own) forget.title = forgetOwnTitle(a);
@@ -5789,6 +5896,11 @@ function renderAccounts(a) {
       const forget = el("button", "text quiet", t("Remove"));
       forget.title = l.own ? forgetOwnTitle(a) : t("magpie forgets this account's sign-in; the account itself is untouched");
       forget.onclick = () => accountAction("login/forget", { agent: a.agent, user: l.user }, t("{user} removed", { user: l.user }));
+      if (l === back) {
+        const again = el("span", "using", t("First again once it has room"));
+        again.title = t("magpie signs {agent} back in to this account once it has room again", { agent: a.agentName });
+        row.append(again);
+      }
       const use = el("button", "text", on ? t("Make first") : t("Use"));
       use.title = sub?.own ? t("The gateway uses this account first") : t("Sign {agent} in to this account", { agent: a.agentName });
       use.onclick = () => { use.classList.add("busy"); accountAction("login/switch", { agent: a.agent, user: l.user }, sub?.own ? t("The gateway now uses {user} first", { user: l.user }) : t("{agent} is now signed in as {user}", { agent: a.agentName, user: l.user })); };
@@ -11182,6 +11294,22 @@ setInterval(() => {
 }, 1000);
 window.addEventListener("focus", load);
 setInterval(renderUpdateBadge, 15 * 60 * 1000); // a window left open still hears of a new version
+// renderPluginDot puts a dot on Plugins while a plugin's update waits for
+// the reader (someone else's plugin, or one pinned; the community's update
+// by themselves)
+async function renderPluginDot() {
+  const b = mode === "window" && document.querySelector('#nav button[data-view="plugins"]');
+  if (!b) return;
+  const u = await api("plugins/updates").catch(() => null);
+  const n = u?.waiting?.length || 0;
+  b.classList.toggle("has-dot", n > 0);
+  if (n) b.title = t(n === 1 ? "An update for {name} is out" : "Updates for {n} plugins are out", { n, name: u.waiting[0].package });
+  else b.removeAttribute("title");
+}
+window.renderPluginDot = renderPluginDot;
+renderPluginDot();
+window.addEventListener("focus", renderPluginDot);
+setInterval(renderPluginDot, 15 * 60 * 1000);
 // ---------- hiding emails, for a screenshot to share ----------
 // Routing and Usage each have a Hide emails button, one setting for both.
 // Each email address on the page — an account's, in a row, a sentence,
