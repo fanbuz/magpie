@@ -1781,6 +1781,9 @@ function filter() {
   if (typed && pick.free && ["model", "small", "large", ...FOLLOWS_MODEL].includes(pick.field.label) && !pick.items.some((o) => o.value === typed)) {
     pick.items.push({ value: typed, note: t("use as typed"), custom: true });
   }
+  // a model the filter finds among those kept for routing groups, which
+  // aren't offered: said why, rather than missing without a word
+  pick.kept = pick.modelPicker && q ? (state?.unlisted || []).filter((m) => [m.id, m.name].some((s) => s?.toLowerCase().includes(q))).slice(0, 3) : [];
   pick.cursor = 0;
   renderPickerRail();
   renderList();
@@ -1921,7 +1924,7 @@ function contextTag(n, name) {
 function renderList() {
   const list = $("#list");
   list.replaceChildren();
-  if (!pick.items.length) { list.append(el("div", "none", t("No matches."))); return; }
+  if (!pick.items.length) { list.append(el("div", "none", t("No matches."))); for (const m of pick.kept || []) list.append(keptNote(m)); return; }
   const hasIcons = pick.items.some((o) => o.icon);
   const q = $("#q").value.trim();
   let group = null;
@@ -1962,7 +1965,38 @@ function renderList() {
     li.onclick = () => commit(o.value);
     list.append(li);
   });
+  for (const m of pick.kept || []) list.append(keptNote(m));
   list.querySelector(`li[data-i="${pick.cursor}"]`)?.scrollIntoView({ block: "nearest" });
+}
+
+// keptNote: a model of a provider set to "Only through routing groups",
+// found by the picker's filter. It isn't offered: in a group, that group
+// is, picked here at a click; in none, nothing uses it, and a click makes
+// a group of it.
+function keptNote(m) {
+  const li = el("li", "kept");
+  li.append(icon(m.icon || "generic"));
+  const words = el("span", "kept-words");
+  const model = m.name || m.id;
+  words.append(el("b", "", model));
+  const via = m.groups.map((g) => pick.options.find((o) => o.ref === g && o.group === ROUTING_GROUPS)).filter(Boolean);
+  const act = el("button", "text action");
+  if (via.length) {
+    words.append(el("span", "", t("{provider} is used only through routing groups: agents reach {model} by picking {group}.", { provider: m.provider, model, group: via.map((o) => o.label || o.value).join(", ") })));
+    act.textContent = t("Pick {group}", { group: via[0].label || via[0].value });
+    act.onclick = (ev) => { ev.stopPropagation(); commit(via[0].value); };
+  } else {
+    words.append(el("span", "", t("{provider} is used only through routing groups, and {model} is in none, so no agent can use it. Make a group of it, or untick “Only through routing groups” in {provider}'s models.", { provider: m.provider, model })));
+    act.textContent = t("Make a routing group of it");
+    act.onclick = (ev) => {
+      ev.stopPropagation();
+      closePicker();
+      if (mode !== "window") api("window/main?view=routing&newgroup=" + encodeURIComponent(m.id), {}).catch((e) => status(e.message, "err"));
+      else window.newGroupWith?.(m.id, m.name, ev);
+    };
+  }
+  li.append(words, act);
+  return li;
 }
 
 function move(d) {
@@ -4888,6 +4922,25 @@ function renderModels(p) {
     why.textContent = p.decide ? t("Agents never see them: a routing group picks one as its classifier.")
       : draft.unlisted ? t("Agents don't see them: only the routing groups they are in use them.")
       : t(draft.chosen.length ? "Agents see the models picked." : "None picked: agents see the vendor's list, up to {n}.", { n: 24 });
+    drawLost();
+  };
+  // those of its models in no routing group, while it is kept for groups:
+  // nothing can use them, which is said here rather than left for the
+  // reader to find them gone from every picker; each, once that is saved,
+  // makes a group of itself at a click
+  const drawLost = () => {
+    lost.replaceChildren();
+    const ids = draft.chosen.length ? draft.chosen : p.models.filter((m) => m.on).map((m) => m.id);
+    const none = p.decide || !draft.unlisted ? [] : ids.filter((id) => !p.groups?.[id]?.length);
+    lost.hidden = !none.length;
+    if (!none.length) return;
+    lost.append(t("In no routing group, so no agent can use them now: {models}.", { models: none.slice(0, 8).join(", ") + (none.length > 8 ? " …" : "") }));
+    if (!p.unlisted) { lost.append(" " + t("Once saved, make a group of them in Routing.")); return; }
+    for (const id of none.slice(0, 4)) {
+      const b = el("button", "text action", t("Make a routing group of {model}", { model: id }));
+      b.onclick = (ev) => { if (mode !== "window") api("window/main?view=routing&newgroup=" + encodeURIComponent(p.id + "/" + id), {}); else window.newGroupWith?.(p.id + "/" + id, "", ev); };
+      lost.append(b);
+    }
   };
   // the names and reasoning levels of the models agents see: saved at once,
   // apart from the editor's Save, as they change nothing but what is shown
@@ -5053,7 +5106,8 @@ function renderModels(p) {
   cb.onchange = () => { draft.unlisted = cb.checked; draw(); };
   tk.title = t("Its models leave the list agents pick from; the routing groups they are in still use them");
   if (!p.decide) box.append(tk);
-  box.append(why);
+  const lost = el("div", "hint model-hint warn");
+  box.append(why, lost);
   draw();
   return box;
 }
@@ -6643,8 +6697,9 @@ const PERIODS = [["today", "Today"], ["7d", "7 days"], ["30d", "30 days"], ["all
 // never waits for them. They don't depend on the period either.
 let quotas = null;
 let quotasAt = 0; // when they came in
-// asked: the reader opened the page, the one time a Claude account's
-// usage is read, by running Claude Code's own /usage (never on a timer).
+// asked: the reader opened the page, so a Claude account's usage is read
+// at once, by running Claude Code's own /usage, rather than when its last
+// reading is ten minutes old.
 async function loadUsage(asked) {
   renderUsageTab();
   if (asked) loadQuotas(true);
@@ -7561,7 +7616,7 @@ function renderUsage() {
 // server pages it (/api/usage/requests) and saves it whole as CSV.
 
 let ledger = null; // the page shown: { rows, offset, total, agents, …totals }
-let ledOffset = 0, ledAgent = "", ledProvider = "", ledFailed = false, ledQuery = "", ledModel = "";
+let ledOffset = 0, ledAgent = "", ledProvider = "", ledFailed = false, ledQuery = "", ledModel = "", ledRoute = 0;
 const LED_PAGE = 100;
 // Remember the chart metric; start each app load split by model.
 let ledMetric = "tokens", ledSplit = "model";
@@ -7570,10 +7625,24 @@ try {
   if (["tokens", "cost", "calls"].includes(m)) ledMetric = m;
 } catch {}
 
+let ledRouteInfo = null, ledBeforeRoute = null;
+window.openUsageRoute = (route) => {
+  if (!ledBeforeRoute) ledBeforeRoute = { period, ledOffset, ledAgent, ledProvider, ledFailed, ledQuery, ledModel };
+  ledRoute = route.id;
+  ledRouteInfo = route;
+  ledOffset = 0; ledAgent = ""; ledProvider = ""; ledFailed = false; ledQuery = ""; ledModel = "";
+  $("#ledQ").value = "";
+  period = "all";
+  usageTab = "requests";
+  ledger = null;
+  show("usage");
+};
+
 function ledParams(extra) {
   const q = new URLSearchParams({ period });
   if (ledAgent) q.set("agent", ledAgent);
   if (ledProvider) q.set("provider", ledProvider);
+  if (ledRoute) q.set("route", ledRoute);
   if (ledFailed) q.set("failed", "1");
   if (ledModel) q.set("model", ledModel);
   else if (ledQuery.trim()) q.set("q", ledQuery.trim());
@@ -8141,13 +8210,25 @@ function renderLedger() {
     if (l.errors) sum.push(t("{n} failed", { n: l.errors }));
   }
   $("#ledSum").textContent = sum.join(" · ");
+  const routeFilter = $("#ledRoute");
+  routeFilter.hidden = !ledRoute;
+  $("#ledRouteLabel").textContent = ledRouteInfo ? t("Request: {what}", { what: new Date(ledRouteInfo.time).toLocaleString(locale === "zh" ? "zh-CN" : "en") + " · " + ledRouteInfo.model }) : "";
+  $("#ledRouteClear").title = t("Clear filter");
+  $("#ledRouteClear").setAttribute("aria-label", t("Clear filter"));
+  $("#ledRouteClear").onclick = () => {
+    ledRoute = 0; ledRouteInfo = null;
+    if (ledBeforeRoute) ({ period, ledOffset, ledAgent, ledProvider, ledFailed, ledQuery, ledModel } = ledBeforeRoute);
+    ledBeforeRoute = null;
+    $("#ledQ").value = ledQuery;
+    loadLedger().catch((e) => status(e.message, "err"));
+  };
   renderLedgerDash(l);
 
   const wrap = $("#ledWrap");
   const pager = $("#ledPager");
   if (!l.total) {
     wrap.classList.add("none");
-    const filtered = ledAgent || ledProvider || ledFailed || ledQuery.trim();
+    const filtered = ledRoute || ledAgent || ledProvider || ledFailed || ledQuery.trim();
     const none = { today: "No calls today.", "7d": "No calls in the last 7 days.", "30d": "No calls in the last 30 days.", all: "No calls yet." }[period];
     wrap.replaceChildren(el("div", "led-none", filtered ? t("No requests match these filters.") : t(none)));
     pager.hidden = true;
@@ -8173,7 +8254,13 @@ function renderLedger() {
       tr.append(c);
       return c;
     };
-    td(ledTime(r.t), "when", new Date(r.t).toLocaleString(locale === "zh" ? "zh-CN" : "en"));
+    const when = r.route_id ? el("button", "text led-route-link", ledTime(r.t)) : ledTime(r.t);
+    if (r.route_id) {
+      when.title = t("View routing");
+      // the link opens the route, not the row's details as well
+      when.onclick = (e) => { e.stopPropagation(); window.openRoute(r.route_id, r.t).catch((err) => status(err.message, "err")); };
+    }
+    td(when, "when", new Date(r.t).toLocaleString(locale === "zh" ? "zh-CN" : "en"));
     const who = el("span", "who");
     // an agent on another computer, whose magpie passed the request on
     const name = r.agentName || r.agent;

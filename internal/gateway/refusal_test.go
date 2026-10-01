@@ -118,6 +118,12 @@ func TestRefusalFailsOverToTheNextMember(t *testing.T) {
 		}
 	}
 
+	for _, rec := range recs {
+		if rec.RouteID != r.ID || rec.RouteID == 0 {
+			t.Fatalf("usage route %d, want %d", rec.RouteID, r.ID)
+		}
+	}
+
 	// and on an Anthropic client's own API, relayed as it came
 	fresh(t)
 	a = &scripted{replies: []reply{{200, "text/event-stream", anthropicRefusal}}}

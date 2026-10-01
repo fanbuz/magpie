@@ -378,7 +378,7 @@ func (s *Server) codexUpstream(w http.ResponseWriter, r *http.Request, rest stri
 	}
 	end(call.Status, call.Error, uu.Input+uu.Output+uu.CacheRead+uu.CacheWrite, uu.Output)
 	s.record(call)
-	rec := usage.Record{Time: start, Agent: call.Agent, Provider: call.Provider, Host: provider.HostOf(base), Model: call.Model,
+	rec := usage.Record{RouteID: tr.ID, Time: start, Agent: call.Agent, Provider: call.Provider, Host: provider.HostOf(base), Model: call.Model,
 		Requested: call.Model, Served: served,
 		Input: uu.Input, Output: uu.Output, CacheRead: uu.CacheRead, CacheWrite: uu.CacheWrite,
 		Reasoning: uu.Reasoning, Millis: call.Millis, TTFT: call.TTFT, FirstText: call.FirstText, Status: call.Status, Session: sessionOf(r.Header), NativeSession: nativeSessionOf(r.Header), Kind: call.Kind,

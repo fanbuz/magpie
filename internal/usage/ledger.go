@@ -40,10 +40,11 @@ type Row struct {
 // says an error ended it.
 func (r Record) Failed() bool { return r.Status >= 400 || r.Error != "" }
 
-// Filter narrows the ledger: to one agent (its id, as AgentOf gives it), to
+// Filter narrows the ledger: to a route, one agent (its id, as AgentOf gives it), to
 // one provider, to the failed calls, and to the rows whose models, provider, host or
 // session hold Query (any case).
 type Filter struct {
+	RouteID  int64
 	Model    string // exact model selected in the ranking
 	Agent    string
 	Provider string // a provider's id, as the ledger's rows have it
@@ -52,6 +53,9 @@ type Filter struct {
 }
 
 func (f Filter) keeps(r Record) bool {
+	if f.RouteID != 0 && r.RouteID != f.RouteID {
+		return false
+	}
 	if f.Model != "" && r.Model != f.Model {
 		return false
 	}
@@ -361,7 +365,7 @@ func pricer() func(Record) *catalog.Price {
 // CSVHeader is the ledger's columns, as WriteCSV writes them.
 var CSVHeader = []string{"time", "agent", "requested_model", "provider", "host", "model", "served_model", "swapped",
 	"effort", "input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens", "reasoning_tokens",
-	"cost_usd", "duration_ms", "ttft_ms", "status", "error", "session", "kind", "provider_key_id", "provider_key_name",
+	"cost_usd", "duration_ms", "ttft_ms", "status", "error", "session", "kind", "provider_key_id", "provider_key_name", "route_id",
 	"request_id", "endpoint", "error_message", "error_type", "source", "rejected", "session_provider", "session_account", "session_official_login"}
 
 // WriteCSV writes rows as CSV, a header first: times in RFC 3339 with
@@ -381,9 +385,13 @@ func WriteCSV(w io.Writer, rows []Row) error {
 		if r.TTFT > 0 {
 			ttft = strconv.FormatInt(r.TTFT, 10)
 		}
+		routeID := ""
+		if r.RouteID != 0 {
+			routeID = strconv.FormatInt(r.RouteID, 10)
+		}
 		cw.Write([]string{r.Time.Format(time.RFC3339), r.Agent, r.Requested, r.Provider, r.Host, r.Model, r.Served,
 			strconv.FormatBool(r.Swapped), r.Effort, n(r.Input), n(r.Output), n(r.CacheWrite), n(r.CacheRead), n(r.Reasoning),
-			cost, strconv.FormatInt(r.Millis, 10), ttft, n(r.Status), strconv.FormatBool(r.Failed()), r.Session, r.Kind, r.ProviderKeyID, r.ProviderKeyName,
+			cost, strconv.FormatInt(r.Millis, 10), ttft, n(r.Status), strconv.FormatBool(r.Failed()), r.Session, r.Kind, r.ProviderKeyID, r.ProviderKeyName, routeID,
 			r.RequestID, r.Endpoint, r.Error, r.ErrType, r.Source, strconv.FormatBool(r.IsRejected()), r.SessionProvider, r.SessionAccount, strconv.FormatBool(r.SessionOfficialLogin)})
 	}
 	cw.Flush()
