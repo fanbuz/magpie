@@ -3819,6 +3819,11 @@ function pickForAgent(a, p, btn, ev) {
 let presetQuery = "", addReturnPick = null;
 function renderAdd() {
   const sheet = $("#addSheet");
+  const scrollTop = sheet.querySelector(".tiles")?.scrollTop || 0;
+  const active = document.activeElement;
+  const hadFocus = sheet.contains(active);
+  const focusPick = hadFocus && active.closest("[data-pick]")?.dataset.pick;
+  const selection = hadFocus && active.matches(".find") ? [active.selectionStart, active.selectionEnd] : null;
   sheet.replaceChildren();
   sheet.hidden = !adding;
   const overlay = adding && providers.providers.length > 0;
@@ -3930,6 +3935,12 @@ function renderAdd() {
     }
   };
   drawTiles();
+  tiles.scrollTop = scrollTop;
+  if (hadFocus && $("#modal").hidden) {
+    const target = focusPick && sheet.querySelector(`[data-pick="${CSS.escape(focusPick)}"]`);
+    focusAddControl(target || q);
+    if (selection) q.setSelectionRange(...selection);
+  }
   return editing && typeof editing === "object" ? renderEditor(null, editing.preset) : null;
 }
 
@@ -4495,7 +4506,7 @@ function closeModal() {
     const sheet = $("#addSheet");
     if (adding && !sheet.hidden && !$("#view-providers").hidden) {
       const option = addReturnPick && sheet.querySelector(`[data-pick="${CSS.escape(addReturnPick)}"]`);
-      (option || sheet.querySelector(".find"))?.focus({ preventScroll: true });
+      focusAddControl(option || sheet.querySelector(".find"));
     }
   }, () => {});
   return done;
@@ -7403,9 +7414,19 @@ $("#addBackdrop").addEventListener("wheel", (e) => {
 $("#addSheet").addEventListener("click", (e) => {
   addReturnPick = e.target.closest("[data-pick]")?.dataset.pick || null;
 }, true);
-$("#addSheet").addEventListener("keydown", (e) => {
-  if (e.key !== "Tab" || !$("#addBackdrop").classList.contains("add-overlay")) return;
-  const controls = [...e.currentTarget.querySelectorAll("button, input, select, textarea, a[href], [tabindex]")]
+// Move only the sheet's options, never the background list, to reveal focus.
+function focusAddControl(control) {
+  if (!control) return;
+  control.focus({ preventScroll: true });
+  const tiles = $("#addSheet .tiles");
+  if (!tiles?.contains(control)) return;
+  const r = control.getBoundingClientRect(), b = tiles.getBoundingClientRect();
+  if (r.top < b.top) tiles.scrollTop += r.top - b.top;
+  else if (r.bottom > b.bottom) tiles.scrollTop += r.bottom - b.bottom;
+}
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Tab" || $("#view-providers").hidden || !$("#modal").hidden || !$("#addBackdrop").classList.contains("add-overlay")) return;
+  const controls = [...$("#addSheet").querySelectorAll("button, input, select, textarea, a[href], [tabindex]")]
     .filter((node) => !node.disabled && node.tabIndex >= 0 && node.getClientRects().length);
   // Safari may skip buttons in its native Tab order. Use the same explicit
   // order in every engine, including when starting at a middle option.
@@ -7414,7 +7435,7 @@ $("#addSheet").addEventListener("keydown", (e) => {
   const at = controls.indexOf(document.activeElement);
   const next = at < 0 ? (e.shiftKey ? controls.length - 1 : 0)
     : (at + (e.shiftKey ? -1 : 1) + controls.length) % controls.length;
-  controls[next].focus();
+  focusAddControl(controls[next]);
 }, true);
 
 // unrollInView: the agents' scroll unrolls under the button clicked for it,

@@ -133,6 +133,32 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.mouse.wheel(0, 600);
         await page.waitForTimeout(350);
         assert.deepEqual(await geometry(), compact, "only the choices scroll");
+        const choices = sheet.locator(".tiles");
+        await choices.evaluate(e => e.scrollTop = e.scrollHeight);
+        const choicesTop = await choices.evaluate(e => e.scrollTop);
+        await sheet.locator('[data-pick="custom"]').click();
+        await page.locator("#modal .editor").waitFor();
+        await page.keyboard.press("Escape");
+        await page.locator("#modal").waitFor({ state: "hidden" });
+        assert.equal(await choices.evaluate(e => e.scrollTop), choicesTop, "nested editor preserves choices scroll");
+        assert(await choices.evaluate(e => {
+          const a = document.activeElement, r = a.getBoundingClientRect(), b = e.getBoundingClientRect();
+          return e.contains(a) && r.top >= b.top - 1 && r.bottom <= b.bottom + 1;
+        }), "restored focus is visible");
+        assert.deepEqual(await geometry(), compact, "revealing focus leaves background in place");
+        const search = sheet.locator(".find");
+        await search.fill("deep");
+        await search.evaluate(e => e.setSelectionRange(2, 2));
+        await page.evaluate(() => loadProviders());
+        assert(await search.evaluate(e => e === document.activeElement && e.selectionStart === 2 && e.selectionEnd === 2), "refresh restores search focus and caret");
+        assert.equal(await search.inputValue(), "deep");
+        // If focus is lost through another path, the document-level fallback
+        // recovers both directions without reaching background controls.
+        for (const key of ["Tab", "Shift+Tab"]) {
+          await page.evaluate(() => document.activeElement.blur());
+          await page.keyboard.press(key);
+          assert(await sheet.evaluate(e => e.contains(document.activeElement)), "recover lost focus: " + key);
+        }
         await sheet.locator(".row-head button").last().click();
         await page.waitForTimeout(350);
         assert.deepEqual(await geometry(), compact, "compact window closes without a gap");
