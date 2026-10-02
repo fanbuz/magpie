@@ -37,14 +37,14 @@ const providers = [
   prov("claude", "Claude", { preset: "", account: { agent: "claude", logins: [{ user: "a" }, { user: "b" }] } }),
 ];
 
-function server(lang) {
+function server(lang, list = providers) {
   return async (route) => {
     const url = new URL(route.request().url());
     const json = (data) => route.fulfill({ json: data });
     if (url.pathname === "/boot.js") return route.fulfill({ contentType: "text/javascript", body: `window.bootPrefs = {lang:"${lang}",theme:"light",web:false};` });
     if (url.pathname === "/wails/runtime.js") return route.fulfill({ contentType: "text/javascript", body: "export const Window = {};" });
     if (url.pathname === "/api/state") return json({ agents: [], profiles: [], settings: { lang, theme: "light" } });
-    if (url.pathname === "/api/providers") return json({ providers, presets, excluded: [], gateway: { running: true, window: true } });
+    if (url.pathname === "/api/providers") return json({ providers: list, presets, excluded: [], gateway: { running: true, window: true } });
     if (url.pathname === "/api/groups") return json({ groups: [], pools: [] });
     if (url.pathname === "/api/gateway/trace") return json({ routes: [] });
     if (url.pathname.startsWith("/api/")) return json({});
@@ -195,6 +195,18 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert(await row("Kimi").evaluate(e => e === document.activeElement), "return focus to the re-rendered option");
         await page.keyboard.press("Tab");
         assert(await sheet.evaluate(e => e.contains(document.activeElement)), "Tab remains in the sheet");
+        // Every control is reachable in both directions, including Safari's
+        // default mode where native Tab skips buttons.
+        const controls = sheet.locator("button, input, select, textarea, a[href], [tabindex]");
+        const count = await controls.count();
+        let focusIndex = await controls.evaluateAll(es => es.indexOf(document.activeElement));
+        for (const key of ["Tab", "Shift+Tab"]) {
+          for (let i = 0; i < count + 2; i++) {
+            focusIndex = (focusIndex + (key === "Tab" ? 1 : -1) + count) % count;
+            await page.keyboard.press(key);
+            assert.equal(await controls.evaluateAll(es => es.indexOf(document.activeElement)), focusIndex, key + " follows the explicit order");
+          }
+        }
         // Keyboard activation and a mouse close also restore the option.
         await row("Kimi").focus();
         await page.keyboard.press("Enter");
@@ -216,6 +228,26 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert(Math.abs(at.y + at.height / 2 + gy - (deep.y + deep.height / 2)) < 2, "from DeepSeek's row down");
         assert.deepEqual(errors, []);
         await page.context().close();
+
+        // First use in the tray: Escape clears search without hiding the window.
+        const firstUse = await (await browser.newContext({ viewport: { width: 560, height: 720 } })).newPage();
+        const hides = [];
+        firstUse.on("request", r => { if (new URL(r.url()).pathname === "/api/window/hide") hides.push(r.url()); });
+        await firstUse.route("**/*", server(lang, []));
+        await firstUse.goto("http://magpie.test/?mode=panel");
+        // The tray has no provider tab; exercise the first-use provider view
+        // with the real panel key handlers still installed.
+        await firstUse.evaluate(() => show("providers"));
+        const search = firstUse.locator("#addSheet .find");
+        await search.fill("deep");
+        await firstUse.keyboard.press("Escape");
+        assert.equal(await search.inputValue(), "");
+        assert(await search.isVisible());
+        await firstUse.keyboard.press("Escape");
+        await firstUse.waitForTimeout(150);
+        assert.deepEqual(hides, [], "search Escape never hides the tray");
+        assert(await search.evaluate(e => e === document.activeElement));
+        await firstUse.context().close();
       });
     }
   });

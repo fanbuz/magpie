@@ -3836,7 +3836,13 @@ function renderAdd() {
   head.append(el("span", "label", t(providers.providers.length ? "Add a provider" : "Add your first provider")), el("span", "grow"));
   const q = input(presetQuery, t("Find a vendor…"));
   q.className = "find";
-  q.onkeydown = null; // let Escape close the sheet, and Tab stay within it
+  q.onkeydown = (e) => {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (overlay) closeAddSheet();
+    else { q.value = presetQuery = ""; drawTiles(); }
+  };
   q.oninput = () => { presetQuery = q.value; drawTiles(); };
   head.append(q);
   const imp = el("button", "text", t("Import…"));
@@ -7401,9 +7407,14 @@ $("#addSheet").addEventListener("keydown", (e) => {
   if (e.key !== "Tab" || !$("#addBackdrop").classList.contains("add-overlay")) return;
   const controls = [...e.currentTarget.querySelectorAll("button, input, select, textarea, a[href], [tabindex]")]
     .filter((node) => !node.disabled && node.tabIndex >= 0 && node.getClientRects().length);
-  const first = controls[0], last = controls[controls.length - 1];
-  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
-  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+  // Safari may skip buttons in its native Tab order. Use the same explicit
+  // order in every engine, including when starting at a middle option.
+  e.preventDefault();
+  if (!controls.length) return;
+  const at = controls.indexOf(document.activeElement);
+  const next = at < 0 ? (e.shiftKey ? controls.length - 1 : 0)
+    : (at + (e.shiftKey ? -1 : 1) + controls.length) % controls.length;
+  controls[next].focus();
 }, true);
 
 // unrollInView: the agents' scroll unrolls under the button clicked for it,
