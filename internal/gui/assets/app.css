@@ -265,6 +265,20 @@ body.window .top.inrow .actions { margin-left: 0; }
 /* and when even that doesn't fit, the tabs scroll sideways rather than push the page wider */
 .top.packed .seg { min-width: 0; flex: 0 1 auto; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .top.packed .seg::-webkit-scrollbar { display: none; }
+/* magpie web on a phone, or a browser as narrow (phoneWeb): the magpie and
+   the icons in a row, the tabs at their size in a row of their own under
+   them, sliding sideways when they don't fit (they were squeezed into the
+   room between, too small to read or tap) */
+@media (max-width: 600px) {
+  body.web .top { flex-wrap: wrap; height: auto; row-gap: 4px; padding: 6px 10px 8px 14px; }
+  body.web .top .brand, body.web .top .actions { height: 30px; align-items: center; }
+  body.web .top .seg {
+    position: relative; left: auto; top: auto; transform: none; order: 3; flex: 1 0 100%; max-width: 100%;
+    overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior-x: contain;
+  }
+  body.web .top .seg::-webkit-scrollbar { display: none; }
+  body.web .top .seg button { flex: 1 0 auto; height: 30px; padding: 0 12px; font-size: 13px; }
+}
 @keyframes update-in { from { opacity: 0; transform: translateY(-3px) scale(.94); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -1090,6 +1104,8 @@ body.panel .profiles #save { height: 25px; } /* the field's: the line keeps its 
 .pq-ring.full .pq-dial { background: conic-gradient(var(--amber) calc(var(--p) * 1%), color-mix(in srgb, var(--amber) 18%, transparent) 0); }
 .pq-ring.full b { color: var(--fg); }
 .pq-rn { max-width: 44px; font-size: 9.5px; line-height: 1.2; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pq-rn2 { display: flex; flex-direction: column; align-items: center; }
+.pq-rn2 > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 /* a Codex account's rate-limit resets, under a hairline across the card */
 .pq-resets { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin-top: 5px; padding-top: 7px; border-top: 1px solid var(--line-2); font-size: 11px; font-variant-numeric: tabular-nums; }
 .resets-words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1609,6 +1625,7 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .acc .aq-w.full b, .acc .aq-w.full .aq-r { color: var(--fg); }
 .acc .aq-w.full .aq-track i { background: var(--fg); }
 .acc .aq-r { color: var(--muted); }
+.acc .aq-k { color: var(--muted); font-variant-numeric: tabular-nums; }
 .acc .aq-none { color: var(--faint); }
 .acc .skeleton.sk-aq { width: 110px; height: 8px; border-radius: 4px; }
 .acc .dot.tick.fixed { cursor: default; }
@@ -1798,6 +1815,8 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .segs { position: relative; display: inline-flex; padding: 2px; border-radius: 7px; background: var(--pill); align-self: flex-start; }
 .opt { position: relative; z-index: 1; white-space: nowrap; height: 22px; padding: 0 10px; border-radius: 5px; font-size: 12px; color: var(--muted); transition: color .18s var(--ease), transform .14s var(--ease); }
 .opt.on { color: var(--fg); }
+/* how often magpie checks for updates, while it doesn't by itself */
+.update-every-row.off .segs { opacity: .55; }
 .opt:hover:not(.on) { color: var(--fg-2); }
 .thumb {
   position: absolute; top: 2px; bottom: 2px; left: 0; width: 0; border-radius: 6px;
@@ -1994,6 +2013,12 @@ input.words.search-key, input.words.search-url { flex: 1 1 120px; width: auto; m
 .row.pref.lan-container .sub { white-space: normal; }
 .pop.proto-menu.lan-address-menu { width: min(320px, calc(100vw - 16px)); max-height: min(360px, 70vh); overflow-y: auto; }
 .lan-address-menu .pm-name { font: 12px var(--code); }
+/* a phone: a control too wide for the row beside its name goes under it
+   rather than cut the name to a few letters */
+@media (max-width: 600px) {
+  body.web .row.pref:not(.lan-address-row) { flex-wrap: wrap; row-gap: 8px; }
+  body.web .row.pref:not(.lan-address-row) .who { flex: 1 1 150px; }
+}
 @media (max-width: 600px) {
   .row.pref.lan-address-row { height: 76px; }
   .lan-address-controls .segs { right: 12px; }
