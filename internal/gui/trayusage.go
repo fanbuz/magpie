@@ -14,7 +14,7 @@ import (
 	"github.com/yetone/magpie/internal/settings"
 )
 
-// Settings → Usage in the menu bar: the windows of the subscriptions and
+// Settings → Allowances in the menu bar: the windows of the subscriptions and
 // plans ticked there, beside the tray icon, for keeping an eye on them
 // without opening magpie. The Mac's menu bar draws each as its logo with
 // its two windows stacked, "42%" over "18%", side by side (trayimage), or

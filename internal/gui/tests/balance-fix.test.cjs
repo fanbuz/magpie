@@ -120,7 +120,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     ]);
     assert.match(said[0], /set it to …\/api\/user\/self/);
     assert.match(said[1], /^Add the header New-Api-User = your user ID/);
-    assert.equal(said[2], "Usage unavailable");
+    assert.equal(said[2], "Allowance unavailable");
     const missing = await page.evaluate(() => [
       "…/api/usage/token takes the API key, not this token: a new-api relay tells the account's balance to the token at /api/user/self.",
       "The token needs a Balance URL: a new-api relay tells the account's balance to it at /api/user/self.",

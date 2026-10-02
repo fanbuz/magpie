@@ -46,7 +46,7 @@ function serve(lang, panel) {
 
 const words = {
   en: { balance: "Balance", updated: "Updated 3 minutes ago", stale: /^As of .+ — couldn't be read just now$/, asOf: /^As of / },
-  zh: { balance: "余额", updated: "3分钟前更新", stale: /^截至 .+，暂时无法获取最新用量$/, asOf: /^截至 / },
+  zh: { balance: "余额", updated: "3分钟前更新", stale: /^截至 .+，暂时无法获取最新额度$/, asOf: /^截至 / },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {

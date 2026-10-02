@@ -1,5 +1,5 @@
 // Run with Node's test runner and Playwright on the module path; see README.md.
-// Usage alerts (#368): the Settings page's "Usage alert" and "Low balance
+// Allowance alerts (#368): the Settings page's "Allowance alert" and "Low balance
 // alert" rows start Off; On saves 80% (and 5 for a balance), the field
 // beside it saves the number typed, a share outside 1-100 is put back
 // unsaved, and a choice saved later elsewhere on the page keeps the alerts
@@ -77,7 +77,7 @@ async function wheelTo(page) {
 
 const words = {
   en: {
-    usage: "Usage alert", balance: "Low balance alert", off: "Off", on: "On",
+    usage: "Allowance alert", balance: "Low balance alert", off: "Off", on: "On",
     usageSub: "A notification when a 5-hour, weekly or monthly window reaches this share used, once each time it runs",
     balanceSub: "A notification when a balance falls to this amount, in its own currency or credits, once until it is topped up",
     denied: "Notifications are turned off for magpie in the system's settings",

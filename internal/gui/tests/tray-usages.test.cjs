@@ -1,5 +1,5 @@
 // Run with Node's test runner and Playwright on the module path; see README.md.
-// Settings → Usage in the menu bar picks any number of the Usage page's
+// Settings → Allowances in the menu bar picks any number of the Usage page's
 // cards, shown side by side beside the tray icon: the menu keeps open as
 // each is ticked or unticked, and posts the ticked ones once, as it closes,
 // in the menu's order; Off unticks them all; the pill says how many; a save

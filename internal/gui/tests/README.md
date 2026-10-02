@@ -945,7 +945,7 @@ while it waits: the click cancels it and asks the plugin's API key way.
 Nothing scrolls. The checks run in English and Chinese, in Chromium and
 WebKit.
 
-`tray-inuse.test.cjs` checks Settings, Usage in the menu bar. A
+`tray-inuse.test.cjs` checks Settings, Allowances in the menu bar. A
 subscription with two accounts lists "Account in use" before each account;
 one with a single account does not. Ticking it saves `claude|*`, the pill
 names the subscription, and reopening the menu shows it ticked. No click
@@ -1043,7 +1043,7 @@ the page jerking), while a tap's click is no flick. A desktop browser and the
 app's window keep the one-row header. Chromium and WebKit.
 
 `usage-alert.test.cjs` sets the usage alerts (#368) on the Settings page:
-"Usage alert" and "Low balance alert" start Off; On saves 80% (and 5 for a
+"Allowance alert" and "Low balance alert" start Off; On saves 80% (and 5 for a
 balance), the field beside it saves the number typed and puts back a share
 past 100 unsaved, and a setting saved later (the currency) keeps both
 alerts. With magpie's notifications turned off in the system, both rows say
@@ -1159,7 +1159,7 @@ balance field with several amounts shows each on a line of its own, the
 user's label quiet and the first amount the larger, "Balance" only where no
 label was given; a percent is a meter, amber from 90%. Each card says when it
 was read ("Updated 3 minutes ago", 3分钟前更新), or "As of … — couldn't be
-read just now" (截至 …，暂时无法获取最新用量) when it stands in for a reading
+read just now" (截至 …，暂时无法获取最新额度) when it stands in for a reading
 that failed, windows' cards too; the menu bar panel's Balances show the same
 amounts, the meter and "As of" (截至). One amount reads as it did. No
 left-border accent, nothing runs out of a card; English and Chinese, Chromium
