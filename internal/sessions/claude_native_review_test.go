@@ -80,3 +80,46 @@ func TestClaudeDesktopCopyOfMessageIsCountedOnce(t *testing.T) {
 		t.Fatalf("CLI/Desktop copies both counted: %+v", cs)
 	}
 }
+
+func TestSettledClaudeRevisionsReleasedAndRebuilt(t *testing.T) {
+	d := setupCalls(t)
+	data, err := os.ReadFile("testdata/claude-native-replay.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	path := filepath.Join(d.claude, "projects", "fixture", "session.jsonl")
+	writeLines(t, path, lines[:2]...)
+	old := time.Now().Add(-time.Hour)
+	if err = os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	List(0)
+	Calls(time.Time{})
+	if cache[path].Claude != nil || callCache[path].Claude != nil {
+		t.Fatal("settled Claude retained message indexes")
+	}
+	for _, source := range CallSources() {
+		ReadCallSource(source)
+	}
+	if len(callContinuations) != 0 {
+		t.Fatal("settled Claude retained continuation")
+	}
+	appendText(t, path, lines[2]+"\n")
+	want := Tokens{10338, 37363, 281066, 63398}
+	if ss := List(0); len(ss) != 1 || ss[0].Tokens != want {
+		t.Fatal("reopened summary counted replay", ss)
+	}
+	if cs := Calls(time.Time{}); len(cs) != 2 {
+		t.Fatal("reopened calls counted replay", cs)
+	}
+	mu.Lock()
+	trimSummaryRevisions(time.Now().Add(revisionIdle + time.Second))
+	mu.Unlock()
+	callsMu.Lock()
+	trimCallRevisions(time.Now().Add(revisionIdle + time.Second))
+	callsMu.Unlock()
+	if cache[path].Claude != nil || callCache[path].Claude != nil {
+		t.Fatal("expired Claude retained message indexes")
+	}
+}

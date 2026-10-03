@@ -3,6 +3,7 @@ package sessions
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -225,5 +226,26 @@ func TestClaudeUsageResumeEquivalence(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, s) {
 		t.Fatal("continuing the clone modified its source state")
+	}
+}
+
+func TestClaudeFastRequestIdentityMatchesFullReader(t *testing.T) {
+	for _, raw := range []string{`"outer"`, `null`, `123`, `{}`, `true`} {
+		var expected string
+		for _, fast := range []bool{false, true} {
+			s := &state{}
+			line := claudeUsageLine(time.Now(), "msg", "placeholder", "m", Tokens{Input: 10}, `[{"type":"tool_use","id":"t","name":"Read","input":{"requestId":"nested"}}]`, fast)
+			line = []byte(strings.Replace(string(line), `"requestId":"placeholder"`, `"requestId":`+raw, 1))
+			claudeLine(s, line, true)
+			for _, branches := range s.Claude.Messages {
+				for _, m := range branches {
+					if !fast {
+						expected = m.Request
+					} else if m.Request != expected {
+						t.Fatalf("identity %s: got %q want %q", raw, m.Request, expected)
+					}
+				}
+			}
+		}
 	}
 }

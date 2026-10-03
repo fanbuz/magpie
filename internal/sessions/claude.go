@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/tidwall/gjson"
 )
 
 // Claude Code writes one line per event: the prompts as "user" lines, each
@@ -185,13 +187,13 @@ func ccReply(s *state, at time.Time, msg, b []byte, main bool) {
 	model, id := typeAfter(msg, ccModel), typeAfter(msg, ccID)
 	// Decode just the outer identity: a tool's input may itself contain a
 	// requestId, which must never become the identity of this response.
-	var identity struct {
-		RequestID ccStr `json:"requestId"`
+	identity := gjson.GetBytes(b, "requestId")
+	request := ""
+	if identity.Type == gjson.String {
+		request = identity.String()
 	}
-	if json.Unmarshal(b, &identity) != nil {
-		return
-	}
-	m := ccUsageState(&s.Claude).message(id, string(identity.RequestID))
+	m := ccUsageState(&s.Claude).message(id, request)
+
 	i := bytes.LastIndex(b, ccUsage)
 	if i < 0 {
 		i = len(b)
