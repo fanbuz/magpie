@@ -50,7 +50,7 @@ type RequestPage struct {
 
 type packedRow struct {
 	Time                           time.Time
-	Text                           [27]uint32
+	Text                           [rowTextCount]uint32
 	Tokens                         [5]int64
 	Millis, TTFT, FirstText, Order int64
 	RouteID                        int64
@@ -73,11 +73,17 @@ type rowChunk struct {
 	Computer string
 }
 
-// rowMsg is the Text of a row's Claude message id, after rowText's
-const rowMsg = 26
+// Keep existing packed indexes stable when adding record fields.
+const (
+	rowRequestID  = 11
+	rowResponseID = 25
+	rowComputer   = 26
+	rowMsg        = 27
+	rowTextCount  = 28
+)
 
-func rowText(r *Row) [26]*string {
-	return [26]*string{&r.Agent, &r.Provider, &r.Host, &r.SessionProvider, &r.SessionAccount, &r.Model, &r.Requested, &r.Served, &r.Effort, &r.Error, &r.ErrType, &r.RequestID, &r.Endpoint, &r.Session, &r.NativeSession, &r.Kind, &r.Source, &r.Via, &r.ProviderKeyID, &r.ProviderKeyName, &r.CallerKeyID, &r.CallerKeyName, &r.Archive, &r.Operation, &r.ProviderAccount, &r.ResponseID}
+func rowText(r *Row) [rowMsg]*string {
+	return [rowMsg]*string{&r.Agent, &r.Provider, &r.Host, &r.SessionProvider, &r.SessionAccount, &r.Model, &r.Requested, &r.Served, &r.Effort, &r.Error, &r.ErrType, &r.RequestID, &r.Endpoint, &r.Session, &r.NativeSession, &r.Kind, &r.Source, &r.Via, &r.ProviderKeyID, &r.ProviderKeyName, &r.CallerKeyID, &r.CallerKeyName, &r.Archive, &r.Operation, &r.ProviderAccount, &r.ResponseID, &r.Computer}
 }
 func (c *rowChunk) add(r Row, msg string, order int64, failed bool) {
 	if c.dict == nil {
@@ -130,7 +136,9 @@ func (c *rowChunk) row(i int) Row {
 	for i, s := range rowText(&r) {
 		*s = c.Strings[p.Text[i]]
 	}
-	r.Computer = c.Computer
+	if c.Computer != "" {
+		r.Computer = c.Computer
+	}
 	return r
 }
 
@@ -534,9 +542,10 @@ func visibleLocal(chunks []*rowChunk) map[rowRef]bool {
 // matchKey narrows candidates before comparing their end times. Request IDs
 // are consumed first; fallback matching still requires uniqueness both ways.
 type matchKey struct {
-	session, agent string
-	tokens         [3]int64
-	failed, hasID  bool
+	session, agent, computer string
+	tokens                   [3]int64
+	failed                   bool
+	ids                      uint8
 }
 
 // matchTokens is what a call's tokens are matched by: its input with what it
@@ -557,61 +566,67 @@ type matchGroup struct {
 }
 
 func matchedLocal(gateway *rowChunk, chunks []*rowChunk, skip map[rowRef]bool, since time.Time) map[rowRef]bool {
-	return matchedBlocks([]*rowChunk{gateway}, chunks, skip, since, true)
+	return matchedBlocks([]*rowChunk{gateway}, chunks, skip, since)
 }
 
-func matchedBlocks(gateways []*rowChunk, chunks []*rowChunk, skip map[rowRef]bool, since time.Time, newestIDs bool) map[rowRef]bool {
+func matchedBlocks(gateways []*rowChunk, chunks []*rowChunk, skip map[rowRef]bool, since time.Time) map[rowRef]bool {
 	gatewaySince := since
 	if !since.IsZero() {
 		gatewaySince = since.Add(-24 * time.Hour)
 	}
-	byID := map[string][]rowRef{}
+	// ID matching does not depend on row ordering or token equality. Both
+	// observations must independently identify one compatible counterpart.
+	gatewayIDs, localIDs := identityIndex{}, identityIndex{}
 	for _, gateway := range gateways {
 		for i, p := range gateway.Rows {
 			if (p.Flags&4 != 0 || p.Text[1] == 0 && p.Status >= 400) || p.Time.Before(gatewaySince) {
 				continue
 			}
-			if id := gateway.Strings[p.Text[11]]; id != "" {
-				byID[id] = append(byID[id], rowRef{gateway, i})
+			gatewayIDs.add(rowRef{gateway, i})
+		}
+	}
+	for _, c := range chunks {
+		for i, p := range c.Rows {
+			ref := rowRef{c, i}
+			if !skip[ref] && !p.Time.Before(since) {
+				localIDs.add(ref)
 			}
 		}
 	}
-	byRequest := map[string][]rowRef{}
+	matched := map[rowRef]bool{}
+	identityLocal, identityGateway := map[rowRef]bool{}, map[rowRef]bool{}
+	for _, gateway := range gateways {
+		for i := range gateway.Rows {
+			ref := rowRef{gateway, i}
+			_, count := localIDs.find(ref)
+			if count > 0 {
+				identityGateway[ref] = true
+			}
+		}
+	}
 	for _, c := range chunks {
 		for i, p := range c.Rows {
 			ref := rowRef{c, i}
 			if skip[ref] || p.Time.Before(since) {
 				continue
 			}
-			if id := c.Strings[p.Text[11]]; len(byID[id]) > 0 {
-				byRequest[id] = append(byRequest[id], ref)
+			candidate, count := gatewayIDs.find(ref)
+			if count > 0 {
+				identityLocal[ref] = true
 			}
-		}
-	}
-	matched, used := map[rowRef]bool{}, map[rowRef]bool{}
-	for id, refs := range byRequest {
-		if newestIDs {
-			slices.SortFunc(refs, func(a, b rowRef) int {
-				if refNewer(a, b) {
-					return -1
-				}
-				if refNewer(b, a) {
-					return 1
-				}
-				return 0
-			})
-		}
-		for j, ref := range refs {
-			if j >= len(byID[id]) {
-				break
+			if count != 1 {
+				continue
 			}
-			matched[ref], used[byID[id][j]] = true, true
+			back, count := localIDs.find(candidate)
+			if count == 1 && back == ref {
+				matched[ref] = true
+			}
 		}
 	}
 	groups := map[matchKey]*matchGroup{}
 	for _, gateway := range gateways {
 		for i, p := range gateway.Rows {
-			if used[rowRef{gateway, i}] || (p.Flags&4 != 0 || p.Text[1] == 0 && p.Status >= 400) || p.Time.Before(gatewaySince) {
+			if identityGateway[rowRef{gateway, i}] || (p.Flags&4 != 0 || p.Text[1] == 0 && p.Status >= 400) || p.Time.Before(gatewaySince) {
 				continue
 			}
 			session := gateway.Strings[p.Text[14]]
@@ -621,7 +636,7 @@ func matchedBlocks(gateways []*rowChunk, chunks []*rowChunk, skip map[rowRef]boo
 			if session == "" {
 				continue
 			}
-			key := matchKey{session, gateway.Strings[p.Text[0]], matchTokens(p.Tokens), p.Status >= 400 || p.Text[9] != 0, p.Text[11] != 0}
+			key := matchKey{session: session, agent: gateway.Strings[p.Text[0]], computer: refComputer(rowRef{gateway, i}), tokens: matchTokens(p.Tokens), failed: p.Status >= 400 || p.Text[9] != 0, ids: identityMask(p)}
 			g := groups[key]
 			if g == nil {
 				g = &matchGroup{}
@@ -638,22 +653,22 @@ func matchedBlocks(gateways []*rowChunk, chunks []*rowChunk, skip map[rowRef]boo
 	for _, c := range chunks {
 		for j, p := range c.Rows {
 			ref := rowRef{c, j}
-			if skip[ref] || matched[ref] || p.Time.Before(since) {
+			if skip[ref] || matched[ref] || identityLocal[ref] || p.Time.Before(since) {
 				continue
 			}
 			failed := p.Flags&16 != 0
 			if p.Tokens[0]+p.Tokens[1]+p.Tokens[2]+p.Tokens[3] == 0 && !failed {
 				continue
 			}
-			key := matchKey{session: c.Strings[p.Text[13]], agent: c.Strings[p.Text[0]], tokens: matchTokens(p.Tokens), failed: failed}
+			key := matchKey{session: c.Strings[p.Text[13]], agent: c.Strings[p.Text[0]], computer: refComputer(ref), tokens: matchTokens(p.Tokens), failed: failed}
 			count, candidate := 0, (rowRef{})
-			// Without a local ID either gateway partition can match. With an ID,
-			// only an unnamed gateway call can match (different IDs stay distinct).
-			for _, hasID := range []bool{false, true} {
-				if hasID && p.Text[11] != 0 {
+			// Any ID known on both sides was resolved above, or is in
+			// conflict/ambiguous. Never use time to override that evidence.
+			for ids := uint8(0); ids < 4; ids++ {
+				if ids&identityMask(p) != 0 {
 					continue
 				}
-				key.hasID = hasID
+				key.ids = ids
 				g := groups[key]
 				if g == nil {
 					continue
@@ -715,7 +730,7 @@ func buildRequestPage(p Period, f Filter, offset, limit int, gateway *rowChunk, 
 func buildRequestBlocks(p Period, f Filter, offset, limit int, gateways, chunks, others []*rowChunk, names map[string]string) RequestPage {
 	skip := visibleLocal(chunks)
 	since := p.Since(time.Now())
-	matched := matchedBlocks(gateways, chunks, skip, since, true)
+	matched := matchedBlocks(gateways, chunks, skip, since)
 	all := append(append(slices.Clone(gateways), chunks...), others...)
 	visit := func(fn func(rowRef, Row)) {
 		for _, c := range all {

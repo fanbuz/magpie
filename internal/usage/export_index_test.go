@@ -67,69 +67,17 @@ func BenchmarkExportAmbiguousSession(b *testing.B) {
 	}
 }
 func exhaustiveGatewayMatches(recs []Record, logs []sessions.Call) map[int]bool {
-	byID, bySession := map[string][]int{}, map[string][]int{}
+	gateway, local := &rowChunk{}, &rowChunk{}
 	for i, r := range recs {
-		if r.IsRejected() {
-			continue
-		}
-		if r.RequestID != "" {
-			byID[r.RequestID] = append(byID[r.RequestID], i)
-		}
-		session := r.NativeSession
-		if session == "" {
-			session = r.Session
-		}
-		if session != "" {
-			bySession[session] = append(bySession[session], i)
-		}
+		r.Agent = AgentOf(r.Agent)
+		gateway.add(Row{Record: r}, "", int64(i), false)
 	}
-	matched, used := map[int]bool{}, map[int]bool{}
-	for j, c := range logs {
-		if c.RequestID == "" {
-			continue
-		}
-		for _, i := range byID[c.RequestID] {
-			if !used[i] {
-				matched[j], used[i] = true, true
-				break
-			}
-		}
+	for i, c := range logs {
+		local.add(Row{Record: logRecord(c)}, "", int64(i), c.Error != "")
 	}
-	candidates := map[int][]int{}
-	counts := map[int]int{}
-	for j, c := range logs {
-		if matched[j] || c.Session == "" {
-			continue
-		}
-		for _, i := range bySession[c.Session] {
-			r := recs[i]
-			if used[i] || c.RequestID != "" && r.RequestID != "" {
-				continue
-			}
-			// Empty successes carry too little evidence. Failed calls may have
-			// zero tokens, but both sources must agree that the call failed.
-			if c.Input+c.Output+c.CacheRead+c.CacheWrite == 0 && (c.Error == "" || !r.Failed()) {
-				continue
-			}
-			if (c.Error != "") != r.Failed() {
-				continue
-			}
-
-			if AgentOf(r.Agent) != c.Agent || r.Input != c.Input || r.Output != c.Output || r.CacheRead != c.CacheRead || r.CacheWrite != c.CacheWrite {
-				continue
-			}
-			end := r.Time.Add(time.Duration(r.Millis) * time.Millisecond)
-			if c.Time.Before(end.Add(-2*time.Second)) || c.Time.After(end.Add(2*time.Second)) {
-				continue
-			}
-			candidates[j] = append(candidates[j], i)
-			counts[i]++
-		}
+	out := map[int]bool{}
+	for ref := range exhaustiveIdentityRows(gateway, []*rowChunk{local}, nil, time.Time{}) {
+		out[ref.Index] = true
 	}
-	for j, cs := range candidates {
-		if len(cs) == 1 && counts[cs[0]] == 1 {
-			matched[j] = true
-		}
-	}
-	return matched
+	return out
 }

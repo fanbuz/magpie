@@ -22,7 +22,7 @@ func testResponseIdentityStorageRoundTrip(t *testing.T, location *time.Location)
 	t.Helper()
 	chunk := &rowChunk{}
 	for i := 0; i < 80; i++ {
-		chunk.add(Row{Record: Record{Time: time.Unix(int64(i), 0).In(location), RequestID: fmt.Sprint("req", i), ResponseID: fmt.Sprint("resp", i)}}, fmt.Sprint("msg", i), int64(i), false)
+		chunk.add(Row{Record: Record{Time: time.Unix(int64(i), 0).In(location), RequestID: fmt.Sprint("req", i), ResponseID: fmt.Sprint("resp", i), Computer: "other"}}, fmt.Sprint("msg", i), int64(i), false)
 	}
 	packed := chunk.pack()
 	if len(packed.Archive) == 0 {
@@ -31,7 +31,7 @@ func testResponseIdentityStorageRoundTrip(t *testing.T, location *time.Location)
 	for _, c := range []*rowChunk{chunk, packed.unpack()} {
 		for i := range c.Rows {
 			r := c.row(i)
-			if r.ResponseID != fmt.Sprint("resp", i) || r.RequestID != fmt.Sprint("req", i) || c.Strings[c.Rows[i].Text[rowMsg]] != fmt.Sprint("msg", i) {
+			if r.ResponseID != fmt.Sprint("resp", i) || r.RequestID != fmt.Sprint("req", i) || r.Computer != "other" || c.Strings[c.Rows[i].Text[rowMsg]] != fmt.Sprint("msg", i) {
 				t.Fatalf("packed identity changed %+v", r)
 			}
 		}

@@ -229,7 +229,11 @@ const UnknownProvider = "session-unknown"
 func logRecord(c sessions.Call) Record {
 	r := Record{Time: c.Time, Agent: c.Agent, Provider: UnknownProvider, Model: c.Model, Served: c.Model, Requested: c.Requested,
 		Input: c.Input, Output: c.Output, CacheRead: c.CacheRead, CacheWrite: c.CacheWrite, Reasoning: c.Reasoning, Effort: c.Effort,
-		Millis: c.Millis, TTFT: c.TTFT, Session: c.Session, RequestID: c.RequestID, Error: c.ErrorText, ErrType: c.Error}
+		Millis: c.Millis, TTFT: c.TTFT, Session: c.Session, RequestID: c.RequestID, ResponseID: c.ResponseID, Error: c.ErrorText, ErrType: c.Error}
+	if r.ResponseID == "" && (c.Agent == "claude" || c.Agent == "claude-desktop") {
+		// Anthropic message IDs are the client response object identity.
+		r.ResponseID = c.Msg
+	}
 	if c.Agent == "codex" {
 		r.Requested, r.Served = c.Model, ""
 	}
@@ -255,7 +259,7 @@ func gatewayMatches(recs []Record, logs []sessions.Call) map[int]bool {
 		local.add(Row{Record: r}, c.Msg, int64(i), c.Error != "")
 	}
 	matched := map[int]bool{}
-	for ref := range matchedBlocks([]*rowChunk{gateway}, []*rowChunk{local}, nil, time.Time{}, false) {
+	for ref := range matchedBlocks([]*rowChunk{gateway}, []*rowChunk{local}, nil, time.Time{}) {
 		matched[ref.Index] = true
 	}
 	return matched

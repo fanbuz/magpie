@@ -38,8 +38,12 @@ func TestGatewayCorrelation(t *testing.T) {
 	}
 	r.RequestID, c.RequestID = "req_same", "req_same"
 	c.Session, c.Time = "other", at.Add(10*time.Second)
+	if gatewayMatches([]Record{r}, []sessions.Call{c})[0] {
+		t.Fatal("matching request ID must not override a known session conflict")
+	}
+	c.Session = "native"
 	if !gatewayMatches([]Record{r}, []sessions.Call{c})[0] {
-		t.Fatal("matching request ID must work independently of session/time")
+		t.Fatal("matching request ID must work independently of time")
 	}
 	c.RequestID = "req_direct"
 	if len(gatewayMatches([]Record{r}, []sessions.Call{c})) != 0 {

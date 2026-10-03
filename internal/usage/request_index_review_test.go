@@ -35,6 +35,11 @@ func TestRequestMatchIndexEquivalent(t *testing.T) {
 				r.NativeSession = r.Session
 				r.Session = "routing override"
 			}
+			if i%3 == 0 {
+				r.ResponseID = fmt.Sprint(rng.Intn(10))
+			}
+			r.Agent = []string{"codex", "claude", "claude-desktop"}[rng.Intn(3)]
+			r.Computer = []string{"", "remote"}[rng.Intn(2)]
 			gateway.add(Row{Record: r}, "", int64(i), false)
 			r.Time = r.Time.Add(time.Duration(rng.Intn(9)-4) * time.Second)
 			if i%3 == 0 {
@@ -43,11 +48,22 @@ func TestRequestMatchIndexEquivalent(t *testing.T) {
 			if r.NativeSession != "" {
 				r.Session = r.NativeSession
 			}
+			if i%6 == 0 {
+				r.ResponseID = ""
+			} else if i%11 == 0 {
+				r.ResponseID = "conflict"
+			}
+			if i%8 == 0 {
+				r.Agent = "claude-desktop"
+			}
+			if i%13 == 0 {
+				r.Computer = "elsewhere"
+			}
 			local.add(Row{Record: r, Source: "log"}, "", int64(i), r.Failed())
 		}
 		for _, since := range []time.Time{{}, now.Add(5 * time.Second)} {
 			got := matchedLocal(gateway, []*rowChunk{local}, nil, since)
-			want := matchedLocalLegacy(gateway, []*rowChunk{local}, nil, since)
+			want := exhaustiveIdentityRows(gateway, []*rowChunk{local}, nil, since)
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("seed %d: %d matches, want %d", seed, len(got), len(want))
 			}
