@@ -30,6 +30,9 @@ func TestSettledCodexRevisionsReleasedAndRebuilt(t *testing.T) {
 	for _, source := range CallSources() {
 		ReadCallSource(source)
 	}
+	if callCache[path] != nil {
+		t.Fatal("source reader retained expanded rows after index eviction")
+	}
 	if len(callContinuations) != 0 {
 		t.Fatal("settled source retained continuation")
 	}

@@ -495,7 +495,7 @@ func CachePath() string { return filepath.Join(filepath.Dir(catalog.CachePath())
 // 9: validate the previous full prefix before treating growth as an append.
 // 10: Pi's and omp's prompts, replies, tool calls and skills.
 // 11: Codex's input without what it wrote to the cache (#589).
-// 12: count Codex response records and compaction usage.
+// 16: count Codex response records and compaction usage.
 const cacheVersion = 16
 
 type cacheFile struct {

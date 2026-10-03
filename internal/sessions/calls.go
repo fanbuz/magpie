@@ -810,7 +810,10 @@ func ReadCallSource(s CallSource) []Call {
 	// append-frame shard still carries the continuation for the next read.
 	callsMu.Lock()
 	keepCallContinuation(st)
-	if callCache[s.Path] == st {
+	// Index eviction can replace the cached snapshot with a shallow copy.
+	// Release its rows too, but never evict a newer parse from another reader.
+	cached := callCache[s.Path]
+	if cached != nil && cached.Size == st.Size && cached.Mod == st.Mod && cached.Off == st.Off && cached.ContentHash == st.ContentHash {
 		delete(callCache, s.Path)
 		for i, p := range callOrder {
 			if p == s.Path {
