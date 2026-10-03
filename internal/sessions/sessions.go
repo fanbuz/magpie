@@ -411,25 +411,26 @@ const zstSuffix = ".zst"
 
 func codexFiles() []file {
 	var out []file
-	root := filepath.Join(CodexDir(), "sessions")
-	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+	for _, folder := range []string{"sessions", "archived_sessions"} {
+		root := filepath.Join(CodexDir(), folder)
+		filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			m := rolloutName.FindStringSubmatch(d.Name())
+			if m == nil {
+				return nil
+			}
+			fi, err := d.Info()
+			if err != nil || !fi.Mode().IsRegular() {
+				return nil
+			}
+			out = append(out, file{agent: "codex", key: "codex:" + m[1], path: p, main: true, size: fi.Size(), mod: fi.ModTime()})
 			return nil
-		}
-		m := rolloutName.FindStringSubmatch(d.Name())
-		if m == nil {
-			return nil
-		}
-		fi, err := d.Info()
-		if err != nil || !fi.Mode().IsRegular() {
-			return nil
-		}
-		out = append(out, file{agent: "codex", key: "codex:" + m[1], path: p, main: true, size: fi.Size(), mod: fi.ModTime()})
-		return nil
-	})
-	// a rollout found both plain and compressed (the Codex app packing it)
-	// is read once, as the plain one: the other may be half written, and
-	// the two say the same
+		})
+	}
+	// During compression, prefer the readable plain twin in the same
+	// directory: the new compressed file may not have its trailer yet.
 	plain := map[string]bool{}
 	for _, f := range out {
 		if !strings.HasSuffix(f.path, zstSuffix) {
@@ -442,7 +443,7 @@ func codexFiles() []file {
 			kept = append(kept, f)
 		}
 	}
-	return kept
+	return distinctCodexFiles(kept)
 }
 
 // rolloutTwin is a Codex rollout's file in its other form: the compressed
