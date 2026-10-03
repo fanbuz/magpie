@@ -18,6 +18,7 @@ type ccLine struct {
 	IsSidechain bool   `json:"isSidechain"`
 	Cwd         string `json:"cwd"`
 	SessionID   string `json:"sessionId"`
+	RequestID   ccStr  `json:"requestId"`
 	AITitle     string `json:"aiTitle"`
 	Summary     string `json:"summary"`
 	Message     struct {
@@ -136,12 +137,10 @@ func strAt(b, key []byte) string {
 }
 
 var (
-	ccContent  = []byte(`"content":`)
-	ccResult1  = []byte(`[{"tool_use_id"`)
-	ccResult2  = []byte(`[{"type":"tool_result"`)
-	ccToolUse  = []byte(`{"type":"tool_use","id":"`)
-	ccName     = []byte(`"name":"`)
-	ccSkillArg = []byte(`"input":{"skill":"`)
+	ccContent = []byte(`"content":`)
+	ccResult1 = []byte(`[{"tool_use_id"`)
+	ccResult2 = []byte(`[{"type":"tool_result"`)
+	ccToolUse = []byte(`{"type":"tool_use"`)
 )
 
 // ccToolResult tells a user message that is a tool's result from its head.
@@ -154,32 +153,29 @@ func ccToolResult(msg []byte) bool {
 	return bytes.HasPrefix(c, ccResult1) || bytes.HasPrefix(c, ccResult2)
 }
 
-// ccTools counts the tool calls in a reply's content, written as Claude
-// Code does: a block's type, id and name in that order, a skill's name
-// first in its input. The keys can't be in a string, where their quotes
-// would be escaped.
-func ccTools(s *state, at time.Time, b []byte) {
+// ccTools finds Claude Code's tool blocks (type first) and decodes their
+// identity without retaining their arguments. Advancing over the whole block
+// also prevents a nested tool-shaped object in its input from being counted.
+func ccTools(s *state, m *claudeContribution, at time.Time, b []byte) {
 	for rest := b; ; {
 		i := bytes.Index(rest, ccToolUse)
 		if i < 0 {
 			return
 		}
-		rest = rest[i+len(ccToolUse):]
-		j := bytes.IndexByte(rest, '"')
-		if j < 0 {
+		var tool struct {
+			ID, Name string
+			Input    struct{ Skill any }
+		}
+		dec := json.NewDecoder(bytes.NewReader(rest[i:]))
+		if dec.Decode(&tool) != nil {
 			return
 		}
-		rest = rest[j+1:]
-		if !bytes.HasPrefix(rest, []byte(`,"name":"`)) {
-			continue
+		rest = rest[i+int(dec.InputOffset()):]
+		skill, _ := tool.Input.Skill.(string)
+		if tool.Name != "Skill" {
+			skill = ""
 		}
-		name := typeAfter(rest, ccName)
-		rest = rest[len(`,"name":"`)+len(name)+1:]
-		skill := ""
-		if name == "Skill" && bytes.HasPrefix(rest, []byte(`,`+string(ccSkillArg))) {
-			skill = typeAfter(rest, ccSkillArg)
-		}
-		s.tool(at, name, skill)
+		ccTool(s, m, at, tool.ID, tool.Name, skill)
 	}
 }
 
@@ -187,11 +183,20 @@ func ccTools(s *state, at time.Time, b []byte) {
 // usage follows the content.
 func ccReply(s *state, at time.Time, msg, b []byte, main bool) {
 	model, id := typeAfter(msg, ccModel), typeAfter(msg, ccID)
+	// Decode just the outer identity: a tool's input may itself contain a
+	// requestId, which must never become the identity of this response.
+	var identity struct {
+		RequestID ccStr `json:"requestId"`
+	}
+	if json.Unmarshal(b, &identity) != nil {
+		return
+	}
+	m := ccUsageState(&s.Claude).message(id, string(identity.RequestID))
 	i := bytes.LastIndex(b, ccUsage)
 	if i < 0 {
 		i = len(b)
 	}
-	ccTools(s, at, b[:i])
+	ccTools(s, m, at, b[:i])
 	if i == len(b) || model == "<synthetic>" {
 		return
 	}
@@ -204,20 +209,7 @@ func ccReply(s *state, at time.Time, msg, b []byte, main bool) {
 	if json.NewDecoder(bytes.NewReader(b[i+len(ccUsage)-1:])).Decode(&u) != nil {
 		return
 	}
-	ccCount(s, at, id, model, Tokens{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite}, main)
-}
-
-func ccCount(s *state, at time.Time, id, model string, t Tokens, main bool) {
-	date := dateOf(at)
-	if id != "" && id == s.Msg {
-		// another block of the message counted: its usage stands for
-		// the whole, the latest word on it
-		s.unuse(s.MsgDay, s.MsgModel, s.MsgUse)
-	} else if main {
-		s.day(date).Replies++
-	}
-	s.Msg, s.MsgModel, s.MsgUse, s.MsgDay = id, model, t, date
-	s.use(date, model, t)
+	ccCount(s, m, at, model, Tokens{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite}, main)
 }
 
 // claudeFull reads a line whole.
@@ -264,9 +256,10 @@ func claudeFull(s *state, b []byte, main bool) {
 			}
 		}
 	case "assistant":
+		m := ccUsageState(&s.Claude).message(l.Message.ID, string(l.RequestID))
 		var blocks []struct {
-			Type, Name string
-			Input      struct{ Skill any }
+			Type, ID, Name string
+			Input          struct{ Skill any }
 		}
 		if json.Unmarshal(l.Message.Content, &blocks) == nil {
 			for _, c := range blocks {
@@ -275,7 +268,7 @@ func claudeFull(s *state, b []byte, main bool) {
 					if c.Name != "Skill" {
 						skill = ""
 					}
-					s.tool(at, c.Name, skill)
+					ccTool(s, m, at, c.ID, c.Name, skill)
 				}
 			}
 		}
@@ -283,7 +276,7 @@ func claudeFull(s *state, b []byte, main bool) {
 		if u == nil || l.Message.Model == "<synthetic>" {
 			return
 		}
-		ccCount(s, at, l.Message.ID, l.Message.Model, Tokens{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite}, main)
+		ccCount(s, m, at, l.Message.Model, Tokens{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite}, main)
 	}
 }
 
