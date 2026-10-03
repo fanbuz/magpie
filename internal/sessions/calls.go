@@ -436,6 +436,22 @@ func claudeCallLine(st *callFile, b []byte) {
 	c := Call{Time: at, Agent: st.Agent, Session: st.str(string(l.SessionID)), Cwd: st.str(string(l.Cwd)), RequestID: string(l.RequestID)}
 	c.Requested = st.Requested
 	m := ccUsageState(&st.Claude).message(l.Message.ID, string(l.RequestID))
+	defer st.Claude.finish(m)
+	// Materialized rows already carry the last known usage beyond the recent
+	// replay window. Reuse the original row lookup when that history expires.
+	if m.Call < 0 && l.Message.ID != "" && len(st.Claude.Messages[m.key]) == 1 {
+		if i, ok := st.Msgs[l.Message.ID]; ok {
+			old := st.Calls[i]
+			if m.Request == "" || old.RequestID == "" || m.Request == old.RequestID {
+				if m.Request == "" && old.RequestID != "" {
+					m = st.Claude.message(l.Message.ID, old.RequestID)
+				}
+				m.Call, m.Began = i, st.Began[l.Message.ID]
+				m.Usage = &claudeUsageVersion{At: old.Time, Model: old.Model, Tokens: old.Tokens}
+				m.Updated = old.Time
+			}
+		}
+	}
 	c.RequestID = m.Request
 	blockID := "uuid:" + l.UUID
 	if l.UUID == "" {
@@ -534,6 +550,15 @@ func claudeCallLine(st *callFile, b []byte) {
 		return
 	}
 	m.Call, m.Began = len(st.Calls), asked
+	if c.Msg != "" {
+		if st.Msgs == nil {
+			st.Msgs = map[string]int{}
+		}
+		if st.Began == nil {
+			st.Began = map[string]time.Time{}
+		}
+		st.Msgs[c.Msg], st.Began[c.Msg] = m.Call, asked
+	}
 	st.Calls = append(st.Calls, c)
 }
 
