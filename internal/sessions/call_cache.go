@@ -41,6 +41,7 @@ func resetCalls() {
 	callsMu.Lock()
 	defer callsMu.Unlock()
 	callCache, callOrder = map[string]*callFile{}, nil
+	callContinuations, callContinuationOrder = map[string]callContinuation{}, nil
 	callCounts = map[string]int{}
 	callRoot = ""
 	callGeneration++
@@ -141,7 +142,7 @@ func readCalls(f file) *callFile {
 	old, generation := callCache[f.path], callGeneration
 	callsMu.Unlock()
 	if old == nil {
-		old = loadCalls(f)
+		old = restoreCallContinuation(loadCalls(f))
 	}
 	if old != nil && old.Size == f.size && old.Mod == f.mod.UnixNano() {
 		callsMu.Lock()
@@ -290,6 +291,9 @@ func loadCalls(f file) *callFile {
 func writeCalls(st *callFile, start int, appendOnly bool) {
 	frame := callFrame{State: *st, Strings: []string{""}}
 	frame.State.Calls = nil
+	// Keep just the materialized calls. A changed source rebuilds the
+	// transient parser index after loading this shard.
+	frame.State.CX = nil
 	frame.State.Msgs = nil
 	frame.State.Began = nil
 	frame.State.Strs = nil
