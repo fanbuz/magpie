@@ -56,6 +56,7 @@ type Call struct {
 // callFile is what one file's read has come to: the calls found in it, and
 // what it takes to read on from off.
 type callFile struct {
+	Claude      *claudeUsageState
 	ContentHash string
 	dirty       map[int]bool
 	Size        int64
@@ -278,6 +279,11 @@ func prepareCalls(f file, old *callFile) *callFile {
 	if f.agent == "codex" && old != nil && (old.CX == nil || old.CX.Usage == nil) {
 		old = nil
 	}
+	// Disk shards keep final calls, not message block/tool maps. A changed
+	// Claude source reconstructs its transient revision index after restart.
+	if (f.agent == "claude" || f.agent == "claude-desktop") && old != nil && old.Claude == nil {
+		old = nil
+	}
 
 	head := headOf(f.path)
 	var st *callFile
@@ -303,6 +309,7 @@ func prepareCalls(f file, old *callFile) *callFile {
 func (st *callFile) clone() *callFile {
 	c := *st
 	c.Calls = append([]Call(nil), st.Calls...)
+	c.Claude = st.Claude.clone()
 	c.Msgs, c.Began, c.Strs = maps.Clone(st.Msgs), maps.Clone(st.Began), maps.Clone(st.Strs)
 	if st.CX != nil {
 		r := *st.CX
@@ -366,6 +373,7 @@ func (s *ccStr) UnmarshalJSON(b []byte) error {
 
 // ccCall is an assistant line of Claude Code's, less its content.
 type ccCall struct {
+	UUID       string `json:"uuid"`
 	Type       string `json:"type"`
 	Time       string `json:"timestamp"`
 	SessionID  ccStr  `json:"sessionId"`
@@ -427,12 +435,30 @@ func claudeCallLine(st *callFile, b []byte) {
 	}
 	c := Call{Time: at, Agent: st.Agent, Session: st.str(string(l.SessionID)), Cwd: st.str(string(l.Cwd)), RequestID: string(l.RequestID)}
 	c.Requested = st.Requested
+	m := ccUsageState(&st.Claude).message(l.Message.ID, string(l.RequestID))
+	c.RequestID = m.Request
+	blockID := "uuid:" + l.UUID
+	if l.UUID == "" {
+		// Older writers lack a block UUID. Content distinguishes a new
+		// text/tool block from a replay without treating its timestamp as ID.
+		var content struct {
+			Message struct{ Content json.RawMessage }
+		}
+		if json.Unmarshal(b, &content) == nil {
+			blockID = fmt.Sprintf("content:%x", sha256.Sum256(content.Message.Content))
+		}
+	}
+	newBlock := !m.Blocks[blockID]
+	if blockID != "" {
+		if m.Blocks == nil {
+			m.Blocks = map[string]bool{}
+		}
+		m.Blocks[blockID] = true
+	}
 	// it was asked when the last user line or, with none since, the last reply ended
 	asked, seen := st.LastUser, false
-	if id := l.Message.ID; id != "" {
-		if t, ok := st.Began[id]; ok {
-			asked, seen = t, true
-		}
+	if m.Call >= 0 {
+		asked, seen = m.Began, true
 	}
 	if !seen && st.LastAsst.After(asked) {
 		asked = st.LastAsst
@@ -440,7 +466,7 @@ func claudeCallLine(st *callFile, b []byte) {
 	// where its asking began: after the last reply's line, its own if it goes on
 	c.File, c.From, c.To, c.Msg = st.Path, st.AsstEnd, st.End, l.Message.ID
 	defer func() {
-		if !at.IsZero() {
+		if at.After(st.LastAsst) {
 			st.LastAsst = at
 		}
 		st.AsstEnd = st.End
@@ -473,30 +499,41 @@ func claudeCallLine(st *callFile, b []byte) {
 		}
 		c.Model = st.str(model)
 		c.Tokens = Tokens{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite}
-		if c.Tokens.zero() {
+		if c.Tokens.zero() && m.Usage == nil {
 			return
 		}
 		if !asked.IsZero() && at.After(asked) {
 			c.Millis = at.Sub(asked).Milliseconds()
 		}
-		if id := l.Message.ID; id != "" && !seen && !asked.IsZero() {
-			if st.Began == nil {
-				st.Began = map[string]time.Time{}
-			}
-			st.Began[id] = asked
-		}
 	}
-	if id := l.Message.ID; id != "" {
-		if i, ok := st.Msgs[id]; ok {
-			c.From = st.Calls[i].From // its asking began with its first line
-			st.Calls[i] = c
-			if st.dirty != nil {
+	if _, changed := m.accept(at, c.Model, c.Tokens); !changed {
+		// A missing request ID can become known without changing usage.
+		if i := m.Call; i >= 0 {
+			previous := &st.Calls[i]
+			changed := previous.RequestID != m.Request
+			previous.RequestID = m.Request
+			// A new block can finish a reply with unchanged usage. Retain
+			// its duration/content boundary without moving usage across days.
+			if newBlock && m.Usage.Model == c.Model && m.Usage.Tokens == c.Tokens &&
+				at.After(previous.Time) && dateOf(at) == dateOf(previous.Time) {
+				previous.Time, previous.Millis, previous.To = at, c.Millis, c.To
+				changed = true
+			}
+			if changed && st.dirty != nil {
 				st.dirty[i] = true
 			}
-			return
 		}
-		st.Msgs[id] = len(st.Calls)
+		return
 	}
+	if i := m.Call; i >= 0 {
+		c.From = st.Calls[i].From // its asking began with its first line
+		st.Calls[i] = c
+		if st.dirty != nil {
+			st.dirty[i] = true
+		}
+		return
+	}
+	m.Call, m.Began = len(st.Calls), asked
 	st.Calls = append(st.Calls, c)
 }
 

@@ -98,6 +98,7 @@ const Limit = 200
 // state is what one file's parse has come to, enough to read on from Off.
 type state struct {
 	Codex       *codexUsageState  `json:"-"`
+	Claude      *claudeUsageState `json:"-"`
 	DBRevision  string            `json:"db_revision,omitempty"`
 	Head        string            `json:"head,omitempty"`
 	HeadSize    int               `json:"head_size,omitempty"`
@@ -256,6 +257,7 @@ func (s *state) saw(t time.Time, main bool) {
 func (s *state) clone() *state {
 	c := *s
 	c.Codex = s.Codex.clone()
+	c.Claude = s.Claude.clone()
 	c.Models = make(map[string]Tokens, len(s.Models))
 	for k, v := range s.Models {
 		c.Models[k] = v
@@ -944,6 +946,11 @@ func parse(f file, old *state) *state {
 	// Summary caches contain aggregates only. After a restart, a changed
 	// Codex file rebuilds its transient response index from the source.
 	if f.agent == "codex" && old != nil && old.Codex == nil {
+		old = nil
+	}
+	// Summaries persist aggregates only. Rebuild the transient revision index
+	// when a cold Claude source changes.
+	if (f.agent == "claude" || f.agent == "claude-desktop") && old != nil && old.Claude == nil {
 		old = nil
 	}
 
