@@ -22,27 +22,45 @@ func (s *codexUsageState) weight() int {
 	}
 	return len(s.Entries) + len(s.Intervals) + len(s.Responses) + len(s.Models) + len(s.Compactions) + len(s.CounterBases)
 }
-func (s *state) revisionWeight() int { return s.Codex.weight() }
+func (s *claudeUsageState) weight() int {
+	if s == nil {
+		return 0
+	}
+	n := len(s.Messages)
+	for _, branches := range s.Messages {
+		for _, m := range branches {
+			n += 1 + len(m.Previous) + len(m.Tools) + len(m.Blocks)
+			for _, tool := range m.Tools {
+				n += len(tool.Previous)
+			}
+			if n > revisionEntries {
+				return n
+			}
+		}
+	}
+	return n
+}
+func (s *state) revisionWeight() int { return s.Codex.weight() + s.Claude.weight() }
 func (s *state) withoutRevisions() *state {
-	if s.Codex == nil {
+	if s.Codex == nil && s.Claude == nil {
 		return s
 	}
 	c := *s
-	c.Codex = nil
+	c.Codex, c.Claude = nil, nil
 	return &c
 }
 func (s *callFile) revisionWeight() int {
 	if s.CX == nil {
-		return 0
+		return s.Claude.weight()
 	}
-	return s.CX.Usage.weight() + len(s.CX.Contexts) + len(s.CX.Turns) + len(s.CX.Timings)
+	return s.Claude.weight() + s.CX.Usage.weight() + len(s.CX.Contexts) + len(s.CX.Turns) + len(s.CX.Timings)
 }
 func (s *callFile) withoutRevisions() *callFile {
-	if s.CX == nil {
+	if s.CX == nil && s.Claude == nil {
 		return s
 	}
 	c := *s
-	c.CX = nil
+	c.CX, c.Claude = nil, nil
 	return &c
 }
 

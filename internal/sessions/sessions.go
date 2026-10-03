@@ -498,7 +498,8 @@ func CachePath() string { return filepath.Join(filepath.Dir(catalog.CachePath())
 // 10: Pi's and omp's prompts, replies, tool calls and skills.
 // 11: Codex's input without what it wrote to the cache (#589).
 // 16: count Codex response records and compaction usage.
-const cacheVersion = 16
+// 17: reconcile recent Claude message revisions.
+const cacheVersion = 17
 
 type cacheFile struct {
 	Version int               `json:"version"`
