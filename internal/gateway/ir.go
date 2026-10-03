@@ -200,7 +200,9 @@ type Usage struct {
 	// headers (Claude Code's own for a subscription); ErrType: what a
 	// failed request's error body called the error
 	RequestID string `json:"request_id,omitempty"`
-	ErrType   string `json:"err_type,omitempty"`
+	// ResponseID is the final client response ID, independent of request headers.
+	ResponseID string `json:"response_id,omitempty"`
+	ErrType    string `json:"err_type,omitempty"`
 }
 
 // prompt is every token the prompt came to, as OpenAI's and Gemini's
@@ -231,6 +233,9 @@ func (u *Usage) add(v Usage) {
 	}
 	if v.RequestID != "" {
 		u.RequestID = v.RequestID
+	}
+	if v.ResponseID != "" {
+		u.ResponseID = v.ResponseID
 	}
 	if v.ErrType != "" {
 		u.ErrType = v.ErrType

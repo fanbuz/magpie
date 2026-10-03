@@ -460,7 +460,7 @@ func (s *Server) codexUpstream(w http.ResponseWriter, r *http.Request, rest stri
 		Requested: call.Model, Served: served,
 		Input: uu.Input, Output: uu.Output, CacheRead: uu.CacheRead, CacheWrite: uu.CacheWrite,
 		Reasoning: uu.Reasoning, Millis: call.Millis, TTFT: call.TTFT, FirstText: call.FirstText, Status: call.Status, Session: sessionOf(r.Header), NativeSession: nativeSessionOf(r.Header), Kind: call.Kind,
-		RequestID: requestID(res.Header), Endpoint: r.URL.Path}
+		RequestID: requestID(res.Header), ResponseID: uu.ResponseID, Endpoint: r.URL.Path}
 	failedWith(&rec, call.Status, call.Error, errType)
 	appendUsage(r, rec)
 }

@@ -626,6 +626,7 @@ func stopToAnthropic(s string) string {
 
 // anthropicEncoder writes events as an Anthropic event stream.
 type anthropicEncoder struct {
+	id      string
 	w       *sseWriter
 	model   string
 	index   int
@@ -654,6 +655,7 @@ func (e *anthropicEncoder) start(ev Event) {
 	}
 	e.started = true
 	id := anthropicID(ev.MsgID)
+	e.id = id
 	model := ev.Model
 	if model == "" {
 		model = e.model

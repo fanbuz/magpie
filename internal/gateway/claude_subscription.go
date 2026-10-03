@@ -1632,7 +1632,7 @@ func relay(w http.ResponseWriter, r *http.Request, from provider.Protocol, name 
 			return writeError(w, from, code, name+": "+msg), msg
 		}
 		sw := newSSEWriter(w)
-		enc := encoder(from, sw, req)
+		enc := encoder(from, sw, req, usage)
 		var failed, said, stop string
 		see := func(ev Event) {
 			switch ev.Kind {
@@ -1694,7 +1694,7 @@ func relay(w http.ResponseWriter, r *http.Request, from provider.Protocol, name 
 	usage.add(Usage{Served: res.Model})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
-	_, _ = w.Write(render(from, res, req))
+	_, _ = w.Write(renderUsage(from, res, req, usage))
 	return 200, col.err
 }
 

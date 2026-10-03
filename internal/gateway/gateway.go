@@ -978,6 +978,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// which what is done with it goes by
 	who, agent := callerOf(r), agentOf(r)
 	metadata := requestSessionMetadata(r.Header, body)
+	var clientResponseID string // only a reply released to the client owns this ID
 	call := Call{Time: start, From: from, Model: unprefixed(modelOf(body)), Agent: who.agent, Via: who.via, Kind: requestCallKind(r.Header, metadata),
 		RequestBody: requestBody, RequestTruncated: requestTruncated, otelIn: otelIn, wire: archiving(r, capture, start, body)}
 	defer discardArchive(capture)
@@ -1461,6 +1462,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			stop()
 		}
 		hw.settle()
+		if hw.passing {
+			clientResponseID = call.Usage.ResponseID
+		}
 		outgrew := false // a failure that didn't say so was the request's length
 		if !hw.passing && !hw.refused && hw.code() >= 400 {
 			if req, err := parse(from, attemptBody); err == nil {
@@ -1700,6 +1704,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			writeError(w, from, call.Status, hw.failMsg)
 		} else {
 			hw.release()
+			if hw.passing {
+				clientResponseID = call.Usage.ResponseID
+			}
 		}
 		if call.Status < 400 {
 			servedCandidate(c, call.Usage.Input+call.Usage.Output+call.Usage.CacheRead+call.Usage.CacheWrite)
@@ -1732,6 +1739,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		call.Fallback = strings.Join(skipped, "; ")
 	}
 	call.Millis = time.Since(start).Milliseconds()
+	call.Usage.ResponseID = clientResponseID
 	finishCapture()
 	s.trace.update(tr, func(t *Route) {
 		t.Done, t.Status, t.Error, t.Millis = true, call.Status, call.Error, call.Millis
@@ -1752,7 +1760,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			Input: call.Usage.Input, Output: call.Usage.Output, CacheRead: call.Usage.CacheRead,
 			CacheWrite: call.Usage.CacheWrite, Reasoning: call.Usage.Reasoning, Effort: sent, Millis: call.Millis, Status: call.Status,
 			TTFT: call.TTFT, FirstText: call.FirstText, Session: sessionOf(r.Header), NativeSession: nativeSessionOf(r.Header), Kind: call.Kind,
-			RequestID: call.Usage.RequestID, Endpoint: endpointOf(r, from, call.To), Archive: call.archiveName()}
+			RequestID: call.Usage.RequestID, ResponseID: call.Usage.ResponseID, Endpoint: endpointOf(r, from, call.To), Archive: call.archiveName()}
 		failedWith(&rec, call.Status, call.Error, call.Usage.ErrType)
 		withBodies(&rec, &call)
 		appendUsage(r, rec)
@@ -2923,7 +2931,7 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 	empty := emptyFails(actual)
 	if stream {
 		sw := newSSEWriter(w)
-		enc := encoder(from, sw, request)
+		enc := encoder(from, sw, request, u)
 		var failed string
 		said, stop := false, ""
 		var kept []Event // the reply's end, while nothing is said in it
@@ -3002,7 +3010,7 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 	res2 := col.finish()
 	u.add(res2.Usage)
 	u.add(Usage{Served: res2.Model})
-	out := render(from, res2, request)
+	out := renderUsage(from, res2, request, u)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	w.Write(out)
@@ -3185,7 +3193,15 @@ func relayEvents(events <-chan Event, sw *sseWriter, enc streamEncoder, see func
 	}
 }
 
-func encoder(proto provider.Protocol, w *sseWriter, r *Request) streamEncoder {
+func encoder(proto provider.Protocol, w *sseWriter, r *Request, usage ...*Usage) streamEncoder {
+	enc := makeEncoder(proto, w, r)
+	if len(usage) > 0 && usage[0] != nil {
+		return &usageEncoder{streamEncoder: enc, usage: usage[0]}
+	}
+	return enc
+}
+
+func makeEncoder(proto provider.Protocol, w *sseWriter, r *Request) streamEncoder {
 	model := r.Model
 	switch proto {
 	case provider.Chat:
