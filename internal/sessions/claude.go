@@ -193,6 +193,7 @@ func ccReply(s *state, at time.Time, msg, b []byte, main bool) {
 		request = identity.String()
 	}
 	m := ccUsageState(&s.Claude).message(id, request)
+	defer s.Claude.finish(m)
 
 	i := bytes.LastIndex(b, ccUsage)
 	if i < 0 {
@@ -259,6 +260,7 @@ func claudeFull(s *state, b []byte, main bool) {
 		}
 	case "assistant":
 		m := ccUsageState(&s.Claude).message(l.Message.ID, string(l.RequestID))
+		defer s.Claude.finish(m)
 		var blocks []struct {
 			Type, ID, Name string
 			Input          struct{ Skill any }

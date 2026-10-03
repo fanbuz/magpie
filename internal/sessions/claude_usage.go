@@ -1,14 +1,27 @@
 package sessions
 
-import "time"
+import (
+	"container/list"
+	"time"
+)
 
 // claudeUsageState tracks message revisions while a source is live. It is
 // never persisted: a changed source reconstructs it after a cache reload.
 type claudeUsageState struct {
 	Messages map[string]map[string]*claudeContribution `json:"messages,omitempty"`
+	recent   list.List
+	entries  int
 }
 
+// Each active file keeps a recent window even when the whole source exceeds
+// the shared index budget. Older messages fall back to the original reader
+// behavior; their complete replay history is not retained.
+const claudeRevisionEntries = revisionEntries / revisionFiles
+
 type claudeContribution struct {
+	key      string
+	node     *list.Element
+	weight   int
 	Request  string                     `json:"request,omitempty"`
 	Usage    *claudeUsageVersion        `json:"usage,omitempty"`
 	Updated  time.Time                  `json:"updated"`
@@ -77,9 +90,49 @@ func (r *claudeUsageState) message(id, request string) *claudeContribution {
 			return m
 		}
 	}
-	m := &claudeContribution{Request: request, Call: -1}
+	m := &claudeContribution{Request: request, Call: -1, key: key}
+	m.node = r.recent.PushBack(m)
 	branches[request] = m
 	return m
+}
+
+// finish accounts for changes made by this line and evicts the least recently
+// used contributions. It never throws away the file's append offset or the
+// current message's usage. Weight includes nested revision, block and tool IDs.
+func (r *claudeUsageState) finish(m *claudeContribution) {
+	if m.node == nil {
+		return
+	}
+	n := m.entryWeight()
+	if n > claudeRevisionEntries {
+		// One exceptionally long message can fill the window by itself. Keep its
+		// latest contribution (the original last-message rule), not its history.
+		m.Previous, m.Tools, m.Blocks = nil, nil, nil
+		n = m.entryWeight()
+	}
+	r.entries += n - m.weight
+	m.weight = n
+	r.recent.MoveToBack(m.node)
+	for r.entries > claudeRevisionEntries {
+		e := r.recent.Front()
+		old := e.Value.(*claudeContribution)
+		branches := r.Messages[old.key]
+		delete(branches, old.Request)
+		if len(branches) == 0 {
+			delete(r.Messages, old.key)
+		}
+		r.entries -= old.weight
+		r.recent.Remove(e)
+		old.node = nil
+	}
+}
+
+func (m *claudeContribution) entryWeight() int {
+	n := 2 + len(m.Previous) + len(m.Tools) + len(m.Blocks)
+	for _, tool := range m.Tools {
+		n += len(tool.Previous)
+	}
+	return n
 }
 
 // accept replaces a contribution only for an unseen, later revision. Exact
@@ -122,6 +175,7 @@ func (r *claudeUsageState) clone() *claudeUsageState {
 		copied := make(map[string]*claudeContribution, len(branches))
 		for request, m := range branches {
 			n := *m
+			n.node = nil
 			if m.Usage != nil {
 				v := *m.Usage
 				n.Usage = &v
@@ -143,6 +197,12 @@ func (r *claudeUsageState) clone() *claudeUsageState {
 			copied[request] = &n
 		}
 		c.Messages[key] = copied
+	}
+	for e := r.recent.Front(); e != nil; e = e.Next() {
+		m := e.Value.(*claudeContribution)
+		n := c.Messages[m.key][m.Request]
+		n.node = c.recent.PushBack(n)
+		c.entries += n.weight
 	}
 	return c
 }
