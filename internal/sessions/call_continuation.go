@@ -1,5 +1,7 @@
 package sessions
 
+import "time"
+
 // A request page releases expanded Calls after packing them. Retain only a
 // bounded set of transient parser continuations, so the next append can reuse
 // the disk shard's rows without rescanning an active source from its start.
@@ -15,6 +17,7 @@ type callContinuation struct {
 // keepCallContinuation is called with callsMu held. Published continuations
 // are immutable; prepareCalls clones them before applying another append.
 func keepCallContinuation(st *callFile) {
+	defer trimCallRevisions(time.Now())
 	if st.Agent != "codex" && st.Agent != "claude" && st.Agent != "claude-desktop" {
 		return
 	}
@@ -30,6 +33,9 @@ func keepCallContinuation(st *callFile) {
 		}
 	}
 	callContinuationOrder = order
+	if !recentRevision(st.Mod, st.revisionWeight(), time.Now()) {
+		return
+	}
 	n := len(st.Calls)
 	if n > maxKeptCalls {
 		return

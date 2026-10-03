@@ -496,7 +496,7 @@ func CachePath() string { return filepath.Join(filepath.Dir(catalog.CachePath())
 // 10: Pi's and omp's prompts, replies, tool calls and skills.
 // 11: Codex's input without what it wrote to the cache (#589).
 // 12: count Codex response records and compaction usage.
-const cacheVersion = 12
+const cacheVersion = 16
 
 type cacheFile struct {
 	Version int               `json:"version"`
@@ -618,6 +618,8 @@ func writeCache(c *save) {
 // few files at a time, and keeps the parses of every file still on disk
 // (all of them), read by List or by Stats.
 func refresh(want, all []file) {
+	defer func() { trimSummaryRevisions(time.Now()) }()
+	trimSummaryRevisions(time.Now())
 	var todo []file
 	for _, f := range want {
 		if f.cold {
@@ -676,6 +678,9 @@ func refresh(want, all []file) {
 			for i := range ch {
 				j := &jobs[i]
 				j.parsed = parse(j.f, j.old)
+				if !recentRevision(j.parsed.Mod, j.parsed.revisionWeight(), time.Now()) {
+					j.parsed = j.parsed.withoutRevisions()
+				}
 				progress.files.Add(1)
 				progress.read.Add(left[j.f.path])
 			}

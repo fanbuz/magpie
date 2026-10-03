@@ -558,7 +558,11 @@ func codexCallLine(st *callFile, b []byte) {
 	}
 	// what the model is given: the prompt, a tool's output
 	compacted := typeAfter(b[:min(len(b), 1024)], cxType) == "compacted"
-	if !compacted && (bytes.Contains(b, cxUserMsg) || bytes.Contains(b, cxUserRole) || bytes.Contains(b, cxToolOut) || bytes.Contains(b, cxCustomOut)) {
+	if compacted {
+		st.codexChanged(r.Usage.compacted(tsAt(b, false), r.Model, cxCompactionIn(b)))
+		return
+	}
+	if bytes.Contains(b, cxUserMsg) || bytes.Contains(b, cxUserRole) || bytes.Contains(b, cxToolOut) || bytes.Contains(b, cxCustomOut) {
 		if at := tsAt(b, false); !at.IsZero() {
 			r.LastIn = at
 			if bytes.Contains(b, cxUserMsg) || bytes.Contains(b, cxUserRole) {

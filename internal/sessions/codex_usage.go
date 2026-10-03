@@ -2,7 +2,6 @@ package sessions
 
 import (
 	"encoding/json"
-	"fmt"
 	"maps"
 	"time"
 )
@@ -17,7 +16,7 @@ type codexUsageState struct {
 	// turn boundaries clear it, so equal usage from another call is not paired.
 	Pending        int
 	Entries        []codexContribution
-	Intervals      map[string][]int
+	Intervals      map[codexInterval][]int
 	Responses      map[string]int
 	High           *cxUsage
 	HighAt         time.Time
@@ -338,28 +337,34 @@ func (s *codexUsageState) context(session, turn, model string) {
 func (s *codexUsageState) advance(at time.Time, total *cxUsage) {
 	if total != nil && total.valid() && (s.High == nil || total.covers(*s.High)) {
 		v := *total
-		s.High = &v
-		if at.After(s.HighAt) {
+		if s.High == nil || at.After(s.HighAt) {
 			s.HighAt = at
 		}
+		s.High = &v
 	}
 }
 
-func codexIntervalKey(v codexContribution) string {
+type codexInterval struct {
+	Session                                       string
+	Epoch, TotalInput, TotalOutput, Input, Output int
+	Valid                                         bool
+}
+
+func codexIntervalKey(v codexContribution) codexInterval {
 	total, epoch := codexCheckpoint(v)
 	if total == nil {
-		return ""
+		return codexInterval{}
 	}
-	return fmt.Sprintf("%s/%d/%d/%d/%d/%d", v.Session, epoch, total.Input, total.Output, v.Usage.Input, v.Usage.Output)
+	return codexInterval{v.Session, epoch, total.Input, total.Output, v.Usage.Input, v.Usage.Output, true}
 }
 
 func (s *codexUsageState) index(i int, v codexContribution) {
 	key := codexIntervalKey(v)
-	if key == "" {
+	if !key.Valid {
 		return
 	}
 	if s.Intervals == nil {
-		s.Intervals = map[string][]int{}
+		s.Intervals = map[codexInterval][]int{}
 	}
 	// The old immutable snapshot may still reference the previous slice.
 	s.Intervals[key] = append(append([]int(nil), s.Intervals[key]...), i)
@@ -526,9 +531,9 @@ func (s *codexUsageState) count(at time.Time, model string, total, last *cxUsage
 	// total == last still proves a fresh counter, even without a decrease.
 	firstAfterReset := prev != nil && !prev.zero() && last != nil && last.valid() && !last.zero() && total.matches(*last) && !total.matches(*prev)
 	if prev != nil && (!total.covers(*prev) || firstAfterReset) {
-		if !at.After(s.HighAt) {
-			return nil
-		}
+		// Source order can cross a clock adjustment or several events can share
+		// a timestamp. Only a proven interval above is a replay; time alone
+		// cannot discard a decreasing legacy counter.
 		s.Epoch++
 		if len(s.Responses) > 0 && last != nil && last.valid() && !last.zero() && total.matches(*last) {
 			// After a runtime resume legacy usage restarts at one request, while

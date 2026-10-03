@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"github.com/tidwall/gjson"
 )
 
 // Codex writes a rollout file per session (a session picked up again later
@@ -166,11 +168,26 @@ func typeAfter(b, key []byte) string {
 	return string(rest[:j])
 }
 
+// Read compaction identity/usage without decoding its potentially multi-MB
+// replacement history. The parser needs none of that conversation content.
+func cxCompactionIn(b []byte) cxCompaction {
+	fields := gjson.GetManyBytes(b, "payload.compaction_response_id", "payload.latest_token_usage_record")
+	p := cxCompaction{ResponseID: fields[0].String()}
+	if fields[1].Exists() {
+		_ = json.Unmarshal([]byte(fields[1].Raw), &p.Record)
+	}
+	return p
+}
+
 // codexBody reads a line codexHead let through.
 func codexBody(s *state, b []byte, main bool) {
 	at := tsAt(b[:min(len(b), 256)], false)
 	if at.IsZero() {
 		at = tsAt(b, false)
+	}
+	if typeAfter(b[:min(len(b), 1024)], cxType) == "compacted" {
+		codexApply(s, codexState(s).compacted(at, s.Model, cxCompactionIn(b)))
+		return
 	}
 	// the two kinds of line most read, each told from its head
 	if cxFastCount(s, at, b) || cxFastPrompt(s, at, b, main) {
