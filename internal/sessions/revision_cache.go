@@ -5,9 +5,9 @@ import (
 	"time"
 )
 
-// Each cache retains revision indexes for at most eight recently written files
-// and 8192 index entries. Settled files need only their totals/materialized rows;
-// if one grows again, its parser already rebuilds from the source.
+// Each cache retains at most eight files and 8192 index entries. Bounded
+// Claude windows compete by source size (the cost of rebuilding), with recency
+// breaking ties. They have no idle deadline; Codex indexes still expire.
 const revisionIdle = 5 * time.Minute
 const revisionFiles = 8
 const revisionEntries = 8192
@@ -65,13 +65,47 @@ func (s *callFile) withoutRevisions() *callFile {
 }
 
 type revisionCandidate struct {
-	path   string
-	mod    int64
-	weight int
+	path    string
+	mod     int64
+	weight  int
+	size    int64
+	bounded bool
+}
+
+func (c revisionCandidate) eligible(now time.Time) bool {
+	if c.bounded {
+		return c.weight > 0 && c.weight <= claudeRevisionEntries
+	}
+	return recentRevision(c.mod, c.weight, now)
+}
+
+// Called with mu held. Reserve only windows already in memory or about to be
+// parsed; an unchanged disk-only summary must not take a phantom cache slot.
+func summaryRevisionWindows(todo []file, now time.Time) map[string]bool {
+	candidates := make(map[string]revisionCandidate)
+	for path, s := range cache {
+		if s.Claude != nil {
+			candidates[path] = revisionCandidate{path: path, mod: s.Mod, weight: claudeRevisionEntries, size: s.Size, bounded: true}
+		}
+	}
+	for _, f := range todo {
+		switch f.agent {
+		case "claude", "claude-desktop", "qoder", "qoder-cn":
+			candidates[f.path] = revisionCandidate{path: f.path, mod: f.mod.UnixNano(), weight: claudeRevisionEntries, size: f.size, bounded: true}
+		}
+	}
+	ranked := make([]revisionCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		ranked = append(ranked, c)
+	}
+	return retainedRevisions(ranked, now)
 }
 
 func retainedRevisions(candidates []revisionCandidate, now time.Time) map[string]bool {
 	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].size != candidates[j].size {
+			return candidates[i].size > candidates[j].size
+		}
 		if candidates[i].mod != candidates[j].mod {
 			return candidates[i].mod > candidates[j].mod
 		}
@@ -80,7 +114,7 @@ func retainedRevisions(candidates []revisionCandidate, now time.Time) map[string
 	keep := map[string]bool{}
 	used := 0
 	for _, c := range candidates {
-		if !recentRevision(c.mod, c.weight, now) || len(keep) == revisionFiles || used+c.weight > revisionEntries {
+		if !c.eligible(now) || len(keep) == revisionFiles || used+c.weight > revisionEntries {
 			continue
 		}
 		keep[c.path] = true
@@ -95,7 +129,7 @@ func trimSummaryRevisions(now time.Time) {
 	var candidates []revisionCandidate
 	for path, s := range cache {
 		if n := s.revisionWeight(); n > 0 {
-			candidates = append(candidates, revisionCandidate{path, s.Mod, n})
+			candidates = append(candidates, revisionCandidate{path: path, mod: s.Mod, weight: n, size: s.Size, bounded: s.Claude != nil})
 		}
 	}
 	keep := retainedRevisions(candidates, now)
@@ -107,12 +141,12 @@ func trimSummaryRevisions(now time.Time) {
 }
 
 // Called with callsMu held. The row cache and compact continuation cache have
-// independent fixed bounds; reading a settled shard cannot make it active.
+// independent fixed bounds. A disk shard without a window stays disk-only.
 func trimCallRevisions(now time.Time) {
 	var candidates []revisionCandidate
 	for path, s := range callCache {
 		if n := s.revisionWeight(); n > 0 {
-			candidates = append(candidates, revisionCandidate{path, s.Mod, n})
+			candidates = append(candidates, revisionCandidate{path: path, mod: s.Mod, weight: n, size: s.Size, bounded: s.Claude != nil})
 		}
 	}
 	keep := retainedRevisions(candidates, now)
@@ -123,7 +157,7 @@ func trimCallRevisions(now time.Time) {
 	}
 	candidates = candidates[:0]
 	for path, entry := range callContinuations {
-		candidates = append(candidates, revisionCandidate{path, entry.state.Mod, entry.state.revisionWeight()})
+		candidates = append(candidates, revisionCandidate{path: path, mod: entry.state.Mod, weight: entry.state.revisionWeight(), size: entry.state.Size, bounded: entry.state.Claude != nil})
 	}
 	keep = retainedRevisions(candidates, now)
 	order := callContinuationOrder[:0]

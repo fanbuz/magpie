@@ -622,7 +622,6 @@ func writeCache(c *save) {
 // (all of them), read by List or by Stats.
 func refresh(want, all []file) {
 	defer func() { trimSummaryRevisions(time.Now()) }()
-	trimSummaryRevisions(time.Now())
 	var todo []file
 	for _, f := range want {
 		if f.cold {
@@ -645,12 +644,17 @@ func refresh(want, all []file) {
 			}
 		}
 	}
+	trimSummaryRevisions(time.Now())
 	if len(todo) == 0 {
 		if gone {
 			saveCache()
 		}
 		return
 	}
+	// Limit cold-scan workers to the windows that can survive publication.
+	// Otherwise a batch of historical files could retain every window until
+	// the whole scan finishes.
+	windows := summaryRevisionWindows(todo, time.Now())
 	// the biggest first, so no long file is left to run on alone at the
 	// end; and twice the cores, as the reading waits on the disk
 	sort.Slice(todo, func(i, j int) bool { return todo[i].size-offOf(todo[i]) > todo[j].size-offOf(todo[j]) })
@@ -681,7 +685,7 @@ func refresh(want, all []file) {
 			for i := range ch {
 				j := &jobs[i]
 				j.parsed = parse(j.f, j.old)
-				if !recentRevision(j.parsed.Mod, j.parsed.revisionWeight(), time.Now()) {
+				if (j.parsed.Claude != nil && !windows[j.f.path]) || (j.parsed.Claude == nil && !recentRevision(j.parsed.Mod, j.parsed.revisionWeight(), time.Now())) {
 					j.parsed = j.parsed.withoutRevisions()
 				}
 				progress.files.Add(1)
@@ -949,12 +953,6 @@ func parse(f file, old *state) *state {
 	if f.agent == "codex" && old != nil && old.Codex == nil {
 		old = nil
 	}
-	// Summaries persist aggregates only. Rebuild the transient revision index
-	// when a cold Claude source changes.
-	if (f.agent == "claude" || f.agent == "claude-desktop") && old != nil && old.Claude == nil {
-		old = nil
-	}
-
 	switch f.agent {
 	case "hermes":
 		return parseHermes(f)
@@ -973,6 +971,22 @@ func parse(f file, old *state) *state {
 	case "cursor":
 		return parseCursor(f)
 	}
+	line := claudeLine
+	switch f.agent {
+	case "codex":
+		line = codexLine
+	case "pi", "omp":
+		line = piParse
+	case "workbuddy":
+		line = workbuddyLine
+	default:
+		// Every source read by claudeLine needs its transient revision window.
+		// This includes Qoder and Qoder CN, whose disk summary has aggregates only.
+		if old != nil && old.Claude == nil {
+			old = nil
+		}
+	}
+
 	headBytes := headOf(f.path)
 	var s *state
 	if old != nil && !packed(f.path) && f.size >= old.Size && old.Off <= f.size && sameHead(headBytes, old.Head, old.HeadSize) && old.ContentHash != "" && prefixHash(f.path, old.Size) == old.ContentHash {
@@ -983,15 +997,6 @@ func parse(f file, old *state) *state {
 	s.Size, s.Mod = f.size, f.mod.UnixNano()
 	s.Head, s.HeadSize = hashHead(headBytes), len(headBytes)
 	s.ContentHash = prefixHash(f.path, f.size)
-	line := claudeLine
-	switch f.agent {
-	case "codex":
-		line = codexLine
-	case "pi", "omp":
-		line = piParse
-	case "workbuddy":
-		line = workbuddyLine
-	}
 	var head func([]byte) bool
 	if f.agent == "codex" {
 		line = codexBody

@@ -33,7 +33,7 @@ func keepCallContinuation(st *callFile) {
 		}
 	}
 	callContinuationOrder = order
-	if !recentRevision(st.Mod, st.revisionWeight(), time.Now()) {
+	if !(revisionCandidate{mod: st.Mod, weight: st.revisionWeight(), bounded: st.Claude != nil}).eligible(time.Now()) {
 		return
 	}
 	n := len(st.Calls)

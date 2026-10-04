@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -81,7 +82,7 @@ func TestClaudeDesktopCopyOfMessageIsCountedOnce(t *testing.T) {
 	}
 }
 
-func TestSettledClaudeRevisionsReleasedAndRebuilt(t *testing.T) {
+func TestEvictedClaudeRevisionsReleasedAndRebuilt(t *testing.T) {
 	d := setupCalls(t)
 	data, err := os.ReadFile("testdata/claude-native-replay.jsonl")
 	if err != nil {
@@ -94,24 +95,42 @@ func TestSettledClaudeRevisionsReleasedAndRebuilt(t *testing.T) {
 	if err = os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
+	// Eight larger sources displace this window even when it is idle. Size,
+	// not an idle timer, determines which bounded windows are worth keeping.
+	for i := 0; i < revisionFiles; i++ {
+		p := filepath.Join(filepath.Dir(path), fmt.Sprintf("larger-%d.jsonl", i))
+		writeLines(t, p, string(claudeUsageLine(time.Now(), fmt.Sprint(i), "", "m", Tokens{Output: 1}, `[{"type":"text","text":"`+strings.Repeat("x", 8192)+`"}]`, true)))
+	}
+
 	List(0)
 	Calls(time.Time{})
 	if cache[path].Claude != nil || callCache[path].Claude != nil {
-		t.Fatal("settled Claude retained message indexes")
+		t.Fatal("evicted Claude retained message indexes")
 	}
 	for _, source := range CallSources() {
 		ReadCallSource(source)
 	}
-	if len(callContinuations) != 0 {
-		t.Fatal("settled Claude retained continuation")
+	if callContinuations[path].state.Claude != nil {
+		t.Fatal("evicted Claude retained continuation")
 	}
 	appendText(t, path, lines[2]+"\n")
 	want := Tokens{10338, 37363, 281066, 63398}
-	if ss := List(0); len(ss) != 1 || ss[0].Tokens != want {
-		t.Fatal("reopened summary counted replay", ss)
+	List(0)
+	var got Tokens
+	for _, v := range cache[path].Models {
+		got.add(v)
 	}
-	if cs := Calls(time.Time{}); len(cs) != 2 {
-		t.Fatal("reopened calls counted replay", cs)
+	if got != want {
+		t.Fatal("reopened summary counted replay", got)
+	}
+	n := 0
+	for _, c := range Calls(time.Time{}) {
+		if c.File == path {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatal("reopened calls counted replay", n)
 	}
 	mu.Lock()
 	trimSummaryRevisions(time.Now().Add(revisionIdle + time.Second))
@@ -120,6 +139,6 @@ func TestSettledClaudeRevisionsReleasedAndRebuilt(t *testing.T) {
 	trimCallRevisions(time.Now().Add(revisionIdle + time.Second))
 	callsMu.Unlock()
 	if cache[path].Claude != nil || callCache[path].Claude != nil {
-		t.Fatal("expired Claude retained message indexes")
+		t.Fatal("cheaper source displaced larger windows")
 	}
 }

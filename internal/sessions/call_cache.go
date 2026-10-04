@@ -79,6 +79,16 @@ func pruneCalls(files []file) {
 			delete(callCounts, path)
 		}
 	}
+	order = callContinuationOrder[:0]
+	for _, path := range callContinuationOrder {
+		if on[path] {
+			order = append(order, path)
+		} else {
+			delete(callContinuations, path)
+		}
+	}
+	callContinuationOrder = order
+
 	trimCallRevisions(time.Now())
 	callsMu.Unlock()
 	if moved {

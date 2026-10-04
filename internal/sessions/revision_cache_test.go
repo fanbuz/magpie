@@ -103,7 +103,7 @@ func TestRevisionCachesBoundActiveFilesAndExpire(t *testing.T) {
 
 func TestRevisionEntryBudget(t *testing.T) {
 	now := time.Now()
-	candidates := []revisionCandidate{{"large", now.UnixNano(), revisionEntries + 1}, {"one", now.UnixNano(), revisionEntries / 2}, {"two", now.UnixNano(), revisionEntries / 2}, {"three", now.UnixNano(), revisionEntries / 2}}
+	candidates := []revisionCandidate{{path: "large", mod: now.UnixNano(), weight: revisionEntries + 1}, {path: "one", mod: now.UnixNano(), weight: revisionEntries / 2}, {path: "two", mod: now.UnixNano(), weight: revisionEntries / 2}, {path: "three", mod: now.UnixNano(), weight: revisionEntries / 2}}
 	keep := retainedRevisions(candidates, now)
 	if keep["large"] || len(keep) != 2 {
 		t.Fatal(keep)
