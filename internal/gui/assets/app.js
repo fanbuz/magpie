@@ -11490,7 +11490,7 @@ function renderPanelQuota() {
       n.title = t("{n} accounts", { n: qs.length });
       head.append(n);
     } else {
-      const note = [qs[0].plan, qs[0].until ? planTerm(qs[0]) : "", qs[0].balance].filter(Boolean).join(" · ");
+      const note = [qs[0].plan, qs[0].until ? planTerm(qs[0]) : ""].filter(Boolean).join(" · ");
       head.append(el("span", "pq-gnote" + (qs[0].renew === "off" ? " ends" : ""), note));
     }
     // whether the rings say what is used or what is left, once above them,
@@ -11585,9 +11585,14 @@ function panelQuotaCard(q) {
     card.classList.add("stale");
     card.title += "\n" + asOfText(q);
   }
+  const balance = q.balance && balanceRow(q, "What is left on the account besides its windows", false);
   // a pool's 5-hour and weekly rings, two pools of them, else three
   const fam = familyWindows(q.windows.filter((w) => !w.unlimited));
-  if (!fam.length && q.windows.some((w) => w.unlimited)) { card.append(el("span", "pq-sub", t("Unlimited"))); return card; }
+  if (!fam.length && q.windows.some((w) => w.unlimited)) {
+    card.append(el("span", "pq-sub", t("Unlimited")));
+    if (balance) card.append(balance);
+    return card;
+  }
   const ws = fam.slice(0, fam.some((w) => w.members) ? 4 : 3);
   // when the windows begun start again: the first bare, the others by name
   const begun = ws.filter((w) => w.resetsAt && w.used > 0);
@@ -11621,6 +11626,7 @@ function panelQuotaCard(q) {
     rings.append(r);
   }
   card.append(rings);
+  if (balance) card.append(balance);
   // the first window's cycle, a thin line under the card (#651)
   const spark = ws[0] && !ws[0].tiers ? quotaSpark(q, ws[0]) : null;
   if (spark) card.append(spark);
