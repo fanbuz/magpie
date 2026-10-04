@@ -40,7 +40,7 @@ function serve(lang, logins, posts) {
 
 const title = {
   en: "magpie stops showing and using Kiro's own sign-in; its files are left as they are, and it shows again when Kiro signs in anew",
-  zh: "magpie 不再显示和使用 Kiro 自己的登录；它的文件保持原样，Kiro 重新登录后会再次出现",
+  zh: "不再显示和使用 Kiro 自己的登录；文件保持原样，Kiro 重新登录后再次出现",
 };
 const remove = { en: "Remove", zh: "移除" };
 

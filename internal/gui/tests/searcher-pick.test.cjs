@@ -37,9 +37,9 @@ const words = {
     google: "Antigravity search for their own models first, with Gemini's Google Search",
     more: "A1, A2, A3, A4, A5 and 3 more can't",
     left: "MiniMax, Kimi For Coding can't, so for their models the search APIs below search" },
-  zh: { name: "代搜供应商", auto: "自动", small: "GPT-5 Mini Named（它的小模型）", unused: "没有用 OpenAI · GPT-5 Mini Named：它已关闭", relays: "标为能搜索的中转站（MyRelay）不会被自动选择：它们会为别的模型的搜索花掉中转站的额度；如果它拒绝 magpie 自己发出的请求，magpie 会退回其他选择",
-    own: "Kimi Code 套餐（Kimi Code）的模型先用套餐自带的联网搜索；别的模型只有在这里选了它才用", web: "它自带的联网搜索",
-    google: "Antigravity 的模型先用自己的 Gemini（Google 搜索）联网搜索",
+  zh: { name: "代搜供应商", auto: "自动", small: "GPT-5 Mini Named（它的小模型）", unused: "没有用 OpenAI · GPT-5 Mini Named：它已关闭", relays: "标为可搜索的中转站（MyRelay）不会被自动选择，以免为其他模型的搜索消耗中转站额度；若它拒绝 magpie 的请求，会退回其他选项",
+    own: "Kimi Code 套餐（Kimi Code）的模型优先用套餐自带的联网搜索；其他模型仅在此处选中时使用", web: "它自带的联网搜索",
+    google: "Antigravity 的模型优先用 Gemini 自带的 Google 搜索",
     more: "A1, A2, A3, A4, A5 以及另外 3 个 自己不能搜索",
     left: "MiniMax, Kimi For Coding 自己不能搜索，它们的模型由下面的搜索 API 代搜" },
 };

@@ -57,7 +57,7 @@ function serve(lang) {
 
 const want = {
   en: { story: "the proxy magpie goes through didn't take the connection, so the request never reached the vendor and goes on to the next", rest: "so it doesn't rest", tag: "502 · proxy not reachable" },
-  zh: { story: "magpie 所走的代理没有接受连接，请求根本没到厂商，所以转给了下一个", rest: "所以不用休息", tag: "502 · 代理连不上" },
+  zh: { story: "magpie 使用的代理未接受连接，请求未到达厂商，已转给下一个", rest: "不休息", tag: "502 · 代理连不上" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -90,7 +90,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const story = steps.find((s) => s.includes(want[lang].story));
       assert(story, JSON.stringify(steps));
       assert(story.includes(want[lang].rest) && story.includes("Grok (SuperGrok)"), story);
-      assert(!steps.some((s) => s.includes("wouldn't fix") || s.includes("也解决不了")), JSON.stringify(steps));
+      assert(!steps.some((s) => s.includes("wouldn't fix") || s.includes("换账号也无法解决")), JSON.stringify(steps));
       const text = await page.locator("body").innerText();
       assert(text.includes(want[lang].tag), "no tag " + want[lang].tag);
       assert.deepEqual(errors, []);

@@ -71,7 +71,7 @@ const words = {
   },
   zh: {
     item: "测试此模型", all: "测试模型", ok: "gpt-6-mini 在 321 毫秒内响应",
-    own: "Kiro 走的是它自己的接口，magpie 会为 Agent 的每个请求做转换，所以无法单独给它发测试请求。请在 Agent 里用这个模型试一下。",
+    own: "Kiro 使用自有接口，由 magpie 转换 Agent 的请求，无法单独发测试请求。请在 Agent 中使用该模型测试。",
   },
 };
 

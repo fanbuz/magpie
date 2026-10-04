@@ -73,7 +73,7 @@ function serve(lang) {
 
 const want = {
   en: { tag: "served " + MEMBER, swap: "served gpt-6-luna", why: new RegExp(`^${GROUP} is a routing group of the remote magpie, and it routed the request to ${MEMBER}: the group picking one of its models, not the vendor swapping the model\\.$`) },
-  zh: { tag: "实际 " + MEMBER, swap: "实际 gpt-6-luna", why: new RegExp(`^${GROUP} 是远程 magpie 的路由组，它把请求路由给了 ${MEMBER}：这是路由组在挑选组内模型，并不是服务商换了模型。$`) },
+  zh: { tag: "实际 " + MEMBER, swap: "实际 gpt-6-luna", why: new RegExp(`^${GROUP} 是远程 magpie 的路由组，请求被路由给 ${MEMBER}：这是路由组选择了组内模型，并非服务商替换了模型。$`) },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {

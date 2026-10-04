@@ -101,7 +101,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const page = await open("zh", []);
       const orch = row(page, "orchestration");
       assert.match(await orch.locator(".lib-src").first().textContent(), /共享于\s*~\/\.agents\/skills\/orchestration/);
-      assert.match(await orch.locator("button.action").getAttribute("title"), /保留在共享技能文件夹中原处/);
+      assert.match(await orch.locator("button.action").getAttribute("title"), /保留在共享技能文件夹原处/);
     });
 
     assert.deepEqual(errors, []);

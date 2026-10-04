@@ -40,7 +40,7 @@ function fixture(lang, gateway) {
 
 const cases = [
   { lang: "en", state: "running · served by magpie 0.1.550, older than this one", sub: /through magpie 0\.1\.550.*Quit that magpie.*within 15 seconds/, same: "running · served by another magpie" },
-  { lang: "zh", state: "运行中 · 由更旧的 magpie 0.1.550 提供", sub: /经由 magpie 0\.1\.550.*退出那个 magpie.*15 秒内接管网关/, same: "运行中 · 由另一个 magpie 提供" },
+  { lang: "zh", state: "运行中 · 由更旧的 magpie 0.1.550 提供", sub: /经 magpie 0\.1\.550.*退出那个 magpie.*15 秒内接管网关/, same: "运行中 · 由另一个 magpie 提供" },
 ];
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {

@@ -50,7 +50,7 @@ function serve(lang) {
 
 const want = {
   en: { row: "served gpt-6-luna", tag: "requested gpt-6-sol · served gpt-6-luna", story: /its reply says gpt-6-luna answered it: another model/ },
-  zh: { row: "实际 gpt-6-luna", tag: "请求 gpt-6-sol · 实际 gpt-6-luna", story: /回复写明由 gpt-6-luna 作答：这是另一个模型/ },
+  zh: { row: "实际 gpt-6-luna", tag: "请求 gpt-6-sol · 实际 gpt-6-luna", story: /回复却写明由 gpt-6-luna 作答：这是另一个模型/ },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {

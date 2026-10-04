@@ -74,7 +74,7 @@ function server(lang, posts) {
 
 const words = {
   en: { via: "via magpie", direct: "direct, not via magpie", off: "off magpie", ask: "Take Claude Code off magpie?", use: "Use claude-opus-5-5", restore: "Disconnect and restore", cancel: "Cancel", connected: "it had no model set, so the first of its own" },
-  zh: { via: "经 magpie", direct: "直连，不经 magpie", off: "不经 magpie", ask: "让 Claude Code 不再经过 magpie？", use: "使用 claude-opus-5-5", restore: "断开并还原", cancel: "取消", connected: "它原来没有设模型" },
+  zh: { via: "经 magpie", direct: "直连，不经 magpie", off: "不经 magpie", ask: "让 Claude Code 不再经过 magpie？", use: "使用 claude-opus-5-5", restore: "断开并还原", cancel: "取消", connected: "原先未设模型" },
 };
 const row = '.row.agent[data-id="claude"]';
 

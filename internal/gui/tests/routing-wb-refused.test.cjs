@@ -56,7 +56,7 @@ function serve(lang) {
 
 const want = {
   en: { said: "It said: " + vendor, hint },
-  zh: { said: "原话：" + vendor, hint: "WorkBuddy 会拒绝来自 Codex 和 Claude Code 的对话（因为它们的系统提示词）；请在 Hermes、OpenCode 或 Pi 里使用它，或在这个分组里再加一个供应商" },
+  zh: { said: "原话：" + vendor, hint: "WorkBuddy 会因系统提示词拒绝 Codex 和 Claude Code 的对话；请在 Hermes、OpenCode 或 Pi 中使用，或在此分组中再加一个供应商" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {

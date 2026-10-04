@@ -79,8 +79,8 @@ const L = {
   zh: { runs: "运行方式", line: "Zed 的内置订阅已弃用", look: "查看迁移",
     move: "迁移到插件", busy: "正在安装插件并逐个检查账号…", again: "重试", back: "改回内置",
     failed: "仍使用内置：无法连接 npm 安装插件，请检查网络或代理后重试。",
-    onPlugin: "社区 Zed 插件", builtin: "magpie 内置 · 也可改用社区 Zed 插件", done: "Zed 现在由插件运行——2 个账号，1 个模型。",
-    subs: "订阅", card: "迁移", own: "Zed 本身的登录保持不变。" },
+    onPlugin: "社区 Zed 插件", builtin: "magpie 内置 · 也可改用社区 Zed 插件", done: "Zed 已改由插件运行：2 个账号，1 个模型。",
+    subs: "订阅", card: "迁移", own: "Zed 本身的登录不变。" },
 };
 
 const launch = (engine) => engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" });

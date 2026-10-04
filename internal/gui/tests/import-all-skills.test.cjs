@@ -97,7 +97,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const page = await open("zh", posts, "notes");
       const all = page.locator("#view-library .row-head button.lib-importall");
       assert.equal((await all.textContent()).trim(), "全部导入");
-      assert.match(await all.getAttribute("title"), /把这 3 个技能导入资源库/);
+      assert.match(await all.getAttribute("title"), /将这 3 个技能导入资源库/);
       const before = await scrolled(page);
       await all.click();
       await page.waitForTimeout(300);

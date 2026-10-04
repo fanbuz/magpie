@@ -28,7 +28,7 @@ const groups = (on, moved) => ({ models, pools: [], deciders: [], found: on, gro
 const words = {
   en: { label: "Find groups on their own", onHint: "becomes a group of them", offHint: "only the groups you made or changed",
     moved: "Claude Code moved to a/m", back: "Found groups are on" },
-  zh: { label: "自动创建路由组", onHint: "会自动组成一个路由组", offHint: "只列出、只提供你自己建的或改过的组",
+  zh: { label: "自动创建路由组", onHint: "会自动成组", offHint: "只列出和提供你新建或改过的组",
     moved: "Claude Code 已改用 a/m", back: "已开启自动创建路由组" },
 };
 
