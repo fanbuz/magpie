@@ -9470,7 +9470,7 @@ function balanceFix(p) {
 }
 
 // accountQuota: an account's allowance as a line of small meters under its
-// name, the reset time on the ones nearly used up.
+// name, the reset time on the ones nearly used up, and any credit balance.
 function accountQuota(data, user, cap = 0) {
   const line = el("div", "aq");
   if (!data) {
@@ -9493,6 +9493,12 @@ function accountQuota(data, user, cap = 0) {
     line.append(el("span", "aq-none", [...noPlan, q?.error ? quotaError(q.error) : t("No allowance reported")].join(" · ")));
     if (q?.error) line.title = q.error;
     return line;
+  }
+  if (q.balance) {
+    const balance = el("span", "aq-w aq-balance");
+    balance.title = t("What is left on the account besides its windows");
+    balance.append(el("span", "aq-n", t("Balance")), el("b", "", q.balance));
+    line.append(balance);
   }
   // the two rolling windows fit a line; the per-model ones go in its
   // tooltip; per-model windows of a family are the family's one
