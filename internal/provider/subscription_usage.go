@@ -295,7 +295,7 @@ func fetchSubscriptionUsage() []SubscriptionQuota {
 		fetches = append(fetches, withUser(user, func() SubscriptionQuota { return cursorSubscriptionUsage(viaLogin("cursor", user), plan) }))
 	}
 	if _, ok := grokAccount(); !moved("grok") && ok && !hidden["grok"] {
-		fetches = append(fetches, func() SubscriptionQuota { return grokSubscriptionUsage(via("grok")) })
+		fetches = append(fetches, func() SubscriptionQuota { return keepLast(readNow(grokSubscriptionUsage(via("grok"))), "") })
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		if p, ok := codexAccount(home); ok && !hidden["codex"] {
@@ -319,7 +319,7 @@ func fetchSubscriptionUsage() []SubscriptionQuota {
 	}
 	if moved("kiro") {
 	} else if key := kiroKey(); key != "" && !hidden["kiro"] {
-		fetches = append(fetches, func() SubscriptionQuota { return kiroQuotaAt(via("kiro"), key, "") })
+		fetches = append(fetches, func() SubscriptionQuota { return keepLast(readNow(kiroQuotaAt(via("kiro"), key, "")), "") })
 	} else if !hidden["kiro"] {
 		fetches = append(fetches, perLogin(via("kiro"), kiroLoginList(), "Kiro", "kiro-color")...)
 	}
@@ -356,16 +356,20 @@ func fetchSubscriptionUsage() []SubscriptionQuota {
 		if hidden[agent] {
 			continue
 		}
+		// read as loginQuota reads them (googleLoginQuota): one reading
+		// with LoginUsage
 		for _, l := range googleLogins(agent) {
-			fetches = append(fetches, func() SubscriptionQuota { return l.acct.quota(viaLogin(agent, l.User), l.Plan) })
+			fetches = append(fetches, func() SubscriptionQuota { return loginReading(viaLogin(agent, l.User), l.Login).read })
 		}
 	}
 	fetches = append(fetches, pluginUsageFetches(via, hidden, placed)...)
+	// each fetch keeps what it read (keepLast) itself: an account's
+	// reading, shared with LoginUsage, is kept once
 	out := make([]SubscriptionQuota, len(fetches))
 	var wg sync.WaitGroup
 	for i, f := range fetches {
 		wg.Add(1)
-		go func() { defer wg.Done(); out[i] = keepLast(readNow(f()), "") }()
+		go func() { defer wg.Done(); out[i] = f() }()
 	}
 	wg.Wait()
 	return out
@@ -379,21 +383,23 @@ func accountsOf(agent string) []Login {
 	return ls
 }
 
-// withUser names the account a fetch is for.
+// withUser names the account a fetch is for, and keeps its reading
+// (keepLast).
 func withUser(user string, f func() SubscriptionQuota) func() SubscriptionQuota {
 	return func() SubscriptionQuota {
 		q := f()
 		q.User = user
-		return q
+		return keepLast(readNow(q), "")
 	}
 }
 
-// perLogin fetches each account's allowance on a card of its own.
+// perLogin fetches each account's allowance on a card of its own: the
+// reading LoginUsage shows beside the account (loginReading).
 func perLogin(ctx context.Context, ls []Login, name, icon string) []func() SubscriptionQuota {
 	var out []func() SubscriptionQuota
 	for _, l := range ls {
 		out = append(out, func() SubscriptionQuota {
-			q := loginQuota(ctx, l)
+			q := loginReading(ctx, l).read
 			q.Name, q.Icon, q.User = name, icon, l.User
 			return q
 		})
@@ -577,6 +583,15 @@ func AskUsage() {
 	c.Lock()
 	c.at, c.asked = time.Time{}, true
 	c.Unlock()
+	// each account's reading, which LoginUsage shares, is read again too;
+	// kept, for a hiccup to keep what was known
+	l := &loginUsageCache
+	l.Lock()
+	for k, e := range l.m {
+		e.at = time.Time{}
+		l.m[k] = e
+	}
+	l.Unlock()
 }
 
 // claudeWindows is the allowance of the Claude account user. Only the

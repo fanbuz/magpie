@@ -14,12 +14,23 @@ import (
 
 var loginUsageCache struct {
 	sync.Mutex
-	m map[string]loginUsageEntry // agent/user
+	m       map[string]loginUsageEntry // agent/user
+	pending map[string]*loginRead      // agent/user: being read now
 }
 
 type loginUsageEntry struct {
 	at time.Time
 	q  SubscriptionQuota
+	// read is the reading itself, as the Usage page shows it: q is the
+	// same, but where a hiccup kept what was known
+	read SubscriptionQuota
+}
+
+// loginRead is an account's allowance being read: whoever asks for it
+// meanwhile waits for it rather than asking the vendor again.
+type loginRead struct {
+	done chan struct{} // closed once e is in
+	e    loginUsageEntry
 }
 
 // loginUsageFor, when set, stands in for LoginUsage's readings (tests),
@@ -32,8 +43,9 @@ func LoginUsageVia(f func(ctx context.Context, agent string) map[string]Subscrip
 }
 
 // LoginUsage is the allowance used by each of an agent's accounts, by
-// user. What was fetched less than a minute ago comes from the cache; the
-// rest is asked for at once, as long as ctx allows.
+// user. What was read less than a minute ago, here or for the Usage page,
+// comes from the cache; the rest is asked for at once, as long as ctx
+// allows.
 func LoginUsage(ctx context.Context, agent string) map[string]SubscriptionQuota {
 	if loginUsageFor != nil {
 		return loginUsageFor(ctx, agent)
@@ -44,60 +56,102 @@ func LoginUsage(ctx context.Context, agent string) map[string]SubscriptionQuota 
 			return grokLoginUsage(ctx)
 		}
 	}
-	logins, known, ok := usageLogins(agent)
+	logins, ok := usageLogins(agent)
 	if !ok {
 		return out
 	}
-	c := &loginUsageCache
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for _, l := range logins {
-		key := known + "/" + strings.ToLower(l.User)
-		c.Lock()
-		e, ok := c.m[key]
-		c.Unlock()
-		if ok && time.Since(e.at) < time.Minute {
-			mu.Lock()
-			out[l.User] = e.q
-			mu.Unlock()
-			continue
-		}
 		wg.Add(1)
-		go func(l Login) {
+		go func() {
 			defer wg.Done()
-			q := keepLast(readNow(loginQuota(ctx, l)), l.User)
-			if q.Error != "" && ok && q.Provider != "claude" {
-				q = e.q // a hiccup keeps what was known
-			}
-			c.Lock()
-			if c.m == nil {
-				c.m = map[string]loginUsageEntry{}
-			}
-			c.m[key] = loginUsageEntry{time.Now(), q}
-			c.Unlock()
+			q := loginReading(ctx, l).q
 			mu.Lock()
 			out[l.User] = q
 			mu.Unlock()
-		}(l)
+		}()
 	}
 	wg.Wait()
 	usageRead(agent, out) // a window not started: the warm-up looks now
 	return out
 }
 
-// usageLogins are the accounts whose allowance LoginUsage asks for, and
-// the agent they are read once a minute as: a plugin's accounts are asked
-// for by the provider's id or as plugin:<id>, whichever names them. False
-// for an agent that tells none, and for the built-in Grok, read by home.
-func usageLogins(agent string) (logins []Login, known string, ok bool) {
+// loginReading is l's allowance as LoginUsage and the Usage page both show
+// it, one reading for the two: what was read less than a minute ago comes
+// from the cache, and an account being read is waited for, as long as ctx
+// allows, rather than asked for again — the vendors' endpoints are
+// rate limited, and two readings a moment apart told an account two ways.
+func loginReading(ctx context.Context, l Login) loginUsageEntry {
+	key := l.Agent + "/" + strings.ToLower(l.User)
+	c := &loginUsageCache
+	c.Lock()
+	e, ok := c.m[key]
+	if ok && time.Since(e.at) < time.Minute {
+		c.Unlock()
+		return e
+	}
+	entry := func(read SubscriptionQuota) loginUsageEntry {
+		q := read
+		if q.Error != "" && ok && q.Provider != "claude" {
+			q = e.q // a hiccup keeps what was known
+		}
+		return loginUsageEntry{time.Now(), q, read}
+	}
+	r := c.pending[key]
+	if r == nil {
+		r = &loginRead{done: make(chan struct{})}
+		if c.pending == nil {
+			c.pending = map[string]*loginRead{}
+		}
+		c.pending[key] = r
+		go func() {
+			start := time.Now()
+			// read for all who wait for it: no one's ctx cuts it short, but
+			// it is bounded as the Usage page's refresh is
+			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), subscriptionTimeout)
+			defer cancel()
+			r.e = entry(keepLast(readNow(loginQuota(rctx, l)), l.User))
+			c.Lock()
+			// one dropped meanwhile (StaleAllowance) read too soon, and a
+			// Claude account the user asked to see meanwhile is read again
+			// (AskClaudeUsage), as SubscriptionUsage reads it: neither is kept
+			if c.pending[key] == r {
+				delete(c.pending, key)
+				if l.Agent != "claude" || claudeAsked.Load() <= start.UnixNano() {
+					if c.m == nil {
+						c.m = map[string]loginUsageEntry{}
+					}
+					c.m[key] = r.e
+				}
+			}
+			c.Unlock()
+			close(r.done)
+		}()
+	}
+	c.Unlock()
+	select {
+	case <-r.done:
+		return r.e
+	case <-ctx.Done():
+		// given up on: as a reading cut short would have said
+		return entry(keepLast(SubscriptionQuota{Provider: loginProvider(l), Plan: l.Plan, Windows: []QuotaWindow{}, Error: ctx.Err().Error()}, l.User))
+	}
+}
+
+// usageLogins are the accounts whose allowance LoginUsage asks for, each
+// read once a minute as its Agent: a plugin's accounts, asked for by the
+// provider's id or as plugin:<id>, whichever names them, as plugin:<id>.
+// False for an agent that tells none, and for the built-in Grok, read by
+// home.
+func usageLogins(agent string) (logins []Login, ok bool) {
 	if pp, ok := pluginOfAgent(agent); ok {
-		return pluginUsageLogins(pp), pluginAgent(pp), true
+		return pluginUsageLogins(pp), true
 	}
 	if agent == "grok" {
-		return nil, agent, false
+		return nil, false
 	}
-	logins, ok = builtinLogins(agent)
-	return logins, agent, ok
+	return builtinLogins(agent)
 }
 
 // builtinLogins are the accounts of a built-in subscription whose

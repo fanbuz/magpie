@@ -161,7 +161,7 @@ func (c *lastQuotasT) reported(key string) (SubscriptionQuota, bool) {
 // reading came back and put another first, taking conversations off the
 // account that had them cached (vincentzhang on Discord).
 func lastAllowances(agent string) map[string]Allowance {
-	logins, _, ok := usageLogins(agent)
+	logins, ok := usageLogins(agent)
 	if !ok {
 		return nil
 	}

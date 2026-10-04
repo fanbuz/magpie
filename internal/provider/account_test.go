@@ -78,6 +78,11 @@ func isolate(t *testing.T) {
 	forgetClaudeCredential()
 	forgetClaudeStatus()
 	forgetDevinStatus()
+	// nor an account's allowance another test read, which LoginUsage and
+	// the Usage page share
+	loginUsageCache.Lock()
+	loginUsageCache.m, loginUsageCache.pending = nil, nil
+	loginUsageCache.Unlock()
 	t.Cleanup(func() {
 		claudeKeychain, claudeBase, claudeExecutable = oldKeychain, oldBase, oldExe
 		cursorKeychain, DevinExecutable = oldCursor, oldDevin

@@ -158,7 +158,7 @@ func grokLoginUsage(ctx context.Context) map[string]SubscriptionQuota {
 			if u.m == nil {
 				u.m = map[string]loginUsageEntry{}
 			}
-			u.m[g.Home] = loginUsageEntry{time.Now(), q}
+			u.m[g.Home] = loginUsageEntry{at: time.Now(), q: q}
 			u.Unlock()
 			mu.Lock()
 			out[g.User] = q
