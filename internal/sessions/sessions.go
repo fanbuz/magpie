@@ -946,6 +946,43 @@ func assemble(fs []file, price func(string) *catalog.Price) (Session, bool) {
 	return s, true
 }
 
+// parserFor is the source of truth for both parsing and window admission.
+// A default line reader is Claude-compatible, including both Qoder variants.
+type sessionParser struct {
+	whole  func(file) *state
+	line   func(*state, []byte, bool)
+	claude bool
+}
+
+func parserFor(agent string) sessionParser {
+	switch agent {
+	case "hermes":
+		return sessionParser{whole: parseHermes}
+	case "alma":
+		return sessionParser{whole: parseAlma}
+	case "opencode", "zcode":
+		return sessionParser{whole: parseOpenCode}
+	case "dsh":
+		return sessionParser{whole: parseDsh}
+	case "cline":
+		return sessionParser{whole: parseCline}
+	case "grok":
+		return sessionParser{whole: parseGrok}
+	case "droid":
+		return sessionParser{whole: parseDroid}
+	case "cursor":
+		return sessionParser{whole: parseCursor}
+	case "codex":
+		return sessionParser{line: codexBody}
+	case "pi", "omp":
+		return sessionParser{line: piParse}
+	case "workbuddy":
+		return sessionParser{line: workbuddyLine}
+	default:
+		return sessionParser{line: claudeLine, claude: true}
+	}
+}
+
 // parse reads a file on from where old left it, or from the start.
 func parse(f file, old *state) *state {
 	// Summary caches contain aggregates only. After a restart, a changed
@@ -953,38 +990,13 @@ func parse(f file, old *state) *state {
 	if f.agent == "codex" && old != nil && old.Codex == nil {
 		old = nil
 	}
-	switch f.agent {
-	case "hermes":
-		return parseHermes(f)
-	case "alma":
-		return parseAlma(f)
-	case "opencode", "zcode":
-		return parseOpenCode(f)
-	case "dsh":
-		return parseDsh(f)
-	case "cline":
-		return parseCline(f)
-	case "grok":
-		return parseGrok(f)
-	case "droid":
-		return parseDroid(f)
-	case "cursor":
-		return parseCursor(f)
+	parser := parserFor(f.agent)
+	if parser.whole != nil {
+		return parser.whole(f)
 	}
-	line := claudeLine
-	switch f.agent {
-	case "codex":
-		line = codexLine
-	case "pi", "omp":
-		line = piParse
-	case "workbuddy":
-		line = workbuddyLine
-	default:
-		// Every source read by claudeLine needs its transient revision window.
-		// This includes Qoder and Qoder CN, whose disk summary has aggregates only.
-		if old != nil && old.Claude == nil {
-			old = nil
-		}
+	// Every source using claudeLine must rebuild a missing transient window.
+	if parser.claude && old != nil && old.Claude == nil {
+		old = nil
 	}
 
 	headBytes := headOf(f.path)
@@ -999,13 +1011,10 @@ func parse(f file, old *state) *state {
 	s.ContentHash = prefixHash(f.path, f.size)
 	var head func([]byte) bool
 	if f.agent == "codex" {
-		line = codexBody
-	}
-	if f.agent == "codex" {
 		head = func(b []byte) bool { return codexHead(s, b, f.main) }
 	}
 	off, err := scanAt(f.path, s.Off, head, func(b []byte, _, _ int64) bool {
-		line(s, b, f.main)
+		parser.line(s, b, f.main)
 		return true
 	})
 	if err == nil {

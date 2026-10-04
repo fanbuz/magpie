@@ -210,6 +210,12 @@ func readCalls(f file) *callFile {
 		st.ContentHash = prefixHash(f.path, f.size)
 		writeCalls(st, start, continued)
 	}
+	// Do not turn a one-time historical scan into an indefinitely retained
+	// window. Previously retained windows may survive idle time in spare slots.
+	if st.Claude != nil && (old == nil || old.Claude == nil) && !workingRevision(f.mod.UnixNano(), time.Now()) {
+		st = st.withoutRevisions()
+	}
+
 	st.dirty = nil
 	callsMu.Lock()
 	if generation == callGeneration {

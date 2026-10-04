@@ -5,12 +5,22 @@ import (
 	"time"
 )
 
-// Each cache retains at most eight files and 8192 index entries. Bounded
-// Claude windows compete by source size (the cost of rebuilding), with recency
-// breaking ties. They have no idle deadline; Codex indexes still expire.
+// Each cache retains at most eight files and 8192 index entries.
+// Recent sources take priority over idle windows, then compete by reparse
+// cost (source size). Cold-only historical Claude sources keep no window;
+// an already retained idle window can use spare capacity. Codex still expires.
 const revisionIdle = 5 * time.Minute
 const revisionFiles = 8
 const revisionEntries = 8192
+
+// A pause longer than five minutes must not demote a large working session
+// behind tiny subagent logs. After an hour, recent work takes priority; idle
+// Claude windows are not discarded unless that capacity is actually needed.
+const revisionWorking = time.Hour
+
+func workingRevision(mod int64, now time.Time) bool {
+	return mod >= now.Add(-revisionWorking).UnixNano()
+}
 
 func recentRevision(mod int64, weight int, now time.Time) bool {
 	return weight > 0 && weight <= revisionEntries && mod >= now.Add(-revisionIdle).UnixNano()
@@ -89,8 +99,8 @@ func summaryRevisionWindows(todo []file, now time.Time) map[string]bool {
 		}
 	}
 	for _, f := range todo {
-		switch f.agent {
-		case "claude", "claude-desktop", "qoder", "qoder-cn":
+		_, retained := candidates[f.path]
+		if parserFor(f.agent).claude && (retained || workingRevision(f.mod.UnixNano(), now)) {
 			candidates[f.path] = revisionCandidate{path: f.path, mod: f.mod.UnixNano(), weight: claudeRevisionEntries, size: f.size, bounded: true}
 		}
 	}
@@ -103,6 +113,10 @@ func summaryRevisionWindows(todo []file, now time.Time) map[string]bool {
 
 func retainedRevisions(candidates []revisionCandidate, now time.Time) map[string]bool {
 	sort.Slice(candidates, func(i, j int) bool {
+		recentI, recentJ := workingRevision(candidates[i].mod, now), workingRevision(candidates[j].mod, now)
+		if recentI != recentJ {
+			return recentI
+		}
 		if candidates[i].size != candidates[j].size {
 			return candidates[i].size > candidates[j].size
 		}

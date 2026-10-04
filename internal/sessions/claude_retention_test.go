@@ -159,7 +159,10 @@ func TestClaudeWindowReservationsAndRemoval(t *testing.T) {
 	for i := 0; i < revisionFiles; i++ {
 		cache[fmt.Sprint("disk-only-", i)] = &state{Size: 1 << 30}
 	}
-	windows := summaryRevisionWindows([]file{{path: path, agent: "claude", size: 1024, mod: now}}, now)
+	cache[path] = cache[path].withoutRevisions()
+	// An additional Claude-compatible source uses the same default dispatch;
+	// retention must not carry a second hard-coded list of agent names.
+	windows := summaryRevisionWindows([]file{{path: path, agent: "claude-compatible", size: 1024, mod: now}}, now)
 	if !windows[path] || len(windows) != 1 {
 		t.Fatal("disk-only summaries reserved phantom slots", windows)
 	}
