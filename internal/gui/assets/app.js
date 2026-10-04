@@ -9480,7 +9480,7 @@ function balanceFix(p) {
 }
 
 // accountQuota: an account's allowance as a line of small meters under its
-// name, the reset time on the ones nearly used up, and any credit balance.
+// name, the reset time on the ones nearly used up, credits and held resets.
 function accountQuota(data, user, cap = 0) {
   const line = el("div", "aq");
   if (!data) {
@@ -9491,6 +9491,13 @@ function accountQuota(data, user, cap = 0) {
   if (q?.asOf && !q.error) {
     line.classList.add("stale");
     line.append(el("span", "aq-asof", asOfText(q)));
+  }
+  if (q?.resets?.count && !q.error) {
+    const words = resetsWords(q.resets);
+    const resets = el("span", "aq-w aq-resets");
+    resets.title = [words.textContent, words.title].filter(Boolean).join("\n");
+    resets.append(words.querySelector(".resets-n"));
+    line.append(resets);
   }
   // an account on no plan says so, whatever else can be read of it
   const noPlan = q?.plan === "No plan" ? [t("No plan")] : [];
