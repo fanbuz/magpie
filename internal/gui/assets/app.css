@@ -834,7 +834,13 @@ body.window .field.solo { grid-column: auto; }
 .led-strip .blk { min-width: 0; padding: 11px 15px 10px; }
 .led-strip .blk + .blk { border-left: 1px solid var(--line-2); }
 .led-strip .k { display: block; font-size: 11px; color: var(--muted); }
-.led-strip .v { display: block; margin-top: 2px; font-size: 22px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.2; white-space: nowrap; }
+.led-strip .v { display: block; margin-top: 2px; font-size: 22px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* a speed and how many replies it is of: the count smaller, after the
+   figure or under it, and neither past the card, which the page would
+   scroll sideways for */
+.led-strip .v.apart { white-space: normal; }
+.led-strip .v.apart .fig { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top; }
+.led-strip .v.apart .of { font-size: 13px; font-weight: 500; letter-spacing: 0; color: var(--muted); white-space: nowrap; }
 .led-strip .v.cost { color: var(--green); }
 .led-strip .sub { display: block; margin-top: 3px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .led-strip .sub b { font-weight: 600; color: var(--fg-2); }

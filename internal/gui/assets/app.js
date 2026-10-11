@@ -16666,7 +16666,14 @@ function ledGroupSpeed(x) {
   const vTitle = !v || !kv ? "" : f ? t(kv === 1 ? "Measured on {k} reply, from its first token to its end" : "Measured on {k} replies, from their first token to their end", { k: ledNum(kv) })
     : t(kv === 1 ? "Measured on {k} reply, from its first token to its end; the others tell no speed" : "Measured on {k} replies, from their first token to their end; the others tell no speed", { k: ledNum(kv) });
   const fTitle = !f || !kf ? "" : t(kf === 1 ? "At least: {k} reply read from a session file, which doesn't say when its answer began, so time before that is counted too" : "At least: {k} replies read from session files, which don't say when their answers began, so time before that is counted too", { k: ledNum(kf) });
-  return { v: v || f, text: [measured, floor].filter(Boolean).join(" · "), main: measured || floor, floor: measured ? floor : "", title: [vTitle, fTitle].filter(Boolean).join("\n") };
+  // main as its figure and the count after it, "125 tok/s" and " (1)", so
+  // a narrow card can put the count under the figure (the count alone
+  // when the language doesn't put it after the figure)
+  const apart = (s, k, pre) => {
+    const fig = pre + t("{n} tok/s", { n: ledNum(Math.round(s)) }), all = pre + say(s, k);
+    return k && all.startsWith(fig) ? [fig, all.slice(fig.length)] : [all, ""];
+  };
+  return { v: v || f, text: [measured, floor].filter(Boolean).join(" · "), main: measured || floor, mainApart: v ? apart(v, kv, "") : apart(f, kf, "≥"), floor: measured ? floor : "", title: [vTitle, fTitle].filter(Boolean).join("\n") };
 }
 // their mean wait for the first token, 0 for none
 const ledTTFT = (x) => x?.timed > 0 ? x.ttft_ms / x.timed : 0;
@@ -17046,9 +17053,18 @@ function renderLedgerDash(l) {
   // how fast the streamed replies wrote, and how long they took to begin (#860)
   // a floor beside a measured speed goes under it, the card's figure kept whole
   const gs = ledGroupSpeed(l);
-  block("Output speed", gs ? gs.main : "—",
+  const speed = block("Output speed", gs ? gs.main : "—",
     line(...[ledTTFT(l) ? t("first token in {ms} on average", { ms: ledTook(ledTTFT(l)) }) : t("no streamed replies timed")].concat(gs?.floor ? [" · ", gs.floor] : [])),
     "", [gs?.title, t("Output tokens a second after the first, over the streamed replies") + ". " + t("A reply that reasoned counts only its answer, from its first text: the reasoning was written before the stream showed it")].filter(Boolean).join("\n"));
+  // the count of replies smaller after the figure, and under it when the
+  // card is too narrow for both: "48 token/秒（781 次）" ran past a
+  // 983px window's card and the page scrolled sideways under it
+  const [fig, of] = gs?.mainApart || [];
+  if (of) {
+    const v = speed.querySelector(".v"), gap = of.match(/^\s*/)[0];
+    v.classList.add("apart");
+    v.replaceChildren(el("span", "fig", fig), gap, el("span", "of", of.slice(gap.length)));
+  }
   drawLedTrend();
 }
 

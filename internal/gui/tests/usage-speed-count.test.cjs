@@ -132,7 +132,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
     t.after(() => browser.close());
     for (const lang of Object.keys(L)) {
-      for (const width of [1400, 560]) {
+      // 983: the window of the report of a sideways bar under the Usage
+      // page, where the card's figure and its count ran past the card
+      for (const width of [1400, 983, 560]) {
         const w = L[lang];
         // sol: one measured at 125 and 259 floors at 50; astra: two measured
         // at 62; Claude Code: 30 floors at 100; the period: three measured
@@ -187,7 +189,14 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert((await kpi.locator(".sub").textContent()).includes("≥" + w.tok(54, 289)), "the floor under it: " + (await kpi.locator(".sub").textContent()));
           assert((await kpi.getAttribute("title")).startsWith(w.measured(3, false) + "\n" + w.floorTip(289)), "the card says what it is of");
           if (w.kpi) assert.equal((await kpi.locator(".k").textContent()).trim(), w.kpi);
-          assert(await kpi.locator(".v").evaluate((v) => v.scrollWidth <= v.clientWidth + 1), "the card's figure is read whole");
+          // within its card, the figure whole and the count after or under it
+          const fits = await kpi.evaluate((b) => {
+            const card = b.getBoundingClientRect(), v = b.querySelector(".v"), fig = v.querySelector(".fig") || v, r = document.createRange();
+            r.selectNodeContents(v);
+            return { right: r.getBoundingClientRect().right, card: card.right, whole: fig.scrollWidth <= fig.clientWidth + 1 };
+          });
+          assert(fits.right <= fits.card + 1, `the figure ends at ${fits.right}, past its card at ${fits.card}`);
+          assert(fits.whole, "the card's figure is read whole");
 
           // the ranking by speed: what each row says, ordered by it, the floor's bar its floor
           await reader.click(p, p.locator("#ledMetric .opt").nth(3));
@@ -208,8 +217,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert.equal((await p.locator("#ledKpi .blk").nth(4).locator(".v").textContent()).trim(), cc);
           assert((await p.locator("#ledKpi .blk").nth(4).getAttribute("title")).startsWith(ccTip));
 
-          // no sideways scroll of the page
+          // no sideways scroll of the page: the view is what scrolls, not the document
           assert(await p.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), "no sideways scroll");
+          const view = await p.locator("#view-usage").evaluate((v) => [v.scrollWidth, v.clientWidth]);
+          assert(view[0] <= view[1] + 1, `the Usage page scrolls sideways: ${view[0]} in ${view[1]}`);
           assert.deepEqual(errors, []);
           await ctx.close();
         });
