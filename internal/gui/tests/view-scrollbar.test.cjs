@@ -2,8 +2,9 @@
 // A page that runs longer than the window shows a scrollbar (PAMI on
 // Discord: no page of the Mac app had one). The pages' scrollbar was
 // hidden everywhere; now on the Mac (body.mac) a page has a thin thumb of
-// 8px, and elsewhere the 10px one every other list has. In WebKit, which
-// the Mac app is, and Chromium.
+// 8px, and elsewhere the 10px one every other list has; a page wider than
+// the window has a sideways bar as thin. In WebKit, which the Mac app is,
+// and Chromium.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -60,6 +61,19 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       for (const v of document.querySelectorAll(".view")) { v.style.display = "none"; v.offsetWidth; v.style.display = ""; }
     });
     assert.equal(await bar(), 8, "a long page has no scrollbar on the Mac");
+    // and one wider than the window, as the Usage page was under an Output
+    // speed card that ran past it at 983px: its sideways bar as thin as the
+    // one down its side, not the system's 15-17px
+    const side = await page.evaluate(() => {
+      const v = document.querySelector("#view-routing"), wide = document.createElement("div");
+      wide.style.cssText = "width: 3000px; height: 1px";
+      v.append(wide);
+      v.style.display = "none"; v.offsetWidth; v.style.display = "";
+      const h = v.offsetHeight - v.clientHeight - parseFloat(getComputedStyle(v).borderTopWidth) - parseFloat(getComputedStyle(v).borderBottomWidth);
+      wide.remove();
+      return h;
+    });
+    assert.equal(side, 8, "a wide page's sideways bar on the Mac");
     const thumb = await page.evaluate(() => getComputedStyle(document.querySelector("#view-routing"), "::-webkit-scrollbar-thumb").backgroundColor);
     assert.notEqual(thumb, "rgba(0, 0, 0, 0)", "the thumb is drawn in no colour");
     assert.deepEqual(errors, []);
