@@ -60,9 +60,9 @@ Be concise, structured, and focused on helping the next LLM seamlessly continue 
 const codexSummaryPrefix = `Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:`
 
 func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
-	// Responses over a WebSocket: 426 sends Codex to plain HTTP at once
+	// Native WebSocket turns keep their upstream connection and sign-in.
 	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
-		http.Error(w, "magpie speaks HTTP", http.StatusUpgradeRequired)
+		s.codexSocket(w, r)
 		return
 	}
 	// the pool's accounts and their model lists say they are this Codex, or
@@ -986,7 +986,7 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 	call.Route = tr.ID
 	s.record(call)
 	servedProvider, servedAccount := codexServed(base, r.Header, on)
-	rec := usage.Record{RouteID: tr.ID, Time: start, Agent: call.Agent,
+	rec := usage.Record{UpstreamTransport: httpTransport(res.Header), RouteID: tr.ID, Time: start, Agent: call.Agent,
 		Provider: servedProvider, Host: provider.HostOf(base), ProviderAccount: servedAccount, Model: call.Model,
 		Requested: call.Model, Served: served,
 		Input: uu.Input, Output: uu.Output, CacheRead: uu.CacheRead, CacheWrite: uu.CacheWrite,

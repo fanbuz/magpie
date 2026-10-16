@@ -21,9 +21,9 @@ const now = Date.now();
 
 const ROWS = [
   // the gateway's: a failure the vendor explained
-  { t: new Date(now - 60e3).toISOString(), agent: "codex", agentName: "Codex", icon: "codex-color", provider: "relay", providerName: "Relay", host: "team", req: "sol", model: "gpt-6-sol", in: 0, out: 0, ms: 610, status: 429, err: "Relay: slow down, please", err_type: "rate_limit_error", rid: "req_011abc", ep: "/v1/responses", session: "019a2b", cost: 0, priced: false },
+  { t: new Date(now - 60e3).toISOString(), agent: "codex", agentName: "Codex", icon: "codex-color", provider: "relay", providerName: "Relay", host: "team", req: "sol", model: "gpt-6-sol", in: 0, out: 0, ms: 610, status: 429, transport: "http", err: "Relay: slow down, please", err_type: "rate_limit_error", rid: "req_011abc", ep: "/v1/responses", session: "019a2b", cost: 0, priced: false },
   // the gateway's: answered, with the id and the protocol it was turned into
-  { t: new Date(now - 120e3).toISOString(), agent: "claude", agentName: "Claude Code", icon: "claudecode-color", provider: "relay", providerName: "Relay", host: "team", req: "sonnet", model: "sonnet", served: "sonnet", in: 300, out: 40, ms: 2380, ttft_ms: 700, sent_ms: 40, status: 200, kind: "collab_spawn", rid: "chatcmpl-77", ep: "/v1/messages → /v1/chat/completions", cost: 0.01, priced: true },
+  { t: new Date(now - 120e3).toISOString(), agent: "claude", agentName: "Claude Code", icon: "claudecode-color", provider: "relay", providerName: "Relay", host: "team", req: "sonnet", model: "sonnet", served: "sonnet", in: 300, out: 40, ms: 2380, ttft_ms: 700, sent_ms: 40, status: 200, transport: "sse", kind: "collab_spawn", rid: "chatcmpl-77", ep: "/v1/messages → /v1/chat/completions", cost: 0.01, priced: true },
   // a session file's: nothing went wrong
   { t: new Date(now - 180e3).toISOString(), agent: "claude-desktop", agentName: "Claude Desktop", icon: "claude-color", provider: "claude", providerName: "Claude", req: "claude-opus-5[1m]", model: "claude-opus-5", served: "claude-opus-5", effort: "xhigh", ms: 4200, in: 1000, out: 200, cache_read: 4000, cache_write: 500, status: 0, rid: "req_log", session: "s2", session_account: "claude@example.com", source: "log", cost: 0.02, priced: true },
   // a session file's: the error that ended the call
@@ -142,8 +142,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         // a failure the gateway logged: what the vendor said, in the details
         await reader.click(p, rows.nth(0));
-        assert.deepEqual(await labels(), w.labels.fail);
+        assert.deepEqual(await labels(), [...w.labels.fail, ...(lang === "zh" ? ["客户端传输", "上游传输"] : ["Client transport", "Upstream transport"])]);
         const v = await values();
+        assert.equal(v.at(-2), "HTTP");
         assert.equal(v[0], "429");
         assert.equal(v[1], "rate_limit_error");
         assert.equal(v[2], "Relay: slow down, please");
@@ -162,11 +163,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await p.locator(".led tbody tr.led-detail").count(), 0, "a second click closes it");
         assert.equal(await top(), before);
         await reader.click(p, rows.nth(1));
-        assert.deepEqual(await labels(), w.labels.ok);
+        assert.deepEqual(await labels(), [...w.labels.ok, ...(lang === "zh" ? ["客户端传输", "上游传输"] : ["Client transport", "Upstream transport"])]);
         // how it went and how long, which the row says only in its last columns (#799)
         assert.deepEqual((await values()).slice(0, 2).map((v) => v.replace(/[^\d.]/g, "")), ["200", "2.4"]);
         // how fast it wrote (#860)
         // its tokens, the cache's beside in and out, though none was read (#1839)
+        assert.equal((await values()).at(-2), lang === "zh" ? "HTTP 流式（SSE）" : "HTTP streaming (SSE)");
         assert.equal((await values())[2], w.tokens);
         assert.equal((await values())[3], w.speed);
         assert.deepEqual((await values()).slice(4, 8), ["chatcmpl-77", "/v1/messages → /v1/chat/completions", "Anthropic → Chat", w.subagent]);
@@ -175,9 +177,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await reader.click(p, rows.nth(2));
         assert.deepEqual(await p.locator(".led tbody tr.led-detail").count(), 2);
         assert(!(await p.locator(".led-detail").nth(1).locator("dd.bad").count()), "a session file's success has nothing in red");
-        assert.equal((await p.locator(".led-detail").nth(1).locator("dd").last().textContent()), w.noStatus);
+        assert.equal((await p.locator(".led-detail").nth(1).locator("dd").allTextContents()).slice(-3, -2)[0], w.noStatus);
         await reader.click(p, rows.nth(3));
-        assert.deepEqual(await p.locator(".led-detail").nth(2).locator("dt:not(.lc-opt)").allTextContents(), w.labels.logFail);
+        assert.deepEqual(await p.locator(".led-detail").nth(2).locator("dt:not(.lc-opt)").allTextContents(), [...w.labels.logFail, ...(lang === "zh" ? ["客户端传输", "上游传输"] : ["Client transport", "Upstream transport"])]);
         assert.equal(await p.locator(".led-detail").nth(2).locator("dd").nth(2).textContent(), "You've hit your limit · resets 3am");
 
         // #1532: of the 104 s before the vendor had the request, magpie's own

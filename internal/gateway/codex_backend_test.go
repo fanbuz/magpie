@@ -17,6 +17,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/yetone/magpie/internal/codexcat"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/usage"
 )
 
@@ -775,9 +776,13 @@ func TestCodexModelsEtagTagged(t *testing.T) {
 	}
 }
 
-// Responses over a WebSocket are turned away so Codex uses HTTP at once.
+// Recording still uses HTTP until socket recording preserves its guarantees.
 func TestCodexWebSocketUpgradeRequired(t *testing.T) {
+	fresh(t)
 	chatgpt(t, func(w http.ResponseWriter, r *http.Request) { t.Error("sent to ChatGPT") })
+	if err := settings.SetGatewayConversations(true); err != nil {
+		t.Fatal(err)
+	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", CodexPath+"/responses", nil)
 	req.Header.Set("Upgrade", "websocket")

@@ -875,6 +875,9 @@ function ledDetail(r, cols) {
   // it was on, or not through the gateway
   if (!r.archive && !r.computer && (providers?.gateway?.archive?.on ?? state.settings?.requestArchive)) add("Request archive", t("Not archived"), "muted");
   if (r.source === "log") add("Data source", t("Read from the agent's session file. The account is shown only when local metadata identifies it; no service provider is inferred."), "muted");
+  const transportName = (v) => ({ websocket: "WebSocket", sse: t("HTTP streaming (SSE)"), http: "HTTP" })[v] || t("Unknown");
+  add("Client transport", transportName(r.transport));
+  add("Upstream transport", transportName(r.upstream_transport));
   const tr = el("tr", "led-detail");
   const td = el("td");
   td.colSpan = cols;

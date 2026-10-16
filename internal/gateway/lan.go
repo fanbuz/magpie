@@ -456,6 +456,11 @@ func accountOf(p provider.Provider) string {
 }
 
 func appendUsage(r *http.Request, rec usage.Record) {
+	if rec.Transport == "" {
+		if w, ok := r.Context().Value(transportKey{}).(*transportWriter); ok {
+			rec.Transport = w.transport
+		}
+	}
 	if rec.Session == "" {
 		rec.Session = sessionOf(r.Header)
 	}

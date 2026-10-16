@@ -22,6 +22,12 @@ import (
 
 // Record is one call.
 type Record struct {
+	// UpstreamTransport is independent of the client-facing transport.
+	// Empty means it was not observed, including old or session-file records.
+	UpstreamTransport string `json:"upstream_transport,omitempty"`
+	// Transport is the client-facing response transport: websocket, sse or http.
+	// Empty means it was not recorded; never infer it from today's configuration.
+	Transport       string    `json:"transport,omitempty"`
 	Operation       string    `json:"operation,omitempty"`
 	RouteID         int64     `json:"route_id,omitempty"` // the gateway Route, shared by its attempts
 	Time            time.Time `json:"t"`

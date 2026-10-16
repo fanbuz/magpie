@@ -728,3 +728,28 @@ go test -tags nogui ./internal/provider -run 'TestGroup|TestCodexCreditsSwitch|T
 
 The gateway's `TestMain` gives the package a home of its own, so these tests
 never read real providers or accounts.
+
+## Native Codex WebSocket prototype (#2472)
+
+`codexSocket` in [codex_socket.go](../../internal/gateway/codex_socket.go)
+relays `/backend-api/codex/responses` over WebSocket on the client's existing
+sign-in. The upstream handshake completes before the client is upgraded.
+The socket remains on that sign-in and that upstream connection; requests and
+`previous_response_id` are forwarded unchanged. There is no automatic replay
+or account-pool failover. A client or upstream disconnect ends pending calls.
+
+This initial path requires no pool routing, caps, managed keys, masking, JS
+middleware, conversation recording or Codex model overrides. Those settings
+retain HTTP/SSE via 426 before upgrade; settings are checked again for each
+create. Namespaced models and unsupported events are refused on an established
+socket. `/v1/responses` still uses its existing HTTP/SSE behavior.
+
+Each response has its own trace and usage row. `transport` observes the
+client-facing response; `upstream_transport` is independently observed for native
+Codex relays. Other upstream paths remain unknown until instrumented. Both fields
+survive JSONL, packed request rows and CSV; the Usage detail shows both, with
+missing/old values unknown. No inference is made from today's provider settings.
+
+The [account-pool and recovery proposal](../design/codex-websocket.md) defines
+the remaining work. This prototype does not satisfy that full contract and
+should not be presented as pooled WebSocket support.

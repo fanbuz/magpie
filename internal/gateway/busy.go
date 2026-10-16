@@ -38,6 +38,7 @@ func (s *Server) Busy() Busy {
 // counted is h with its requests counted for Busy.
 func (s *Server) counted(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w, r = observeTransport(w, r)
 		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions || strings.HasPrefix(r.URL.Path, "/_magpie/") || strings.HasPrefix(r.URL.Path, "/mcp/") {
 			h.ServeHTTP(w, r)
 			return
