@@ -21,16 +21,16 @@ const now = Date.now();
 
 const ROWS = [
   // the gateway's: a failure the vendor explained
-  { t: new Date(now - 60e3).toISOString(), agent: "codex", agentName: "Codex", icon: "codex-color", provider: "relay", providerName: "Relay", host: "team", req: "sol", model: "gpt-6-sol", in: 0, out: 0, ms: 610, status: 429, transport: "http", err: "Relay: slow down, please", err_type: "rate_limit_error", rid: "req_011abc", ep: "/v1/responses", session: "019a2b", cost: 0, priced: false },
+  { t: new Date(now - 60e3).toISOString(), agent: "codex", agentName: "Codex", icon: "codex-color", provider: "relay", providerName: "Relay", host: "team", req: "sol", model: "gpt-6-sol", in: 0, out: 0, ms: 610, status: 429, request_type: "sync", transport: "http", err: "Relay: slow down, please", err_type: "rate_limit_error", rid: "req_011abc", ep: "/v1/responses", session: "019a2b", cost: 0, priced: false },
   // the gateway's: answered, with the id and the protocol it was turned into
-  { t: new Date(now - 120e3).toISOString(), agent: "claude", agentName: "Claude Code", icon: "claudecode-color", provider: "relay", providerName: "Relay", host: "team", req: "sonnet", model: "sonnet", served: "sonnet", in: 300, out: 40, ms: 2380, ttft_ms: 700, sent_ms: 40, status: 200, transport: "sse", kind: "collab_spawn", rid: "chatcmpl-77", ep: "/v1/messages → /v1/chat/completions", cost: 0.01, priced: true },
+  { t: new Date(now - 120e3).toISOString(), agent: "claude", agentName: "Claude Code", icon: "claudecode-color", provider: "relay", providerName: "Relay", host: "team", req: "sonnet", model: "sonnet", served: "sonnet", in: 300, out: 40, ms: 2380, ttft_ms: 700, sent_ms: 40, status: 200, request_type: "stream", transport: "http", kind: "collab_spawn", rid: "chatcmpl-77", ep: "/v1/messages → /v1/chat/completions", cost: 0.01, priced: true },
   // a session file's: nothing went wrong
   { t: new Date(now - 180e3).toISOString(), agent: "claude-desktop", agentName: "Claude Desktop", icon: "claude-color", provider: "claude", providerName: "Claude", req: "claude-opus-5[1m]", model: "claude-opus-5", served: "claude-opus-5", effort: "xhigh", ms: 4200, in: 1000, out: 200, cache_read: 4000, cache_write: 500, status: 0, rid: "req_log", session: "s2", session_account: "claude@example.com", source: "log", cost: 0.02, priced: true },
   // a session file's: the error that ended the call
   { t: new Date(now - 240e3).toISOString(), agent: "claude-desktop", agentName: "Claude Desktop", icon: "claude-color", provider: "claude", providerName: "Claude", model: "", in: 0, out: 0, status: 0, err: "You've hit your limit · resets 3am", err_type: "rate_limit", rid: "req_lim", session: "s3", source: "log", cost: 0, priced: false },
   // the gateway's, answered on its second try (#1532): the vendor held the
   // first ~103 s before its 503, which isn't magpie's time
-  { t: new Date(now - 300e3).toISOString(), agent: "codex", agentName: "Codex", icon: "codex-color", provider: "opencode-go", providerName: "OpenCode Go", host: "opencode.ai", req: "opencode-go/deepseek-flash", model: "deepseek-flash", served: "deepseek-flash", effort: "max", in: 7064, out: 5373, cache_read: 314624, reasoning: 4946, ms: 160000, ttft_ms: 141000, sent_ms: 104000, own_ms: 180, retried_ms: 103000, tries: 2, status: 200, ep: "/backend-api/codex/responses", session: "01a12671", cost: 0.005, priced: true },
+  { t: new Date(now - 300e3).toISOString(), agent: "codex", agentName: "Codex", icon: "codex-color", provider: "opencode-go", providerName: "OpenCode Go", host: "opencode.ai", transport: "websocket", req: "opencode-go/deepseek-flash", model: "deepseek-flash", served: "deepseek-flash", effort: "max", in: 7064, out: 5373, cache_read: 314624, reasoning: 4946, ms: 160000, ttft_ms: 141000, sent_ms: 104000, own_ms: 180, retried_ms: 103000, tries: 2, status: 200, ep: "/backend-api/codex/responses", session: "01a12671", cost: 0.005, priced: true },
 ];
 
 function page(q) {
@@ -100,6 +100,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         const rows = p.locator(".led tbody tr.led-row");
         assert.equal(await rows.count(), 5);
+        assert.deepEqual(await rows.locator(".request-type").allTextContents(), lang === "zh"
+          ? ["非流式", "流式", "未知", "未知", "WS"]
+          : ["Non-streaming", "Stream", "Unknown", "Unknown", "WS"]);
         // how each went, in its row: the gateway's status and the vendor's error
         // type; a session file's plain "Succeeded" or the error that ended it
         const status = await rows.evaluateAll((trs) => trs.map((tr) => tr.querySelector(".st").textContent.trim()));
@@ -168,7 +171,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual((await values()).slice(0, 2).map((v) => v.replace(/[^\d.]/g, "")), ["200", "2.4"]);
         // how fast it wrote (#860)
         // its tokens, the cache's beside in and out, though none was read (#1839)
-        assert.equal((await values()).at(-2), lang === "zh" ? "HTTP 流式（SSE）" : "HTTP streaming (SSE)");
+        assert.equal((await values()).at(-2), "HTTP", "request stream mode is independent of response headers");
         assert.equal((await values())[2], w.tokens);
         assert.equal((await values())[3], w.speed);
         assert.deepEqual((await values()).slice(4, 8), ["chatcmpl-77", "/v1/messages → /v1/chat/completions", "Anthropic → Chat", w.subagent]);

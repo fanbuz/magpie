@@ -48,6 +48,7 @@ func (s *Server) readRequestBody(w http.ResponseWriter, r *http.Request, from pr
 		writeError(w, from, status, err.Error())
 		return nil, false
 	}
+	observeRequestType(r, body)
 	return body, true
 }
 

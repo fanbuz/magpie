@@ -2,6 +2,10 @@
 // kernel adds them to i18n.js's (magpie.strings).
 magpie.strings({
   zh: {
+    "Request type": "请求类型",
+    "Stream": "流式",
+    "Non-streaming": "非流式",
+
     "Client transport": "客户端传输",
     "Upstream transport": "上游传输",
     "Unknown": "未知",
@@ -197,6 +201,10 @@ magpie.strings({
     "Sent upstream as {to}, as the agent spoke it": "以 {to} 协议发往上游，与 agent 所用协议相同",
   },
   "zh-TW": {
+    "Request type": "請求類型",
+    "Stream": "串流",
+    "Non-streaming": "非串流",
+
     "Client transport": "用戶端傳輸",
     "Upstream transport": "上游傳輸",
     "Unknown": "未知",
@@ -392,6 +400,10 @@ magpie.strings({
     "Sent upstream as {to}, as the agent spoke it": "以 {to} 協議發往上游，與 agent 所用協議相同",
   },
   ja: {
+    "Request type": "リクエスト種別",
+    "Stream": "ストリーミング",
+    "Non-streaming": "非ストリーミング",
+
     "Client transport": "クライアント転送",
     "Upstream transport": "上流転送",
     "Unknown": "不明",
@@ -587,6 +599,10 @@ magpie.strings({
     "Sent upstream as {to}, as the agent spoke it": "エージェントと同じ {to} で上流へ送信",
   },
   de: {
+    "Request type": "Anfragetyp",
+    "Stream": "Streaming",
+    "Non-streaming": "Nicht streamend",
+
     "Client transport": "Client-Übertragung",
     "Upstream transport": "Upstream-Übertragung",
     "Unknown": "Unbekannt",

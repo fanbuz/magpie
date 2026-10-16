@@ -480,3 +480,13 @@ still follows the existing Not set up folding rules. The dialog explains that
 restoring visibility does not pin an unconfigured agent into the main list.
 See `agent-bulk-visibility.test.cjs` for persistence, partial selection, failed
 saves, narrow layouts and all five languages in Chromium and WebKit.
+
+### Request type badges
+
+Usage shows Request type without expanding a row, following sub2api's explicit
+request-type precedence. `ws_v2` is WS, `stream` is Stream, `sync` is Non-streaming,
+and missing evidence is Unknown. The gateway records the decoded client's
+explicit stream flag before translation and marks native WS turns as ws_v2.
+Legacy WS/SSE transport fields may establish WS/Stream; HTTP alone cannot
+establish a non-streaming request. Details retain independent client/upstream
+transport. Neither agent identity nor current settings establish a type.

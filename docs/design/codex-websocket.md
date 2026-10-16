@@ -19,6 +19,10 @@ Usage shows client transport and upstream transport independently:
 `websocket`, `sse`, `http`, or unknown when not observed. A client receiving SSE
 from an upstream WebSocket is not shown as end-to-end WebSocket. Existing
 records and local session files must not be classified from today's settings.
+The request table follows sub2api's explicit request-type precedence:
+WS, Stream, Non-streaming or Unknown. New HTTP records use the client's explicit
+stream flag; legacy WS/SSE can establish WS/Stream, but HTTP alone and missing
+fields stay Unknown. No agent gets a default streaming label.
 
 ## Account pools and bindings
 

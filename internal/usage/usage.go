@@ -22,6 +22,8 @@ import (
 
 // Record is one call.
 type Record struct {
+	// RequestType records ws_v2, stream or sync; empty means no evidence.
+	RequestType string `json:"request_type,omitempty"`
 	// UpstreamTransport is independent of the client-facing transport.
 	// Empty means it was not observed, including old or session-file records.
 	UpstreamTransport string `json:"upstream_transport,omitempty"`

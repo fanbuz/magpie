@@ -1336,7 +1336,7 @@ new ResizeObserver(() => {
 // details (#860)
 const LED_COLS = [
   ["Time"], ["Agent"], ["Requested"], ["Provider · account"], ["Sent", "", true], ["Served"], ["Effort", "", true],
-  ["In", "n"], ["Out", "n"], ["Cache write", "n", true], ["Cache read", "n", true], ["Cost", "n"], ["Duration", "n"], ["Speed", "n"], ["Status"],
+  ["In", "n"], ["Out", "n"], ["Cache write", "n", true], ["Cache read", "n", true], ["Cost", "n"], ["Duration", "n"], ["Speed", "n"], ["Request type"], ["Status"],
 ];
 
 // the tokens a reply was seen to write and the ms it took, as
@@ -1684,6 +1684,12 @@ function renderLedger() {
         : floor && ledFloor_(r).turn ? t("At least: {n} output tokens in {ms}, the whole turn. What came after the first token ({after}) is too little to time a speed by: under a second or under 100 tokens, so the wait for it is counted too", { n: ledNum(r.out), ms: ledTook(r.ms), after: ledTook(r.ms - r.ttft_ms) }) + " · " + t("TTFT {ms}", { ms: ledTook(r.ttft_ms) })
         : floor ? t("At least: {n} output tokens in {ms}, from the line that asked for it to its last. The session file has no first token, so the wait for it is counted too", { n: ledNum(r.out), ms: ledTook(r.ms) })
         : r.ttft_ms || untimed || ledFailed_(r) ? "" : timed ? t("The session file has no first token to time a speed from") : t("Not streamed: no first token to time a speed from"));
+    // Explicit request type first, then only observed legacy WS/SSE evidence.
+    // HTTP alone cannot tell a streamed response from a non-streamed one.
+    const requestType = ["ws_v2", "stream", "sync", "unknown"].includes(r.request_type)
+      ? r.request_type : r.transport === "websocket" ? "ws_v2" : r.transport === "sse" ? "stream" : "unknown";
+    const requestLabel = { ws_v2: "WS", stream: t("Stream"), sync: t("Non-streaming"), unknown: t("Unknown") }[requestType];
+    td(el("span", "src request-type", requestLabel));
     const st = el("span", "st");
     // a status when the gateway logged the call; a session file has none,
     // and says only whether it went well

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 )
@@ -12,8 +13,9 @@ type transportKey struct{}
 // including an HTTP error in reply to a request that asked to stream.
 type transportWriter struct {
 	http.ResponseWriter
-	transport string
-	written   bool
+	transport   string
+	requestType string
+	written     bool
 }
 
 func observeTransport(w http.ResponseWriter, r *http.Request) (http.ResponseWriter, *http.Request) {
@@ -48,4 +50,23 @@ func httpTransport(h http.Header) string {
 		return "sse"
 	}
 	return "http"
+}
+
+// Observe the decoded client body before routing or translation changes it.
+// Missing or malformed stream flags stay unknown, never default to sync.
+func observeRequestType(r *http.Request, body []byte) {
+	w, ok := r.Context().Value(transportKey{}).(*transportWriter)
+	if !ok {
+		return
+	}
+	var v struct {
+		Stream *bool `json:"stream"`
+	}
+	if json.Unmarshal(body, &v) != nil || v.Stream == nil {
+		return
+	}
+	w.requestType = "sync"
+	if *v.Stream {
+		w.requestType = "stream"
+	}
 }

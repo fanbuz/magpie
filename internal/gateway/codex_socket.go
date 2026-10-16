@@ -269,7 +269,7 @@ func (s *Server) finishCodexSocketTurn(r *http.Request, t *codexSocketTurn, base
 	ms := time.Since(t.start).Milliseconds()
 	ttft, text := t.first.ms()
 	p, account := codexServed(base, r.Header, nil)
-	rec := usage.Record{Transport: "websocket", UpstreamTransport: "websocket", RouteID: t.route.ID, Time: t.start, Agent: agentOf(r), Provider: p, ProviderAccount: account, Host: provider.HostOf(base), Model: t.model, Requested: t.model, Served: u.Served, Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, Reasoning: u.Reasoning, TierAsked: t.tier, TierSent: t.tier, TierServed: u.Tier, Millis: ms, TTFT: ttft, FirstText: text, Flow: t.first.flowFor(u.Reasoning), Status: status, Error: msg, RequestID: rid, ResponseID: t.id, Endpoint: r.URL.Path, Session: sessionOf(r.Header), NativeSession: nativeSessionOf(r.Header), Stop: u.Stop}
+	rec := usage.Record{RequestType: "ws_v2", Transport: "websocket", UpstreamTransport: "websocket", RouteID: t.route.ID, Time: t.start, Agent: agentOf(r), Provider: p, ProviderAccount: account, Host: provider.HostOf(base), Model: t.model, Requested: t.model, Served: u.Served, Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, Reasoning: u.Reasoning, TierAsked: t.tier, TierSent: t.tier, TierServed: u.Tier, Millis: ms, TTFT: ttft, FirstText: text, Flow: t.first.flowFor(u.Reasoning), Status: status, Error: msg, RequestID: rid, ResponseID: t.id, Endpoint: r.URL.Path, Session: sessionOf(r.Header), NativeSession: nativeSessionOf(r.Header), Stop: u.Stop}
 	s.trace.update(t.route, func(tr *Route) {
 		tr.Done = true
 		tr.Status = status

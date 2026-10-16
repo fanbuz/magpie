@@ -87,7 +87,7 @@ func TestCodexSocketContinuesAndCountsEachResponse(t *testing.T) {
 		t.Fatalf("got %d usage rows, want two", len(rows))
 	}
 	for i, r := range rows {
-		if r.Transport != "websocket" || r.UpstreamTransport != "websocket" || r.Input != 7 || r.CacheRead != 5 || r.Output != 2 || r.ResponseID != fmt.Sprintf("r%d", i+1) || r.Status != 200 {
+		if r.RequestType != "ws_v2" || r.Transport != "websocket" || r.UpstreamTransport != "websocket" || r.Input != 7 || r.CacheRead != 5 || r.Output != 2 || r.ResponseID != fmt.Sprintf("r%d", i+1) || r.Status != 200 {
 			t.Errorf("wrong usage: %+v", r)
 		}
 	}
