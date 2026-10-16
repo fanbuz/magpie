@@ -1689,7 +1689,7 @@ function renderLedger() {
     const requestType = ["ws_v2", "stream", "sync", "unknown"].includes(r.request_type)
       ? r.request_type : r.transport === "websocket" ? "ws_v2" : r.transport === "sse" ? "stream" : "unknown";
     const requestLabel = { ws_v2: "WS", stream: t("Stream"), sync: t("Non-streaming"), unknown: t("Unknown") }[requestType];
-    td(el("span", "src request-type", requestLabel));
+    td(el("span", "src request-type request-type-" + requestType, requestLabel));
     const st = el("span", "st");
     // a status when the gateway logged the call; a session file has none,
     // and says only whether it went well
