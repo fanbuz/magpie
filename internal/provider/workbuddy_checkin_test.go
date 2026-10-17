@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -297,6 +298,47 @@ func TestWorkBuddyCheckinOfflineRetriesSoon(t *testing.T) {
 	}
 	if want := []int{0, 1, 3, 7, 15, 31, 61, 91}; !slices.Equal(tried, want) {
 		t.Fatalf("tried at %v, want %v", tried, want)
+	}
+}
+
+// A moved account's check-in goes through the plugin's fetch, whose failure
+// comes back as Bun's text, not a net.Error. The connection reset that
+// plugins #149 showed is a check-in that never got an answer: tried again a
+// minute later, not half an hour. An answer that failed still waits.
+func TestWorkBuddyCheckinPluginResetRetriesSoon(t *testing.T) {
+	f := &fakeWBCheckin{active: true}
+	srv := f.serve(t)
+	now := time.Date(2026, 3, 1, 2, 0, 0, 0, time.UTC)
+	c := wbCheckinFixture(t, srv, &now)
+	reset := true
+	accts := c.accounts()
+	accts[0].via = func(req *http.Request) (*http.Response, error) {
+		if reset {
+			// the reporter's words, as the plugin host passes them on
+			return nil, errors.New("ECONNRESET: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()")
+		}
+		// the plugin signs it
+		for k, v := range wbAuthHeaders(accts[0].site, accts[0].creds) {
+			req.Header.Set(k, v)
+		}
+		return http.DefaultClient.Do(req)
+	}
+	c.accounts = func() []wbAccount { return accts }
+	ctx := context.Background()
+	var l wbCheckinLoop
+	if rs := l.tick(ctx, c); len(rs) != 1 || rs[0].Outcome != CheckinFailed || !rs[0].Offline || !rs[0].Asked {
+		t.Fatalf("reset: %+v", rs)
+	}
+	reset = false
+	now = now.Add(time.Minute)
+	if rs := l.tick(ctx, c); len(rs) != 1 || rs[0].Outcome != CheckinClaimed || !rs[0].Asked {
+		t.Fatalf("a minute on: %+v", rs)
+	}
+
+	for _, msg := range []string{"plugin fetch: HTTP 500", "WorkBuddy refused: code 11140", "Unable to parse the reply"} {
+		if r := wbCheckinFailed(errors.New(msg)); r.Offline {
+			t.Errorf("%q read as never answered", msg)
+		}
 	}
 }
 

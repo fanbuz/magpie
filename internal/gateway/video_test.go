@@ -621,3 +621,41 @@ func TestVideoSecondsAndResolutionAsAsked(t *testing.T) {
 		t.Errorf("1080p on 1.5: %v", sent)
 	}
 }
+
+// The video's URL is in the vendor's answer: one on this computer or its
+// network is not downloaded and streamed back as the video, unless the
+// user's settings.json "fetchPrivate" names it.
+func TestVideoContentAtPrivateAddressNotFetched(t *testing.T) {
+	grokSignedIn(t)
+	inside, hits := secret(t, "secret-bytes")
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/videos/generations":
+			io.WriteString(w, `{"request_id":"req-1"}`)
+		case "/v1/videos/req-1":
+			io.WriteString(w, `{"status":"done","progress":100,"model":"grok-imagine-video","video":{"url":"`+inside.URL+`/admin.mp4","duration":6}}`)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(up.Close)
+	was := provider.GrokBase
+	provider.GrokBase = up.URL + "/v1"
+	t.Cleanup(func() { provider.GrokBase = was })
+	s := New()
+	_, obj, raw, _ := request(t, s, "POST", "/v1/videos", "application/json", `{"model":"grok/grok-imagine-video","prompt":"a kite"}`)
+	id, _ := obj["id"].(string)
+	if id == "" {
+		t.Fatalf("%s", raw)
+	}
+	code, _, raw, _ := request(t, s, "GET", "/v1/videos/"+id+"/content", "", "")
+	if code == 200 || strings.Contains(string(raw), "secret-bytes") || hits.Load() != 0 {
+		t.Fatalf("%d %s, the private service asked %d times", code, raw, hits.Load())
+	}
+	allowPrivate(t, "127.0.0.1")
+	code, _, raw, _ = request(t, s, "GET", "/v1/videos/"+id+"/content", "", "")
+	if code != 200 || string(raw) != "secret-bytes" || hits.Load() != 1 {
+		t.Fatalf("named in fetchPrivate: %d %s", code, raw)
+	}
+}

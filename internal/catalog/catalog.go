@@ -77,7 +77,8 @@ type Model struct {
 	// Tiers, in one ChatGPT account's own model list, are the service
 	// tiers its plan offers on the model ("priority", "ultrafast"); in
 	// another magpie's, the tiers it offers its Codex on the model
-	// (#1234).
+	// (#1234); in a provider plugin's, the tiers it says its vendor serves
+	// the model at (#2514).
 	Tiers []string `json:",omitempty"`
 	// OwnTier is set on a model of a provider the user added by its
 	// address, which the gateway sends the tier Codex asks for as it is

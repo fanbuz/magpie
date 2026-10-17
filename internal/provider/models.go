@@ -155,6 +155,15 @@ func (p Provider) live() ([]catalog.Model, time.Time, bool) {
 	return l.ms, l.at, l.ok
 }
 
+// liveByID are the models of live with this id: what a look at one
+// model, asked for each of a list's, reads instead of the whole list.
+func (p Provider) liveByID(model string) []catalog.Model {
+	if !p.lists() {
+		return nil
+	}
+	return catalog.LiveByID(p.ID, model)
+}
+
 // lists says whether the provider's fetched list is its own to read: not
 // a plugin's, nor a preset's that lists nothing (Preset.NoList).
 func (p Provider) lists() bool {
@@ -2290,7 +2299,8 @@ type Entry struct {
 	// tasks a magpie-served lead writes as text.
 	AgentsV2 bool `json:"-"`
 	// Tiers are the service tiers its list offers Codex on the model:
-	// another magpie's, those it offers its own Codex (#1234)
+	// another magpie's, those it offers its own Codex (#1234); a provider
+	// plugin's, those it says its vendor serves the model at (#2514)
 	Tiers []string `json:"-"`
 	// Released is the model's release day (YYYY-MM-DD) as its list or
 	// models.dev says it, "" when neither does: what a group's template

@@ -956,7 +956,7 @@ func (s *Server) searchRounds(ctx context.Context, q *Request, tool string, in <
 				started = true
 			case KUsage:
 				this.add(ev.Usage)
-				ev.Usage = ev.Usage.plus(before, true)
+				ev.Usage = ev.Usage.carryUpdate(this, before)
 			case KText:
 				if gap && ev.Text != "" {
 					// what it says after a search goes on from what it
@@ -1085,7 +1085,7 @@ func (s *Server) askTranslated(p provider.Provider, to provider.Protocol, model 
 		go func() {
 			defer close(events)
 			defer res.Body.Close()
-			dec := decoder(actual)
+			dec := decoderFor(p, actual)
 			send := func(ev Event) error {
 				select {
 				case events <- ev:

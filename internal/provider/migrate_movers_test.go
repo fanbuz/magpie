@@ -129,6 +129,43 @@ func TestFactoryMover(t *testing.T) {
 	})
 }
 
+// A Factory account added by its API key (fk-…) moves as the plugin's own
+// "Factory API key" sign-in saves one, an api account with its key and
+// whoami's metadata (keyAccount in its index.mjs), not as a sign-in the
+// plugin would try to renew with no refresh token; and comes back a key.
+func TestFactoryKeyMover(t *testing.T) {
+	k := factoryCreds{Access: "fk-key_0123456789abcdef", Key: true, Email: "k@f.com", UserID: "user_k", Region: "eu", Prem: "llm.example.com"}
+	c := factoryCreds{Access: "a1", Refresh: "r1", ExpiresAt: 1_900_000_000_000, Email: "a@f.com"}
+	saved := []savedLogin{
+		{Agent: "factory", User: "k@f.com", First: true, Auth: authOf(t, k)},
+		{Agent: "factory", User: "a@f.com", On: true, Auth: authOf(t, c)},
+	}
+	roundTrip(t, "factory", saved, func(t *testing.T, a, b savedLogin) {
+		ca, _ := factorySaved(a)
+		cb, _ := factorySaved(b)
+		if ca != cb {
+			t.Fatalf("factory %s: %+v, want %+v", a.User, cb, ca)
+		}
+	})
+	loginsMu.Lock()
+	if err := writeLogins(slicesClone(saved)); err != nil {
+		t.Fatal(err)
+	}
+	loginsMu.Unlock()
+	accts, err := movers["factory"].out()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"type": "api", "key": k.Access, "metadata": map[string]any{
+		"email": "k@f.com", "userId": "user_k", "region": "eu", "premBaseHost": "llm.example.com"}}
+	if !reflect.DeepEqual(accts[0].Auth, want) {
+		t.Fatalf("the key account moves as %v, want %v", accts[0].Auth, want)
+	}
+	if accts[1].Auth["type"] != "oauth" {
+		t.Fatalf("a signed-in account moves as %v", accts[1].Auth)
+	}
+}
+
 func TestMiMoMover(t *testing.T) {
 	issued := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
 	c1 := mimoCreds{UserID: "123", CUserID: "c123", PassToken: "p1", DeviceID: "dev1", Region: "sg", Base: "https://aistudio.xiaomimimo.com", Cookies: map[string]string{"serviceToken": "s1", "userId": "123"}, Issued: issued, Name: "Mi One"}

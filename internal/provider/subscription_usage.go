@@ -114,6 +114,10 @@ type SubscriptionQuota struct {
 	// BalanceParts are the Balance's amounts each apart, when the balance
 	// field the user wrote has several or a percent (cardParts)
 	BalanceParts []BalancePart `json:"balanceParts,omitempty"`
+	// BalanceSplit is what the Balance is made of, when the vendor tells
+	// it: DeepSeek's granted credit and the money topped up, each a part
+	// labelled SplitGranted or SplitTopUp
+	BalanceSplit []BalancePart `json:"balanceSplit,omitempty"`
 	// BalanceTrend is the Balance over time, as magpie read it, and when
 	// it runs out at that pace (balance_history.go)
 	BalanceTrend *BalanceTrend `json:"balanceTrend,omitempty"`

@@ -296,12 +296,15 @@ type Try struct {
 	Picked bool   `json:"picked,omitempty"` // Effort is the turn's pick, in place of the agent's
 	// Fixed: the effort the group's member it went to is fixed at, which
 	// Effort is (fitted to the model's levels) whatever was asked
-	Fixed  string    `json:"fixed,omitempty"`
-	Fast   bool      `json:"fast,omitempty"` // sent in its vendor's fast mode, as the group's member it went to is
-	Start  time.Time `json:"start"`
-	Done   bool      `json:"done"`
-	Status int       `json:"status,omitempty"`
-	Millis int64     `json:"ms,omitempty"`
+	Fixed string `json:"fixed,omitempty"`
+	// RuleEffort: the reasoning the group's rule asks the member for
+	// (Rule.UseEffort, #2633), which Effort is whatever was asked
+	RuleEffort string    `json:"ruleEffort,omitempty"`
+	Fast       bool      `json:"fast,omitempty"` // sent in its vendor's fast mode, as the group's member it went to is
+	Start      time.Time `json:"start"`
+	Done       bool      `json:"done"`
+	Status     int       `json:"status,omitempty"`
+	Millis     int64     `json:"ms,omitempty"`
 	// TTFT: ms from Start to its reply's first content, FirstText to its
 	// first text, when it streamed any (#196)
 	TTFT      int64 `json:"ttft,omitempty"`

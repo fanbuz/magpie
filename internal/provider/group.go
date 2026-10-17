@@ -1390,6 +1390,33 @@ func SwitchGroup(id string, on bool) error {
 	return store(f)
 }
 
+// PickGroup sends every request to a Manual group of the user's to its
+// member pick from the next request on (#317), as its card's radios do,
+// from wherever the user switches it: the tray panel (#2489) too. Nothing
+// else of the group changes, and only a Manual group can be switched so.
+func PickGroup(id, pick string) error {
+	f, err := read()
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(f.Groups, func(g Group) bool { return g.ID == id && !g.Hidden })
+	if i < 0 {
+		return fmt.Errorf("magpie has no group %q", id)
+	}
+	g := &f.Groups[i]
+	if g.Routing != Manual {
+		return fmt.Errorf("%s doesn't route by hand: its card picks a model only in Manual routing", g.Name)
+	}
+	if !slices.Contains(g.Members, pick) {
+		return fmt.Errorf("%s is not in %s", pick, g.Name)
+	}
+	if g.Pick == pick {
+		return nil
+	}
+	g.Pick = pick
+	return store(f)
+}
+
 // DisabledGroup is the group of the user's a model id names ("group/<id>",
 // or a model's as GroupFor takes it) when it is switched off.
 func DisabledGroup(id string) (Group, bool) {

@@ -136,6 +136,12 @@ func pagePolicy(r *http.Request, tok string) string {
 	if r.Host != "" {
 		// the page's own folder: not the window's files, nor /api
 		own = r.Host + pluginPagePrefix + tok + "/"
+		// WebKit does not match a scheme-less host source under wails://.
+		// Only the native handler supplies this scheme; web keeps its
+		// relative source so HTTP, HTTPS and reverse proxies still work.
+		if scheme, _ := r.Context().Value(windowSchemeKey{}).(string); scheme != "" {
+			own = scheme + "://" + own
+		}
 	}
 	return strings.Join([]string{
 		"sandbox allow-scripts",

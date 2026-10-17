@@ -877,8 +877,8 @@ func untar(r io.Reader, dst string) error {
 // looked for a few folders deep, and not inside another skill. A hidden
 // folder is an agent's own (.claude, .agents) and is looked in only for its
 // skills folder: some repositories keep their skill only in
-// .claude/skills (#1964, UFO404). A skill found there that the repository
-// also has outside a hidden folder is that one, listed once.
+// .claude/skills (#1964, UFO404). A skill the repository holds twice, in a
+// hidden folder or a plugin's, is listed once (unhiddenFirst).
 func candidates(root, sub string) []Candidate {
 	base := filepath.Join(root, filepath.FromSlash(sub))
 	var out []Candidate
@@ -926,25 +926,78 @@ func inHidden(path string) bool {
 	return slices.ContainsFunc(strings.Split(path, "/"), func(p string) bool { return strings.HasPrefix(p, ".") })
 }
 
-// unhiddenFirst drops a skill in a hidden folder that is the same skill as
-// one outside every hidden folder, or as a hidden one listed before it: an
-// agent's folder often holds a copy of the repository's own skills.
+// unhiddenFirst lists each skill once: of copies of the same skill it keeps
+// the one outside every hidden folder, then the one fewest folders deep,
+// then the first. An agent's folder often holds a copy of the repository's
+// own skills, and a repository that is also a plugin often holds another
+// under its plugin's folder: tw93/waza has skills/check and
+// plugins/waza/skills/check, and every skill was listed twice (碳碳双键 on
+// Discord).
 func unhiddenFirst[T any](list []T, path func(T) string, same func(a, b T) bool) []T {
+	depth := func(c T) int { return strings.Count(path(c), "/") }
+	before := func(o T, j int, c T, i int) bool {
+		if ho, hc := inHidden(path(o)), inHidden(path(c)); ho != hc {
+			return !ho
+		}
+		if do, dc := depth(o), depth(c); do != dc {
+			return do < dc
+		}
+		return j < i
+	}
 	out := make([]T, 0, len(list))
 	for i, c := range list {
-		if inHidden(path(c)) && (slices.ContainsFunc(list, func(o T) bool { return !inHidden(path(o)) && same(o, c) }) ||
-			slices.ContainsFunc(list[:i], func(o T) bool { return inHidden(path(o)) && same(o, c) })) {
-			continue
+		dup := false
+		for j, o := range list {
+			if j != i && same(o, c) && before(o, j, c, i) {
+				dup = true
+				break
+			}
 		}
-		out = append(out, c)
+		if !dup {
+			out = append(out, c)
+		}
 	}
 	return out
 }
 
+// skillsCommand is the source a skills CLI command copied from a page
+// installs from (RockyShowlle on X): "npx skills add owner/repo --skill
+// x", run through npx, bunx, pnpm dlx and the like. Anything else is
+// given back as it is.
+func skillsCommand(input string) string {
+	f := strings.Fields(strings.TrimSpace(input))
+	i := 0
+	switch {
+	case len(f) > 1 && (f[0] == "npx" || f[0] == "bunx" || f[0] == "pnpx"):
+		i = 1
+	case len(f) > 2 && ((f[0] == "pnpm" || f[0] == "yarn") && f[1] == "dlx" || f[0] == "bun" && f[1] == "x"):
+		i = 2
+	default:
+		return input
+	}
+	for i < len(f) && strings.HasPrefix(f[i], "-") { // npx -y
+		i++
+	}
+	if i+1 >= len(f) || (f[i] != "skills" && !strings.HasPrefix(f[i], "skills@")) || f[i+1] != "add" {
+		return input
+	}
+	for i += 2; i < len(f); i++ {
+		switch a := f[i]; {
+		case a == "--skill" || a == "-s" || a == "--agent" || a == "-a":
+			i++ // and its value
+		case strings.HasPrefix(a, "-"):
+		default:
+			return a
+		}
+	}
+	return input
+}
+
 // ProbeSkills looks for skills at what the user typed: a GitHub repository
-// (or a folder in one), or a folder on this machine.
+// (or a folder in one), a folder on this machine, or a skills CLI command
+// for either.
 func ProbeSkills(input string) (*Probe, error) {
-	input = strings.TrimSpace(input)
+	input = strings.TrimSpace(skillsCommand(input))
 	if input == "" {
 		return nil, fmt.Errorf("paste a GitHub link or a folder's path")
 	}
@@ -988,7 +1041,7 @@ func ProbeSkills(input string) (*Probe, error) {
 
 func cachedProbe(input string) (*Probe, error) {
 	probes.Lock()
-	e := probes.m[strings.TrimSpace(input)]
+	e := probes.m[strings.TrimSpace(skillsCommand(input))]
 	probes.Unlock()
 	if e != nil {
 		if _, err := os.Stat(e.tmp); err == nil {

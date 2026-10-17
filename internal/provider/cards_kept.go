@@ -314,7 +314,7 @@ func withKeyReadings(cards []SubscriptionQuota, ps []Provider, kind string) []Su
 				q.Plan = r.plan
 			}
 			if r.balance != "" {
-				q.Balance, q.BalanceParts = r.balance, r.parts
+				q.Balance, q.BalanceParts, q.BalanceSplit = r.balance, r.parts, r.split
 			}
 			if i >= 0 {
 				out[i] = q
@@ -345,6 +345,7 @@ type keyReading struct {
 	plan    string
 	balance string
 	parts   []BalancePart
+	split   []BalancePart
 	at      time.Time
 	seq     uint64 // quotaReading's, begun as it was asked
 }
