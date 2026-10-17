@@ -393,6 +393,16 @@ leaving suggested plugin cards in place so a click begun before the answer still
 opens the intended plugin. `plugin-market.test.cjs` holds the search response
 between pointerdown and pointerup to check this in Chromium and WebKit.
 
+Routing marks a route as end-to-end WS only when its recorded `transport`
+and `upstreamTransport` both say `websocket`. Its hub badge stays after the
+response ends; paired outbound/return dashes run only while a recorded
+attempt is active, and stop for completed, failed or cancelled responses.
+Reduced-motion mode keeps the static badge and disables the flow. Missing
+historical transport is never inferred from the agent. A successful route
+whose older record lacks seats says its routing details were not recorded,
+rather than saying no provider could handle it. See
+[`routing-websocket.test.cjs`](../../internal/gui/tests/routing-websocket.test.cjs).
+
 ## Verification
 
 The session readers include Cursor CLI chat stores, Cursor editor project

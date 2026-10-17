@@ -2,6 +2,8 @@
 // kernel adds them to i18n.js's (magpie.strings).
 magpie.strings({
   zh: {
+    "This request completed, but its routing details were not recorded.": "此请求已完成，但没有记录路由详情。",
+    "WebSocket · client ↔ magpie ↔ upstream": "WebSocket · 客户端 ↔ magpie ↔ 上游",
     "The subagent effort set in magpie is {effort}; the model's supported levels and a routing group's fixed member effort still apply.": "magpie 为子代理设定的推理强度是 {effort}；仍按模型支持的等级适配，并保留路由组成员的固定强度。",
     "{agent}'s call to magpie's web_search MCP tool": "{agent} 对 magpie 的 web_search MCP 工具的调用",
     "{agent}'s {model}": "{agent} 的 {model}",
@@ -528,6 +530,8 @@ magpie.strings({
     "{h} h {m} min": "{h} 小时 {m} 分钟",
   },
   "zh-TW": {
+    "This request completed, but its routing details were not recorded.": "此請求已完成，但未記錄路由詳情。",
+    "WebSocket · client ↔ magpie ↔ upstream": "WebSocket · 用戶端 ↔ magpie ↔ 上游",
     "The subagent effort set in magpie is {effort}; the model's supported levels and a routing group's fixed member effort still apply.": "magpie 為子代理設定的推理強度是 {effort}；仍按模型支援的等級適配，並保留路由群組成員的固定強度。",
     "{agent} guessed your next message for its composer by itself, reading the whole conversation again. Not a turn of the conversation; Settings › General › Codex composer predictions picks its model, and Codex's Settings › General › Show predictions turns it off.": "{agent} 自行為輸入框猜測你的下一則訊息，每次都把整段對話重讀一遍。不屬於對話輪次；在 設定 › 常規 › Codex 輸入框預測 裡選它用的模型，在 Codex 的 設定 › 一般 › 顯示預測內容 裡可以關掉。",
     "{agent}'s call to magpie's web_search MCP tool": "{agent} 對 magpie 的 web_search MCP 工具的呼叫",
@@ -1054,6 +1058,8 @@ magpie.strings({
     "{h} h {m} min": "{h} 小時 {m} 分鐘",
   },
   ja: {
+    "This request completed, but its routing details were not recorded.": "このリクエストは完了しましたが、ルーティングの詳細は記録されていません。",
+    "WebSocket · client ↔ magpie ↔ upstream": "WebSocket · クライアント ↔ magpie ↔ 上流",
     "The subagent effort set in magpie is {effort}; the model's supported levels and a routing group's fixed member effort still apply.": "magpie で設定したサブエージェントの推論レベルは {effort} です。モデルが対応するレベルへの調整と、ルーティンググループのメンバーに固定されたレベルは引き続き適用されます。",
     "{agent}'s call to magpie's web_search MCP tool": "{agent} による magpie の web_search MCP ツールの呼び出し",
     "{agent}'s {model}": "{agent} の {model}",
@@ -1580,6 +1586,8 @@ magpie.strings({
     "These routing groups will no longer be available to agents.": "これらのルーティンググループはエージェントから利用できなくなります。",
   },
   de: {
+    "This request completed, but its routing details were not recorded.": "Diese Anfrage wurde abgeschlossen, aber ihre Routingdetails wurden nicht aufgezeichnet.",
+    "WebSocket · client ↔ magpie ↔ upstream": "WebSocket · Client ↔ magpie ↔ Upstream",
     "The subagent effort set in magpie is {effort}; the model's supported levels and a routing group's fixed member effort still apply.": "Der in magpie gesetzte Reasoning-Effort der Subagenten ist {effort}; die unterstützten Stufen des Modells und die feste Stufe eines Mitglieds der Routing-Gruppe gelten weiterhin.",
     "{agent}'s call to magpie's web_search MCP tool": "den Aufruf von {agent} an magpies MCP-Werkzeug web_search",
     "{agent}'s {model}": "{model} von {agent}",

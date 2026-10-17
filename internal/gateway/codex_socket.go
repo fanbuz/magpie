@@ -202,8 +202,18 @@ func (s *Server) relayCodexSocket(parent context.Context, r *http.Request, down,
 					return
 				}
 				now := time.Now()
-				tr := s.trace.begin(Route{Time: now, Agent: agentOf(r), Session: sessionOf(r.Header), Model: v.Model, Provider: "openai"})
-				t := &codexSocketTurn{start: now, model: v.Model, tier: bodyTier(provider.Responses, e.data), stream: v.Stream, sniff: newSniffer(provider.Responses, "text/event-stream"), first: firstToken{start: now}, route: tr}
+				effort, tier := requestEffort(provider.Responses, e.data), bodyTier(provider.Responses, e.data)
+				who := "Codex's own sign-in"
+				if apiKey(r.Header) {
+					who = "Codex's API key"
+				}
+				// As on the native HTTP path, this is one fixed seat, not
+				// an empty routing pool. Record it before sending the turn.
+				seat := Weighed{ID: "codex", Provider: "openai", Name: "OpenAI", Icon: "openai", Who: who, Kind: "account", Agent: "codex", Model: v.Model}
+				tr := s.trace.beginFor(r, Route{Time: now, Agent: agentOf(r), Session: sessionOf(r.Header), Model: v.Model, Effort: effort, Tier: tier, Provider: "openai",
+					Transport: "websocket", UpstreamTransport: "websocket", Order: []Weighed{seat},
+					Tries: []Try{{ID: seat.ID, Model: v.Model, Effort: effort, Tier: tier, Start: now}}})
+				t := &codexSocketTurn{start: now, model: v.Model, tier: tier, stream: v.Stream, sniff: newSniffer(provider.Responses, "text/event-stream"), first: firstToken{start: now}, route: tr}
 				turns = append(turns, t)
 				s.inFlight.Add(1)
 			} else if v.Type != "response.cancel" {
@@ -278,9 +288,20 @@ func (s *Server) finishCodexSocketTurn(r *http.Request, t *codexSocketTurn, base
 		tr.Millis = ms
 		tr.TTFT = ttft
 		tr.FirstText = text
+		tr.Reasoning = u.Reasoning
+		tr.ReasoningHidden = t.first.hidesReasoning(provider.Responses)
+		tr.Flow = rec.Flow
+		tr.Served = u.Served
+		tr.Swapped = swapped(t.model, u.Served)
 		tr.Tokens = u.Input + u.Output + u.CacheRead + u.CacheWrite
 		tr.Output = u.Output
 		tr.Usage = routeUsage(p, t.model, u)
+		attempt := &tr.Tries[0]
+		attempt.Done, attempt.Status, attempt.Error = true, status, msg
+		attempt.Millis, attempt.TTFT, attempt.FirstText = ms, ttft, text
+		attempt.Flow, attempt.ReasoningHidden = rec.Flow, tr.ReasoningHidden
+		attempt.Served, attempt.Swapped = tr.Served, tr.Swapped
+		attempt.TierServed = u.Tier
 	})
 	appendUsage(r, rec)
 }

@@ -751,7 +751,14 @@ retain HTTP/SSE via 426 before upgrade; settings are checked again for each
 create. Namespaced models and unsupported events are refused on an established
 socket. `/v1/responses` still uses its existing HTTP/SSE behavior.
 
-Each response has its own trace and usage row. `transport` observes the
+Each response has its own trace and usage row. A native WS trace lists one
+fixed sign-in or API-key seat and one attempt before the turn is sent, as
+the native HTTP path does. Completion, failure, cancellation and disconnect
+finish that attempt with the route's status and timing, so Routing does not
+mistake a successful native relay for a request with no eligible provider.
+The trace's `transport` and `upstreamTransport` independently identify the
+observed connections; absent historical values stay unknown. In usage rows,
+`transport` observes the
 client-facing response; `upstream_transport` is independently observed for native
 Codex relays. Other upstream paths remain unknown until instrumented. Both fields
 survive JSONL, packed request rows and CSV; the Usage detail shows both, with

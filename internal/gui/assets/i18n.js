@@ -4,6 +4,9 @@
 // works. {name} slots are filled by t(str, vars).
 const I18N = {
   zh: {
+    "Stream": "流式",
+    "Unknown": "未知",
+    "Transport": "传输方式",
     "None": "无",
     "Prompt": "提示词",
     "Request hook": "请求 Hook",
@@ -3700,6 +3703,9 @@ const I18N = {
     "Reading the reply": "读取回复",
   },
   "zh-TW": {
+    "Stream": "串流",
+    "Unknown": "未知",
+    "Transport": "傳輸方式",
     "None": "無",
     "Prompt": "提示詞",
     "Request hook": "請求 Hook",
@@ -7381,6 +7387,9 @@ const I18N = {
     "Reading the reply": "讀取回覆",
   },
   ja: {
+    "Stream": "ストリーミング",
+    "Unknown": "不明",
+    "Transport": "転送方式",
     "None": "なし",
     "Prompt": "プロンプト",
     "Request hook": "リクエストフック",
@@ -11064,6 +11073,9 @@ const I18N = {
     "Reading the reply": "応答の読み取り",
   },
   de: {
+    "Stream": "Streaming",
+    "Unknown": "Unbekannt",
+    "Transport": "Übertragung",
     "None": "Keine",
     "Prompt": "Prompt",
     "Request hook": "Anfrage-Hook",

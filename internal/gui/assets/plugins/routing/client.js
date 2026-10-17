@@ -63,6 +63,7 @@ function routingPage(part) {
   const wires = document.createElementNS(NS, "svg");
   wires.setAttribute("class", "rt-wires");
   wires.setAttribute("aria-hidden", "true");
+  const wsWires = new Set(), wsReturns = new Map();
   const srcs = el("div", "rt-srcs"); // an agent's node each
   const hub = el("div", "rt-node rt-hub");
   const logo = document.createElementNS(NS, "svg");
@@ -70,7 +71,9 @@ function routingPage(part) {
   logo.setAttribute("class", "rt-bird");
   logo.innerHTML = '<use href="#bird"/>';
   const hubSub = el("small"), chip = el("i");
-  hub.append(logo, el("b", "", "magpie"), hubSub, chip);
+  const wsBadge = el("span", "rt-ws-badge", "↔ WS");
+  wsBadge.hidden = true;
+  hub.append(logo, el("b", "", "magpie"), hubSub, chip, wsBadge);
   const list = el("ol", "rt-accts");
   // the magpies fly over the nodes, the wires run under them
   const sky = document.createElementNS(NS, "svg");
@@ -554,9 +557,11 @@ function routingPage(part) {
   const wentOn = (r) => (r.subagent && !r.subagent.kept ? r.subagent.to : r.model);
 
   // why routing put the first where it did
+  const unrecorded = (r) => !r.order.length && r.done && r.status >= 200 && r.status < 300 && !r.error;
+  const websocketRoute = (r) => r.transport === "websocket" && r.upstreamTransport === "websocket";
   function firstWhy(r) {
     const f = r.order[0];
-    if (!f) return t("Nothing could take {model}.", { model: r.model });
+    if (!f) return unrecorded(r) ? t("This request completed, but its routing details were not recorded.") : t("Nothing could take {model}.", { model: r.model });
     const w = who(f);
     if (r.sealedTask && r.leadAccount === f.id) return t("{who} goes first: it answered the parent agent and may be needed to read this encrypted task.", { who: w });
     if (r.order.length === 1) {
@@ -1208,6 +1213,7 @@ function routingPage(part) {
       const up = f?.open ? f : row.up && subs.get(row.up), a = b(row.li);
       row.wire.setAttribute("d", up ? fromSub(up, a) : fromHub(a));
     }
+    for (const [wire, back] of wsReturns) back.setAttribute("d", wire.getAttribute("d") || "");
     holdAll();
   }
 
@@ -1630,10 +1636,13 @@ function routingPage(part) {
     goTo(chip, g ? "group:" + g.id : pool ? "pool:" + f.provider : "", g ? g.name : f?.name || r.provider);
     hubText();
     what.replaceChildren(el("b", "", g ? g.name : f?.name || r.provider),
-      el("span", "", (g ? " · " + t("routing group") : "") + " · " + t(on === 1 ? "one on" : "{n} on", { n: on })
+      el("span", "", (g ? " · " + t("routing group") : "") + (unrecorded(r) ? "" : " · " + t(on === 1 ? "one on" : "{n} on", { n: on }))
         + (many > 1 ? " · " + t("{n} agents at once", { n: many }) : "")));
     // keys that read their own windows are weighed as accounts are
-    mode.textContent = lone ? t(LONE) : g && routing === "order" ? t(GROUP_ORDER) : g && routing === "weight" ? t(GROUP_WEIGHT) : t(!routing && f?.kind === "key" && !r.order.some((x) => x.known) && !g ? KEYS_SMART : m[1]);
+    mode.textContent = unrecorded(r) ? t("This request completed, but its routing details were not recorded.") : lone ? t(LONE) : g && routing === "order" ? t(GROUP_ORDER) : g && routing === "weight" ? t(GROUP_WEIGHT) : t(!routing && f?.kind === "key" && !r.order.some((x) => x.known) && !g ? KEYS_SMART : m[1]);
+    wsBadge.hidden = !websocketRoute(r);
+    wsBadge.title = t("WebSocket · client ↔ magpie ↔ upstream");
+    wsBadge.setAttribute("aria-label", wsBadge.title);
   }
   // goTo makes what names a routing a way to where it is set: a provider's
   // own under Several accounts or keys, a group's its card
@@ -1678,9 +1687,43 @@ function routingPage(part) {
     wire.classList.toggle("lit", on && !now);
   }
 
+  // Two observed WS legs, never inferred from the agent or from a client
+  // socket alone. The return lane exists only while a response is in flight.
+  function websocketWires(rs) {
+    const wanted = new Map();
+    const keep = (wire, live) => { if (wire?.isConnected) wanted.set(wire, live || wanted.get(wire) || false); };
+    for (const r of rs) {
+      if (!websocketRoute(r) || (r.done && r.id !== cur?.id)) continue;
+      const live = !r.done && r.tries.some((tr) => !tr.done);
+      keep(agents.get(r.agent)?.wire, live);
+      for (const tr of r.tries) {
+        const row = shownRow(tryseat(r, tr));
+        if (row) for (const wire of wiresTo(row)) keep(wire, !r.done && !tr.done);
+      }
+    }
+    for (const wire of wsWires) if (!wanted.has(wire)) {
+      wire.classList.remove("ws", "ws-live");
+      wsWires.delete(wire);
+    }
+    for (const [wire, live] of wanted) {
+      wsWires.add(wire);
+      wire.classList.add("ws");
+      wire.classList.toggle("ws-live", live);
+      if (live && !still()) {
+        let back = wsReturns.get(wire);
+        if (!back) { back = path(); back.setAttribute("class", "rt-ws-return ws-live"); wsReturns.set(wire, back); }
+        back.setAttribute("d", wire.getAttribute("d") || "");
+      }
+    }
+    for (const [wire, back] of wsReturns) if (!wanted.get(wire) || still()) {
+      back.remove();
+      wsReturns.delete(wire);
+    }
+  }
+
   // what a row says now: resting, answering, or what routing weighed it by
   function render() {
-    if (!cur) return;
+    if (!cur) { websocketWires([]); return; }
     hubText();
     const n = now(), rs = staged();
     const trying = new Set(), busy = new Set();
@@ -1795,6 +1838,7 @@ function routingPage(part) {
       if (lit) s.wire.style.setProperty("--agent", lit.wire.style.getPropertyValue("--agent"));
     }
     for (const [id, a] of agents) a.wire.classList.toggle("live", busy.has(id));
+    websocketWires(rs);
   }
 
   // ---------- the log: how one request was routed ----------
@@ -2050,7 +2094,7 @@ function routingPage(part) {
       else if (tr.done && tryOk(tr) && tr.routed) items.push([routedWhy(tr), "aside", tr]);
       if (tr.done && tryOk(tr) && tr.upstream) items.push([upstreamWhy(tr), "aside upstream-said", tr]);
     });
-    if (r.done && !r.tries.length) items.push([t("Nothing was tried: {error}", { error: r.error || r.status }), "bad"]);
+    if (r.done && !r.tries.length && !unrecorded(r)) items.push([t("Nothing was tried: {error}", { error: r.error || r.status }), "bad"]);
     const key = JSON.stringify([tagKind(r), items.map(([s, c, tr]) => [s, c, tr?.model, tr?.served]), r.order.map(logoOf)]);
     if (stepsKey === key) return;
     stepsKey = key;
@@ -3350,6 +3394,8 @@ function routingPage(part) {
   }
 
   function empty() {
+    websocketWires([]);
+    wsBadge.hidden = true;
     offline("");
     what.replaceChildren(el("b", "", t(purpose.length || day ? "No requests match these filters." : "Waiting for a request")));
     mode.textContent = t("Send one from any agent routed through magpie and it plays here as it happens: who routing put first and why, each try, and what each answered.");

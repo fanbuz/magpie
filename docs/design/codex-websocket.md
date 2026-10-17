@@ -1,11 +1,15 @@
 # Codex WebSocket transport and recovery
 
-Implementation proposal for [#2472](https://github.com/yetone/magpie/issues/2472).
-The current branch contains a fixed-sign-in native relay and transport accounting
-prototype. It is not the account-pool implementation described below and is not
-ready to replace the installed gateway. In particular, pool routing, caps,
-managed keys, masking, middleware, asynchronous request hooks, recording and model overrides still require
-HTTP. The existing gateway continues to serve them over HTTP/SSE.
+Future account-pool and recovery proposal related to
+[#2472](https://github.com/yetone/magpie/issues/2472). The current branch implements
+only a single-enabled-account native WS relay, per-response usage and routing
+records, and observed transport display. Its current guards and behavior are in
+[Gateway routing](../subsystems/gateway-routing.md), implemented by
+[`codexSocketPolicy`](../../internal/gateway/codex_socket.go). Pool routing,
+caps, managed keys, masking, middleware, asynchronous request hooks, recording
+and model overrides still require HTTP/SSE. The pool switching and recovery
+contracts below are not implemented or acceptance requirements for this issue's
+current single-account scope.
 
 ## User-visible contract
 

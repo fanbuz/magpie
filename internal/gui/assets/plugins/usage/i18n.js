@@ -3,13 +3,10 @@
 magpie.strings({
   zh: {
     "Request type": "请求类型",
-    "Stream": "流式",
     "Non-streaming": "非流式",
 
     "Client transport": "客户端传输",
     "Upstream transport": "上游传输",
-    "Unknown": "未知",
-    "Transport": "传输方式",
     "HTTP streaming (SSE)": "HTTP 流式（SSE）",
     "(prompt not recorded)": "（未记录提示词）",
     "Gateway session": "网关会话",
@@ -203,13 +200,10 @@ magpie.strings({
   },
   "zh-TW": {
     "Request type": "請求類型",
-    "Stream": "串流",
     "Non-streaming": "非串流",
 
     "Client transport": "用戶端傳輸",
     "Upstream transport": "上游傳輸",
-    "Unknown": "未知",
-    "Transport": "傳輸方式",
     "HTTP streaming (SSE)": "HTTP 串流（SSE）",
     "(prompt not recorded)": "（未記錄提示詞）",
     "Gateway session": "閘道會話",
@@ -403,13 +397,10 @@ magpie.strings({
   },
   ja: {
     "Request type": "リクエスト種別",
-    "Stream": "ストリーミング",
     "Non-streaming": "非ストリーミング",
 
     "Client transport": "クライアント転送",
     "Upstream transport": "上流転送",
-    "Unknown": "不明",
-    "Transport": "転送方式",
     "HTTP streaming (SSE)": "HTTP ストリーミング（SSE）",
     "(prompt not recorded)": "（プロンプト未記録）",
     "Gateway session": "ゲートウェイのセッション",
@@ -603,13 +594,10 @@ magpie.strings({
   },
   de: {
     "Request type": "Anfragetyp",
-    "Stream": "Streaming",
     "Non-streaming": "Nicht streamend",
 
     "Client transport": "Client-Übertragung",
     "Upstream transport": "Upstream-Übertragung",
-    "Unknown": "Unbekannt",
-    "Transport": "Übertragung",
     "HTTP streaming (SSE)": "HTTP-Streaming (SSE)",
     "(prompt not recorded)": "(Prompt nicht aufgezeichnet)",
     "Gateway session": "Gateway-Sitzung",
