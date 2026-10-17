@@ -1341,7 +1341,8 @@ body.window .field.solo { grid-column: auto; }
 /* the account's name is cut at 110px, but its column keeps room for the
    source badges under it, which don't wrap: capped at 110px the cell cut
    off the second English one ("Subscription") */
-.led.tighter .model, .led.tighter .where-name { max-width: 110px; }
+/* Keep the request type and status visible beside the compact model names. */
+.led.tighter .model, .led.tighter .where-name { max-width: 90px; }
 .led.tighter th, .led.tighter td { padding-left: 4px; padding-right: 4px; }
 .led.tighter th { white-space: normal; }
 /* only a pointer to the details: it gives way to what shows beside it (the

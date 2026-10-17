@@ -11,6 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/yetone/magpie/internal/access"
+	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/usage"
@@ -25,7 +26,7 @@ func codexSocketPolicy(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	if redactionWanted() || middlewareWanted() || cfg.GatewayConversations || cfg.CodexTitles != "" || cfg.CodexDescriptions != "" || cfg.CodexPredictions != "" || cfg.CodexSubagentModel != "" {
+	if redactionWanted() || middlewareWanted() || plugin.HasGateway() || cfg.GatewayConversations || cfg.CodexTitles != "" || cfg.CodexDescriptions != "" || cfg.CodexPredictions != "" || cfg.CodexSubagentModel != "" {
 		return false
 	}
 	if access.Caller(r.Context()).KeyID != "" || r.Header.Get(AccountHeader) != "" {

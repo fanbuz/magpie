@@ -746,7 +746,7 @@ The socket remains on that sign-in and that upstream connection; requests and
 or account-pool failover. A client or upstream disconnect ends pending calls.
 
 This initial path requires no pool routing, caps, managed keys, masking, JS
-middleware, conversation recording or Codex model overrides. Those settings
+middleware, asynchronous request hooks, conversation recording or Codex model overrides. Those settings
 retain HTTP/SSE via 426 before upgrade; settings are checked again for each
 create. Namespaced models and unsupported events are refused on an established
 socket. `/v1/responses` still uses its existing HTTP/SSE behavior.

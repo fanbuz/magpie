@@ -4,7 +4,7 @@ Implementation proposal for [#2472](https://github.com/yetone/magpie/issues/2472
 The current branch contains a fixed-sign-in native relay and transport accounting
 prototype. It is not the account-pool implementation described below and is not
 ready to replace the installed gateway. In particular, pool routing, caps,
-managed keys, masking, middleware, recording and model overrides still require
+managed keys, masking, middleware, asynchronous request hooks, recording and model overrides still require
 HTTP. The existing gateway continues to serve them over HTTP/SSE.
 
 ## User-visible contract
