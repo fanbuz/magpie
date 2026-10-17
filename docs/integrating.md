@@ -54,7 +54,8 @@ app.
 **Models.** `GET /v1/models` lists what the user has turned on: `id`
 (`provider/model`, or a routing group's name, which you send as it is),
 `display_name`, `owned_by` (the provider), `reasoning` and
-`supported_reasoning_levels` (`[{"effort":"low"},…]`), `context_window`
+`supported_reasoning_levels` (`[{"effort":"low"},…]`, and the same as
+plain names in `reasoning_levels`), `context_window`
 and `max_output_tokens` when known, `modalities` when magpie knows whether
 it takes images. List them from there rather than shipping a list: the
 user adds and removes providers in magpie. Reasoning is asked in your

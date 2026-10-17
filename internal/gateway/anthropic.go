@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"regexp"
 	"slices"
 	"strconv"
@@ -1522,7 +1523,12 @@ func (e *anthropicEncoder) event(ev Event) {
 		e.index++
 	case KError:
 		e.close()
-		failed := map[string]any{"type": "api_error", "message": ev.Text}
+		typ := "api_error"
+		if ev.Status == http.StatusRequestEntityTooLarge && ev.Code != "context_length_exceeded" {
+			// the same type a 413 JSON body carries (writeErrorSaid)
+			typ = "request_too_large"
+		}
+		failed := map[string]any{"type": typ, "message": ev.Text}
 		if ev.Code != "" {
 			failed["code"] = ev.Code // preserve the upstream error type, including refusals
 		}

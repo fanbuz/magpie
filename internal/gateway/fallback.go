@@ -63,6 +63,11 @@ type candidate struct {
 	// member is in that sets one (#2246): a group in a group times its own
 	// members' first tokens, the group asked for only those that set none
 	firstToken int
+	// patience is the Patience of the innermost group of those the member
+	// is in that sets one (#2410): a group in a group waits out its own
+	// members' busy failures, the group asked for only those that set none;
+	// 0 falls back to the asked group's Waits, PatienceOff skips replan
+	patience int
 }
 
 // capHold is how an account is held at its usage cap: the cap of the
@@ -406,6 +411,18 @@ func innerFirstToken(m provider.Member) int {
 	return 0
 }
 
+// innerPatience is the Patience of the innermost group m is in (m.Via,
+// the outermost first) that sets one (#2410), 0 for none: PatienceOff
+// (-1) counts as set, so an inner Off stops replan for that member.
+func innerPatience(m provider.Member) int {
+	for i := len(m.Via) - 1; i >= 0; i-- {
+		if m.Via[i].Patience != 0 {
+			return m.Via[i].Patience
+		}
+	}
+	return 0
+}
+
 // planLevel orders the models ms of g, a group depth groups down from the
 // one asked for, adding to pl's order as it goes: those set aside and
 // those unlisted it gathers for planGroup to put last.
@@ -418,6 +435,7 @@ func planLevel(g provider.Group, ms []provider.Member, depth int, from provider.
 			for i := range l {
 				l[i].effort, l[i].fast = m.Effort, m.Fast
 				l[i].firstToken = innerFirstToken(m)
+				l[i].patience = innerPatience(m)
 			}
 		}
 		pl.left = append(pl.left, barredOf(barred, m.Provider, false, from, m.Groups())...)
@@ -1312,6 +1330,8 @@ var retryPause = time.Second
 
 // passing says whether a failure is one that may be gone a moment later,
 // and how long to wait before trying the same one again, the again'th time.
+// An upstream that answered a stream request with a whole reply
+// (didNotStream) isn't one: it fails the same every time it is asked.
 func passing(status int, header http.Header, body []byte, again int) (time.Duration, bool) {
 	wait := retryPause << again
 	if d := retryAfter(header, time.Now()); d > 0 {
@@ -1321,6 +1341,9 @@ func passing(status int, header http.Header, body []byte, again int) (time.Durat
 	case wait > longestPause:
 		return 0, false
 	case status == 408, status == 500, status == 502, status == 503, status == 504, status == 529:
+		if strings.Contains(string(body), didNotStream) {
+			return 0, false
+		}
 		return wait, again < lastRetries
 	case status == 429:
 		// a relay's 429 often says nothing of when (#503: "负载已饱和，请稍
@@ -2230,7 +2253,7 @@ func (h *holdWriter) settle() {
 		// stream's headers: it can't go as that stream, so it failed, as
 		// a translated reply that didn't stream does, for the next to
 		// answer
-		h.failure, h.failMsg = http.StatusBadGateway, "did not stream: "+provider.APIError(h.held.Bytes(), "unexpected reply")
+		h.failure, h.failMsg = http.StatusBadGateway, didNotStream+": "+provider.APIError(h.held.Bytes(), "unexpected reply")
 	}
 }
 

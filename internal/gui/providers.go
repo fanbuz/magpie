@@ -54,6 +54,11 @@ type modelJSON struct {
 	Same       string   `json:"same,omitempty"`      // the model the user said it is the same as, for the groups magpie finds (#583)
 	Merge      string   `json:"merge,omitempty"`     // what those groups merge it by when the user says nothing
 	Kind       string   `json:"kind,omitempty"`      // what the user said it makes: image or video (#1399)
+	// Desktop is the number Claude Desktop's menu says beside this model
+	// (gateway.DesktopNumber), so a row of that menu can be matched to its
+	// provider (#2578): only for a model Claude Desktop, installed here,
+	// is shown and names after its own catalog, "" for every other.
+	Desktop string `json:"desktop,omitempty"`
 	// what it costs, USD per million tokens (#819): the price the user set
 	// for it, and its list price, its vendor's else its maker's, before the
 	// provider's price rate
@@ -545,7 +550,32 @@ func presetOwnClient(pr provider.PresetDef) bool {
 	return provider.Provider{Preset: pr.ID, Chat: pr.Chat, Responses: pr.Responses, Anthropic: pr.Anthropic}.OwnClient()
 }
 
+// desktopNumbers are the numbers Claude Desktop's menu says beside the
+// models it names after its own catalog (gateway.DesktopNumber), by
+// "provider/model": none when Claude Desktop isn't installed, and only for
+// the models it is shown (provider.CatalogFor), so no other chip carries
+// a number nothing shows (#2578).
+func desktopNumbers(agents []agentUse) map[string]string {
+	if !slices.ContainsFunc(agents, func(u agentUse) bool { return u.Agent != nil && u.ID == "claude-desktop" }) {
+		return nil
+	}
+	shown, _ := provider.CatalogFor("claude-desktop")
+	out := map[string]string{}
+	for _, e := range shown {
+		if n := gateway.DesktopNumber(e); n != "" {
+			out[e.ID] = n
+		}
+	}
+	return out
+}
+
 func providerInfo(p provider.Provider, agents []agentUse) providerJSON {
+	return providerInfoWith(p, agents, desktopNumbers(agents))
+}
+
+// providerInfoWith is providerInfo with the Claude Desktop numbers read
+// once for the whole list (desktopNumbers).
+func providerInfoWith(p provider.Provider, agents []agentUse, desktop map[string]string) providerJSON {
 	out := providerJSON{
 		ID: p.ID, Name: p.Name, Icon: p.Icon, Preset: p.Preset, Host: p.Host(),
 		Chat: p.Chat, Responses: p.Responses, Anthropic: p.Anthropic, Gemini: p.Gemini, Decide: p.Decide, BaseAPI: p.BaseAPI, ModelTest: p.ModelTest(), TestsAs: p.TestClients(), DecideTest: p.AsksDecideModels(), MarksKinds: p.MarksKinds(),
@@ -712,6 +742,7 @@ func providerInfo(p provider.Provider, agents []agentUse) providerJSON {
 		j.Same = sames[p.ID+"/"+m.ID]
 		j.Kind = p.ModelKind(m.ID)
 		j.Merge = provider.MergeName(m.ID)
+		j.Desktop = desktop[p.ID+"/"+m.ID]
 		if mp, ok := held.ModelPrices[p.ID+"/"+m.ID]; ok {
 			if pr, bad := mp.Price(); bad == "" {
 				j.Price = &pr
@@ -826,11 +857,12 @@ func providersState() providersJSON {
 	}
 	findGroup := provider.GroupFinder()
 	uses := agentUses(agents, findGroup)
+	desktop := desktopNumbers(uses)
 	have := map[string]bool{}
 	for _, p := range provider.All() {
 		// a preset is added once any provider is its, whatever its id
 		have[p.ID], have[p.Preset] = true, true
-		s.Providers = append(s.Providers, providerInfo(p, uses))
+		s.Providers = append(s.Providers, providerInfoWith(p, uses, desktop))
 	}
 	// partners first, as the add sheet lists them
 	for _, pa := range provider.Partners() {

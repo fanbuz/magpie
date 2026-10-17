@@ -51,6 +51,8 @@ func helpFor(args []string) string {
 		return quotaUsage
 	case "statusline":
 		return statuslineUsage
+	case "heap":
+		return heapUsage
 	case "sessions":
 		return sessionsUsage
 	case "search":

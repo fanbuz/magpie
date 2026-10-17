@@ -8,6 +8,7 @@ import (
 	"maps"
 	"mime"
 	"net"
+	"net/http"
 	"path"
 	"regexp"
 	"slices"
@@ -1434,7 +1435,12 @@ func (e *chatEncoder) event(ev Event) {
 				"function": map[string]any{"arguments": ev.Text}}}}, nil, nil)
 		}
 	case KError:
-		failed := map[string]any{"message": ev.Text, "type": "api_error"}
+		typ := "api_error"
+		if ev.Status == http.StatusRequestEntityTooLarge && ev.Code != "context_length_exceeded" {
+			// the same type a 413 JSON body carries (writeErrorSaid)
+			typ = "request_too_large"
+		}
+		failed := map[string]any{"message": ev.Text, "type": typ}
 		if ev.Code != "" {
 			failed["code"] = ev.Code // preserve the upstream error type, including refusals
 		}

@@ -756,6 +756,17 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 				replyDigest = titleReplyDigest(titleReply.buf.Bytes(), nil)
 			}
 			prompt := promptRead() // outside the trace's lock, which reading it takes
+			// the window Codex holds the conversation to, not models.dev's
+			// for the id, which is OpenAI's API's (netube on Discord: 922K
+			// on Routing for a Codex Plus account's 272K)
+			window := 0
+			if prompt != nil {
+				user := ""
+				if on != nil && on.Account != nil {
+					user = on.Account.User
+				}
+				window = cmp.Or(provider.CodexWindow(user, model), catalog.ContextOf(model))
+			}
 			s.trace.update(tr, func(t *Route) {
 				t.Tries[0].Done, t.Tries[0].Status, t.Tries[0].Millis, t.Tries[0].Error = true, status, ms, msg
 				t.Tries[0].TTFT, t.Tries[0].FirstText = ttft, text
@@ -772,7 +783,7 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 				t.Flow, t.Tries[0].Flow = flow, flow
 				t.Usage = routeUsage("openai", model, uu)
 				if prompt != nil {
-					t.Prompt = prompt.calibrated(promptCounted(t.Usage), catalog.ContextOf(model))
+					t.Prompt = prompt.calibrated(promptCounted(t.Usage), window)
 				}
 				t.Tries[0].Served, t.Tries[0].Swapped = served, swapped(model, served)
 				t.Served, t.Swapped = t.Tries[0].Served, t.Tries[0].Swapped

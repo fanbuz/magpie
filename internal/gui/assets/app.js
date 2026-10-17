@@ -10761,6 +10761,14 @@ function renderModels(p) {
       if (rate) c.append(rate);
       const ctx = contextTag(m.context, m.name);
       if (ctx) c.append(ctx);
+      // the number Claude Desktop's menu says beside this model, which it
+      // names after its own catalog (#2578), so a row of that menu can be
+      // matched to this provider
+      if (m.desktop) {
+        const d = el("span", "badge ctx", m.desktop);
+        d.title = t("The number Claude Desktop's menu shows beside this model");
+        c.append(d);
+      }
       if (m.default) c.title = `${m.id} · ${m.default}`;
       else if (m.name && m.name !== m.id) c.title = m.id;
       if (free) c.title = (c.title || m.id) + " · " + t(m.free ? "free: it doesn't use the plan's credits" : "free: so its name says");

@@ -1798,6 +1798,65 @@ func foundSkills(l *Library) []FoundSkill {
 	return res
 }
 
+// linkVia is what the library links to for a skill found at the entry at,
+// whose folder is really at real: the first link on the way from at that
+// is outside every skills folder (the agents', the shared one and the
+// library's), which the app that made it keeps pointing at its current
+// folder, as ego lite's ~/.local/share/ego/ego-skills does. A folder in a
+// bundle's Versions/<v> is named through Versions/Current when Current is
+// that very version. It is real when nothing on the way is any steadier,
+// or when the way doesn't end at real.
+func linkVia(at, real string) string {
+	var homes []string
+	for _, d := range []string{skillsDir(), sharedSkillsDir()} {
+		homes = append(homes, realBelow(d))
+	}
+	for _, t := range Targets() {
+		if t.Skills != "" {
+			homes = append(homes, realBelow(t.Skills))
+		}
+	}
+	inHome := func(p string) bool {
+		up := realBelow(filepath.Dir(p))
+		return slices.ContainsFunc(homes, func(h string) bool { return within(up, h) })
+	}
+	cur := filepath.Clean(at)
+	for i := 0; inHome(cur); i++ {
+		to, ok := linkTarget(cur)
+		if !ok || i > 40 {
+			cur = real
+			break
+		}
+		if !filepath.IsAbs(to) {
+			to = filepath.Join(filepath.Dir(cur), to)
+		}
+		cur = filepath.Clean(to)
+	}
+	cur = currentVersion(cur)
+	if realDir(cur) != real {
+		return real
+	}
+	return cur
+}
+
+// currentVersion is p with a Versions/<v> part of it named Versions/Current,
+// when that link is there and points at <v>: a macOS framework's versions,
+// of which an update leaves the old one behind.
+func currentVersion(p string) string {
+	parts := strings.Split(p, string(filepath.Separator))
+	for i := len(parts) - 2; i > 0; i-- {
+		if parts[i] != "Versions" || parts[i+1] == "Current" {
+			continue
+		}
+		vs := strings.Join(parts[:i+1], string(filepath.Separator))
+		cur := filepath.Join(vs, "Current")
+		if realDir(cur) == realDir(filepath.Join(vs, parts[i+1])) && linked(cur) {
+			return filepath.Join(append([]string{cur}, parts[i+2:]...)...)
+		}
+	}
+	return p
+}
+
 // ImportSkill takes a skill the agents have of their own into the library:
 // a folder is moved in, a link to a folder elsewhere is linked to from the
 // library, and the agents that had it get the library's from then on.
@@ -1858,9 +1917,15 @@ func importSkill(l *Library, found []FoundSkill, name string) error {
 			src = nil
 		}
 	case f.Link != "" || shared:
-		if err := dirLink(f.real, skillDir(name)); err != nil {
+		// linked through the way the agent's own link goes, not to where
+		// it ends today: an app that keeps its skills in a versioned
+		// folder points its own link at the new one when it updates
+		// (iomect's ego lite, #2635), and the library follows
+		via := linkVia(f.at, f.real)
+		if err := dirLink(via, skillDir(name)); err != nil {
 			return err
 		}
+		src.Dir = via
 	default:
 		// a move that copied it all but couldn't take the whole folder away
 		// (a file in it held open) has brought it in all the same: what is

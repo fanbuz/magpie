@@ -1504,7 +1504,10 @@ func parseCodex(b []byte) ([]Model, error) {
 		if m.Visibility == "hide" || MagpieAdded(cache.ETag, m.Slug, m.Description) {
 			continue
 		}
-		mm := Model{ID: m.Slug, Name: m.DisplayName, Provider: "openai", ImageInput: imageInput(m.Input)}
+		// the window Codex holds a conversation to (272K on a ChatGPT
+		// plan), which models.dev's input limit for the id, OpenAI's
+		// API's (gpt-5.5's 922K), would otherwise stand in for
+		mm := Model{ID: m.Slug, Name: m.DisplayName, Provider: "openai", ImageInput: imageInput(m.Input), Context: Window(m.Context)}
 		if m.Max > m.Context && m.Context > 0 {
 			mm.MaxContext = m.Max
 		}

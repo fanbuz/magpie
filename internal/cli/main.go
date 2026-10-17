@@ -113,6 +113,7 @@ const usage = `magpie — one place to pick every agent's model
   magpie daemon web [on|off] [--lan] [--addr host:port]
                                   the service's page: its link, or turn it on or off
   magpie healthcheck              exit 0 when the gateway answers (a container's HEALTHCHECK)
+  magpie heap [<file>]            a Go heap profile of the running magpie, with its memory numbers, for a report of it using too much memory
   magpie gateway-key list|add <name>|rotate <id>|remove <id>   manage the keys clients use to call a shared gateway
   magpie gateway-key limit <id> [list|off|reset [n]|remove <n>|[add] day|week|month|<N>d|<N>h --tokens N --cost USD --cache-reads]   a key's own limits, and what it used
   magpie gateway-key models <id> [all|<provider>/<model>|<provider>/* ...]   the models a key may use, every one unless it names some
@@ -220,6 +221,10 @@ func run(args []string) error {
 	}
 	if len(args) > 0 && args[0] == "healthcheck" {
 		return healthcheck() // every few seconds in a container: nothing else
+	}
+	if len(args) > 0 && args[0] == "heap" {
+		// the running magpie's heap profile: asks it, and moves nothing here
+		return heapCmd(args[1:])
 	}
 	if len(args) == 2 && args[0] == agent.DryRunArg {
 		// an agent disconnected on a copy of its files under a temporary

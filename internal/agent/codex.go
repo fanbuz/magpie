@@ -17,6 +17,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/codexcat"
 	"github.com/yetone/magpie/internal/edit"
@@ -392,12 +393,28 @@ func codexIn(at place) *Agent {
 		s := settings.Load()
 		return codexAsyncSync(path, at.key("codex.async"), routed, s.CodexAsyncCompact, s.CodexAsyncCompactPercent)
 	}
+	// keptBearerToken is the table's bearer token when it is one the
+	// gateway takes: a caller key of the gateway's own the user put in
+	// magpie's token's place goes through magpie all the same, so theirs
+	// stays, as a sync keeps one (keyHolds); only a value the gateway would
+	// refuse is wired over (#2545). The sharing key magpie made is magpie's
+	// own, however much Authenticate takes it, so it never counts as theirs
+	// (Default): sharing going off brings gateway.Token back
+	keptBearerToken := func(table string) string {
+		tok := at.gwKey()
+		if t, err := edit.GetTOMLTable(path, table); err == nil {
+			if v := t["experimental_bearer_token"]; v != tok && keyHolds(v, tok) && !access.Default(v) {
+				return v
+			}
+		}
+		return tok
+	}
 	putProvider := func() error {
 		kvs := []edit.KV{
 			{Path: "name", Value: "magpie"},
 			{Path: "base_url", Value: at.v1()},
 			{Path: "wire_api", Value: "responses"},
-			{Path: "experimental_bearer_token", Value: at.gwKey()},
+			{Path: "experimental_bearer_token", Value: keptBearerToken("model_providers." + magpieID)},
 			// Codex offers its built-in image tool (image_gen.imagegen) and
 			// the other OpenAI-provider tools only to a provider it reads as
 			// the OpenAI actor: one that does not require OpenAI auth but
@@ -548,7 +565,7 @@ func codexIn(at place) *Agent {
 				edit.KV{Path: "name", Value: id},
 				edit.KV{Path: "base_url", Value: at.v1()},
 				edit.KV{Path: "wire_api", Value: "responses"},
-				edit.KV{Path: "experimental_bearer_token", Value: at.gwKey()},
+				edit.KV{Path: "experimental_bearer_token", Value: keptBearerToken("model_providers." + id)},
 			); err != nil {
 				return err
 			}

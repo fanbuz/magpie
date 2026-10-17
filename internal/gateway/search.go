@@ -1079,7 +1079,7 @@ func (s *Server) askTranslated(p provider.Provider, to provider.Protocol, model 
 		if !sse {
 			b, _ := io.ReadAll(io.LimitReader(rd, 1<<20))
 			res.Body.Close()
-			return nil, 502, p.Name + " did not stream: " + provider.APIError(b, "unexpected reply")
+			return nil, 502, p.Name + " " + didNotStream + ": " + provider.APIError(b, "unexpected reply")
 		}
 		events := make(chan Event, 16)
 		go func() {
