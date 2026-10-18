@@ -53,6 +53,8 @@ func helpFor(args []string) string {
 		return statuslineUsage
 	case "heap":
 		return heapUsage
+	case "cpu":
+		return cpuUsage
 	case "sessions":
 		return sessionsUsage
 	case "search":

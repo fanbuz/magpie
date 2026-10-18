@@ -148,6 +148,9 @@ type subscriptionRun struct {
 
 	// the tools its agent was told of, as it started and since
 	tools map[string]bool
+	// names is the caller's name of each tool by the name the run's agent
+	// has it under (bridgeToolName), for those it differs: under r.mu
+	names map[string]string
 
 	mu sync.Mutex
 	// sending is held across a send to the segment and taken before it is
@@ -537,6 +540,14 @@ func (c claudeCLI) env(env []string, configDir string) []string {
 	return c.wsl.Env(env, names...)
 }
 
+// proxied is env told the proxy a run for ctx goes through (claudeProxy),
+// a SOCKS one bridged: Claude Code is built with Bun, which takes only
+// http:// and https:// proxies (#2651). One in a WSL distro reaches the
+// bridge only when the distro shares Windows' loopback.
+func (c claudeCLI) proxied(ctx context.Context, env []string) ([]string, error) {
+	return netproxy.EnvForBunWith(claudeProxy(ctx), env, c.wsl == nil || c.wsl.Host == "")
+}
+
 // file is where this Claude Code reads a file of magpie's at path: one in
 // WSL under the distro's mount of the drive.
 func (c claudeCLI) file(path string) string {
@@ -696,7 +707,11 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	}
 	cmd := binary.command(context.Background(), args...)
 	cmd.Dir = work
-	env := netproxy.EnvWith(claudeProxy(ctx), cleanClaudeEnv(os.Environ()))
+	env, err := binary.proxied(ctx, cleanClaudeEnv(os.Environ()))
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
 	if req.clientCache != nil {
 		env = append(env, "DISABLE_PROMPT_CACHING=1")
 	}
@@ -727,6 +742,7 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	cmd.Stdout, cmd.Stderr = stdoutW, stderrW
 
 	run := &subscriptionRun{bridge: b, token: token, model: model, cmd: cmd, tmp: tmp, schema: len(req.Format.schema()) > 0, pending: map[string]chan mcpToolResult{}, stdin: stdin, owner: owner, effort: req.Effort, sessions: sessions}
+	run.names = bridgeNames(req.Tools)
 	run.safeguardBeta = req.SafeguardBeta
 	run.clientMarks = req.clientCache != nil
 	run.lean = req.leanPrompt
@@ -2106,6 +2122,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 		}
 		name, ok := strings.CutPrefix(name, "mcp__magpie__")
 		r.mu.Lock()
+		name = declaredName(r.names, name)
 		search := r.search != nil && name == r.searchName
 		r.mu.Unlock()
 		// magpie answers its own web search, as Claude Code does
@@ -2765,7 +2782,53 @@ func historyEnd(msgs []Message) int {
 // "Bash is disabled for this session, in subagents as well as here.",
 // which the model takes for a fact and gives up (#958).
 func bridgeName(name string) string {
-	return "mcp__magpie__" + name
+	return "mcp__magpie__" + bridgeToolName(name)
+}
+
+// bridgeToolName is the name the MCP helper offers a tool of the caller's
+// under. Claude Code takes an MCP tool's name as [A-Za-z0-9_-] only, with
+// mcp__magpie__ before it in at most 64: it made "spawn.agent" its
+// spawn_agent, which the client never offered (#2649). A name it would
+// change, or one ending as a changed name ends, is told apart by a hash of
+// it, the same in every run, so a resumed session and a conversation's
+// history name the tool as before; declaredName maps it back.
+func bridgeToolName(name string) string {
+	if bridgeToolNameOK.MatchString(name) && !bridgeToolNameHashed.MatchString(name) {
+		return name
+	}
+	sum := sha256.Sum256([]byte(name))
+	short := bridgeToolNameBad.ReplaceAllString(name, "_")
+	if len(short) > 38 {
+		short = short[:38]
+	}
+	return short + "_" + hex.EncodeToString(sum[:6])
+}
+
+var (
+	bridgeToolNameOK     = regexp.MustCompile(`^[A-Za-z0-9_-]{1,51}$`)
+	bridgeToolNameBad    = regexp.MustCompile(`[^A-Za-z0-9_-]`)
+	bridgeToolNameHashed = regexp.MustCompile(`_[0-9a-f]{12}$`)
+)
+
+// bridgeNames is the caller's name of each of tools by the name the MCP
+// helper offers it under, for those that differ (bridgeToolName).
+func bridgeNames(tools []Tool) map[string]string {
+	names := map[string]string{}
+	for _, t := range tools {
+		if b := bridgeToolName(t.Name); b != t.Name {
+			names[b] = t.Name
+		}
+	}
+	return names
+}
+
+// declaredName is the caller's name of the tool the run's agent called
+// name, by the names it was offered under (bridgeNames).
+func declaredName(names map[string]string, name string) string {
+	if n, ok := names[name]; ok {
+		return n
+	}
+	return name
 }
 
 // offeredTools is the names of the caller's tools, whose past calls a run
@@ -3430,6 +3493,7 @@ func (b *subscriptionBridge) mcpCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run.mu.Lock()
+	call.Name = declaredName(run.names, call.Name)
 	search, searchName := run.search, run.searchName
 	run.mu.Unlock()
 	if search != nil && call.Name == searchName {
@@ -4076,6 +4140,10 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 			for _, t := range req.Tools {
 				run.tools[t.Name] = true
 			}
+			if run.names == nil {
+				run.names = map[string]string{}
+			}
+			maps.Copy(run.names, bridgeNames(req.Tools))
 			run.mu.Unlock()
 		}
 		if err == nil {
@@ -4306,7 +4374,7 @@ func bridgeTools(req *Request) []bridgeTool {
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
-		tools = append(tools, bridgeTool{Name: t.Name, Description: t.Description, InputSchema: schema})
+		tools = append(tools, bridgeTool{Name: bridgeToolName(t.Name), Description: t.Description, InputSchema: schema})
 	}
 	return tools
 }

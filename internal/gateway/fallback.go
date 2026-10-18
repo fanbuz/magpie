@@ -357,6 +357,8 @@ func (s *Server) plan(p provider.Provider, model string, from provider.Protocol)
 			w := weighed(c, q, weighing{}, fallback, from)
 			w.Unlisted = true
 			pl.left = append(pl.left, w)
+			pl.unlisted = append(pl.unlisted, c)
+			pl.unlistedW = append(pl.unlistedW, w)
 		}
 		return cs
 	}
@@ -450,6 +452,8 @@ func planLevel(g provider.Group, ms []provider.Member, depth int, from provider.
 			w := weighed(c, m.Provider, weighing{}, false, from)
 			w.Unlisted, w.Via = true, m.Groups()
 			pl.left = append(pl.left, w)
+			pl.unlisted = append(pl.unlisted, c)
+			pl.unlistedW = append(pl.unlistedW, w)
 		}
 		return cs
 	}
@@ -485,6 +489,8 @@ func planLevel(g provider.Group, ms []provider.Member, depth int, from provider.
 				cs, sub.order = sinkOwn(m.Via[depth], cs, sub.order)
 				pl.left = append(pl.left, sub.left...)
 				pl.capped = append(pl.capped, sub.capped...)
+				pl.unlisted = append(pl.unlisted, sub.unlisted...)
+				pl.unlistedW = append(pl.unlistedW, sub.unlistedW...)
 				if len(cs) > 0 {
 					add(unit{cs: cs, order: sub.order, member: m.Path[depth]}, firstAwake(cs))
 				}
@@ -1133,7 +1139,9 @@ func promptRefused(status int, body []byte) bool {
 // (#350), OpenAI's "Unknown parameter", and a limit of its own on a tool's
 // JSON schema: OpenCode Go's 400 "JSON schema exceeds the maximum nesting
 // depth of 10 levels" on muse-spark-1.3-contributor for Claude Code's MCP
-// tools (#1870), which another member's model may take as they are. A
+// tools (#1870), which another member's model may take as they are; and a
+// custom tool turned away (customToolRefusal, DeepSeek's "Unsupported
+// custom tool: 'exec'", #2656) where no translation took it in. A
 // request missing what every API requires ("field required") or too long
 // for the model isn't one.
 var shapeWords = regexp.MustCompile(`(?i)failed to deserialize|unknown (item |content |input )?(type|variant|field|parameter)|unknown_parameter|unrecognized (request argument|field|parameter)|extra (inputs|fields) are not permitted|additional properties are not allowed|schema exceeds the maximum (nesting )?depth|schema[^"]{0,60}\bnesting depth\b`)
@@ -1157,10 +1165,15 @@ var unsaidWords = regexp.MustCompile(`(?i)(^|"|\\"|: )invalid request error trac
 
 // shapeRefused says a request failed over its shape alone: the next
 // member is asked, and this one doesn't rest, as nothing is wrong with it.
+// An upstream's word that the request is served on another API than the
+// one asked (wrongEndpoint) is one too, once it reaches the group: the
+// member has tried every API it has a URL for (forwardTranslated), and
+// another member, on another API or another vendor, may serve it (#2670:
+// a relay with a Chat URL alone, refusing tools with reasoning there).
 func shapeRefused(status int, body []byte) bool {
 	// the words are matched decoded, too (#1669)
 	body = wordsOf(body)
-	return (status == 400 || status == 422) && (shapeWords.Match(body) || unsaidWords.Match(body)) &&
+	return (status == 400 || status == 422) && (shapeWords.Match(body) || unsaidWords.Match(body) || customToolRefusal.Match(body) || wrongEndpoint(status, body)) &&
 		!quotaWords.Match(body) && !unservedWords.Match(body) && !refusedWords.Match(body)
 }
 
@@ -1230,7 +1243,7 @@ func retryable(status int, body []byte) bool {
 		// in front of zcode.z.ai): another provider goes another way
 		return true
 	case status == 400, status == 422:
-		return quotaWords.Match(body) || unservedWords.Match(body) || refusedWords.Match(body) || shapeWords.Match(body) || unsaidWords.Match(body) || regionWords.Match(body)
+		return quotaWords.Match(body) || unservedWords.Match(body) || refusedWords.Match(body) || shapeWords.Match(body) || unsaidWords.Match(body) || regionWords.Match(body) || wrongEndpoint(status, body)
 	}
 	return false
 }
@@ -1392,9 +1405,18 @@ func holds(c candidate, tokens int) bool {
 // request that doesn't parse leaves every one, and so does one no
 // candidate holds: the first is asked, and the agent told it overflowed,
 // to compact.
-func roomy(cs []candidate, pl planned, from provider.Protocol, body []byte) ([]candidate, planned) {
+//
+// Those left out are handed back (small, their rows in smallW when the
+// order has one each), kept for the last resort: when every candidate
+// with room is out of its allowance, a fallback too small is asked all
+// the same (Kai on Discord: both Claude accounts at their limit until
+// the next day, the Claude provider's Fallback a Codex model of 272K
+// under a longer conversation, left out without a word, and Claude Code
+// handed the 429). Its overflow tells the agent to compact, after which
+// the fallback holds it; the 429 told it only to wait for hours.
+func roomy(cs []candidate, pl planned, from provider.Protocol, body []byte) (out []candidate, _ planned, small []candidate, smallW []Weighed) {
 	if len(cs) < 2 {
-		return cs, pl
+		return cs, pl, nil, nil
 	}
 	served := sync.OnceValue(provider.Served) // the catalog, read once
 	least, windows := 0, map[string]int{}
@@ -1412,18 +1434,21 @@ func roomy(cs []candidate, pl planned, from provider.Protocol, body []byte) ([]c
 	// one model has nothing to choose between, and a body shorter than
 	// the least window can't estimate past it: neither is parsed
 	if len(windows) < 2 || least == 0 || len(body)/4 < least {
-		return cs, pl
+		return cs, pl, nil, nil
 	}
 	req, err := parse(from, body)
 	if err != nil {
-		return cs, pl
+		return cs, pl, nil, nil
 	}
 	tokens := estimate(req)
-	var out []candidate
 	var order []Weighed
 	parallel := len(pl.order) == len(cs)
 	for i, c := range cs {
 		if w := windows[key(c)]; w > 0 && tokens >= w {
+			small = append(small, c)
+			if parallel {
+				smallW = append(smallW, pl.order[i])
+			}
 			continue
 		}
 		out = append(out, c)
@@ -1432,12 +1457,12 @@ func roomy(cs []candidate, pl planned, from provider.Protocol, body []byte) ([]c
 		}
 	}
 	if len(out) == 0 || len(out) == len(cs) {
-		return cs, pl
+		return cs, pl, nil, nil
 	}
 	if parallel {
 		pl.order = order
 	}
-	return out, pl
+	return out, pl, small, smallW
 }
 
 // matesFirst puts first, of the candidates left, the other keys or

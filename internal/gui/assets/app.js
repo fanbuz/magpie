@@ -3566,6 +3566,7 @@ function openAgentMenu(anchor, a, inFold) {
         // everything magpie wrote comes out, what the user had goes back (Fate on Discord)
         ...(a.wired ? [{ name: "Disconnect from magpie", icon: UNPLUG, sep: !reapply, tip: t(DISCONNECT_TIP, { agent: a.name }), run: () => askDisconnect(a) }] : []),
         { name: "Hide", icon: EYE_OFF, sep: true, run: () => setAgentHidden(a, true) },
+        ...magpie.actions?.("agent", { agent: { id: a.id, name: a.name } }) || [],
       ];
   openRowMenu(anchor, acts);
 }
@@ -3581,7 +3582,8 @@ function openRowMenu(anchor, acts) {
     b.type = "button";
     b.setAttribute("role", "menuitem");
     b.disabled = !!o.off;
-    b.append(svg(o.icon, 13, 1.5), el("span", "rm-name", t(o.name)));
+    // a plugin's item (magpie.actions) is named in its own words
+    b.append(svg(o.icon, 13, 1.5), el("span", "rm-name", o.literal ? o.name : t(o.name)));
     if (o.key) b.append(el("span", "rm-key", o.key));
     if (o.tip) b.title = o.tip;
     // an item that is off can say why, under its name and as its title
@@ -5833,6 +5835,7 @@ function openProviderMenu(anchor, p) {
     { name: "Move up", icon: MOVE_UP, key: ALT + "↑", off: k <= 0, run: () => stepProvider(p.id, -1) },
     { name: "Move down", icon: MOVE_DOWN, key: ALT + "↓", off: k < 0 || k >= shown.length - 1, run: () => stepProvider(p.id, 1) },
     { name: "Move to bottom", icon: MOVE_BOTTOM, key: ALT + SHIFT + "↓", off: i === on.length - 1, run: () => arrangeProvider(p.id, on.length - 1) },
+    ...magpie.actions?.("provider", { provider: { id: p.id, name: p.name } }) || [],
   ]);
 }
 
@@ -6016,8 +6019,10 @@ function renderMovable() {
   let hid = "";
   try { hid = localStorage.getItem("magpie.deprecatedHidden") || ""; } catch {}
   const ids = ps.map((p) => p.id).join(",");
-  box.hidden = !ps.length || hid === ids;
-  if (box.hidden) return;
+  const unmoved = providers.unmoved || [];
+  box.hidden = (!ps.length || hid === ids) && !unmoved.length;
+  for (const p of unmoved) box.append(unmovedLine(p));
+  if (!ps.length || hid === ids) return;
   const names = ps.map((p) => p.name).join(t(", "));
   // one quiet line over the list, as calm as its rows: an amber dot, what
   // happened and why, and the two answers on the right (the owner: 这个太丑了 —
@@ -6040,6 +6045,49 @@ function renderMovable() {
   acts.append(hide, review);
   card.append(el("span", "dep-dot"), body, acts);
   box.append(card);
+}
+
+// unmovedLine: a retired built-in whose accounts haven't moved to its
+// plugin (a failed install): nothing serves them, so it is never hidden.
+// An amber dot, what happened and why, and the move, tried again here.
+const unmovedSaid = {}; // provider id → { busy } or { why }
+function unmovedLine(p) {
+  const card = el("div", "deprecation unmoved");
+  card.setAttribute("role", "note");
+  card.dataset.id = p.id;
+  const body = el("div", "dep-body");
+  const said = unmovedSaid[p.id];
+  const why = said?.why || moveWhy(p, p);
+  body.append(el("div", "dep-head", t("{name}'s built-in subscription is retired, and its accounts haven't moved to its plugin yet", { name: p.name })),
+    el("p", "dep-why", why ? t("Nothing serves them until they move: {error}", { error: why }) : t("Nothing serves them until they move. Moving keeps your accounts, models and agents as they are.")));
+  const acts = el("div", "dep-acts");
+  const b = el("button", "text action", said?.busy || (why ? t("Try again") : t("Move to the plugin")));
+  b.title = p.package; // the npm package: for the curious, not the sentence
+  b.disabled = b.classList.toggle("busy", !!said?.busy);
+  b.onclick = async () => {
+    unmovedSaid[p.id] = { busy: t("Installing the plugin and checking each account…") };
+    renderMovable();
+    try {
+      providers = await api("provider/move", { id: p.id });
+      delete unmovedSaid[p.id];
+      renderProviders();
+      const now = providers.providers.find((x) => x.id === p.id);
+      const accts = now?.account?.logins?.length || 0, models = (now?.models || []).filter((x) => x.on).length;
+      saidMoved(t("{name} now runs on its plugin — {accounts}, {models}.", {
+        name: p.name,
+        accounts: t(accts === 1 ? "{n} account" : "{n} accounts", { n: accts }),
+        models: t(models === 1 ? "{n} model" : "{n} models", { n: models }),
+      }));
+      state = await api("state");
+      renderAgents();
+    } catch (e) {
+      unmovedSaid[p.id] = { why: moveWhy({ why: e.why, error: e.message }, p) };
+      renderMovable();
+    }
+  };
+  acts.append(b);
+  card.append(el("span", "dep-dot"), body, acts);
+  return card;
 }
 
 // Sign-ins magpie found but leaves alone, so nobody wonders why an agent that
@@ -9689,6 +9737,8 @@ function drawEditor(p, presetID) {
   };
   saveBtn.onclick = save;
   bar.append(cancel, saveBtn);
+  // a plugin's panels for a provider (magpie.panels' provider), told which
+  if (p) { const slot = magpie.slot?.("provider", { provider: { id: p.id, name: p.name || p.id } }); if (slot) ed.append(slot); }
   ed.append(bar);
   setTimeout(() => (isNew ? (custom || another ? name : endpoint || vertexProject || key) : null)?.focus(), 0);
   return ed;
@@ -15093,6 +15143,7 @@ function renderQuotas() {
   renderPanelQuota();
   const subscriptions = $("#subscriptionUsage");
   const restoreFlash = keepQuotaFlash(subscriptions);
+  const restoreRefresh = keepQuotaRefresh(subscriptions);
   subscriptions.replaceChildren();
   // the allowances' own heading, apart from the period's cost: used or
   // left turns their meters, and is only there when some card has one (a
@@ -15119,9 +15170,10 @@ function renderQuotas() {
       subscriptions.append(card);
     }
     packUsageNow(subscriptions);
+    restoreRefresh();
     return;
   }
-  if (usageArranging) { usageRenderPending = true; return; }
+  if (usageArranging) { usageRenderPending = true; restoreRefresh(); return; }
   subscriptions.hidden = !quotas.length;
   // an agent with several accounts is one card, a section per account
   const groups = [];
@@ -15240,6 +15292,7 @@ function renderQuotas() {
   markUpstream();
   packUsageNow(subscriptions);
   restoreFlash();
+  restoreRefresh();
   requestAnimationFrame(focusQuotaCard);
 }
 
@@ -17554,20 +17607,43 @@ setInterval(() => {
 // as they were read (Hu9956, #840: 单独刷新某个套餐，而不用刷新全部). A
 // Claude account's is read by running Claude Code's own /usage, as the
 // page's Refresh does.
-const quotaRefreshing = new Set();
+const quotaRefreshing = new Map();
+let keptQuotaRefresh = null;
+// a redraw reuses the controls, so no reading restarts their motion
+function keepQuotaRefresh(box) {
+  const buttons = [...box.querySelectorAll(".quota-refresh")];
+  const focused = buttons.find(b => b === document.activeElement);
+  keptQuotaRefresh = new Map(buttons.map(b => [b.dataset.key, b]));
+  const shown = buttons.filter(b => b.getBoundingClientRect().width > 0);
+  for (const b of shown) b.classList.add("kept");
+  return () => {
+    keptQuotaRefresh = null;
+    if (focused?.isConnected) focused.focus({ preventScroll: true });
+    // a frame for the new hover state, so the reading doesn't slide
+    requestAnimationFrame(() => { for (const b of shown) b.classList.remove("kept"); });
+  };
+}
 function quotaRefresh(q) {
   const key = usageAcctKey(q);
-  const b = el("button", "quota-refresh" + (quotaRefreshing.has(key) ? " busy" : ""));
+  // only one its redraw took out: the panel and Usage page each draw it
+  const kept = [quotaRefreshing.get(key)?.button, keptQuotaRefresh?.get(key)].find((k) => k && !k.isConnected);
+  const b = kept || el("button", "quota-refresh");
+  if (quotaRefreshing.has(key) && b !== quotaRefreshing.get(key).button) b.classList.add("busy", "spun");
+  b.dataset.key = key;
   b.type = "button";
   b.title = t(q.provider === "claude" ? "Read this card again, by running Claude Code's own /usage" : "Read this card again");
   b.setAttribute("aria-label", t("Refresh this card"));
-  b.innerHTML = '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg>';
+  if (!kept) b.innerHTML = '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg>';
   b.onclick = async (e) => {
     e.stopPropagation();
     if (quotaRefreshing.has(key)) return;
-    quotaRefreshing.add(key);
     for (const k of quotaCycleHolds.keys()) if (k.startsWith(key + "\0")) quotaCycleHolds.delete(k);
     b.classList.add("busy");
+    const animation = !calm() && b.querySelector("path").animate([
+      { transform: "rotate(0deg)" }, { transform: "rotate(360deg)" },
+    ], { duration: 800, iterations: Infinity });
+    const refreshing = { button: b, animation };
+    quotaRefreshing.set(key, refreshing);
     const began = quotaRefreshVersion;
     try {
       const qs = await api("usage/quotas/refresh?provider=" + encodeURIComponent(q.provider) + (q.user ? "&user=" + encodeURIComponent(q.user) : ""), {});
@@ -17599,8 +17675,20 @@ function quotaRefresh(q) {
     } catch (err) {
       status(err.message, "err");
     } finally {
-      quotaRefreshing.delete(key);
+      // the reading now; the icon ends its turn (at least one)
       renderQuotas();
+      const done = () => {
+        if (quotaRefreshing.get(key) !== refreshing) return;
+        quotaRefreshing.delete(key);
+        b.classList.remove("busy");
+        for (const o of document.querySelectorAll(".quota-refresh.spun")) if (o.dataset.key === key) o.classList.remove("busy", "spun");
+        if (animation) animation.cancel();
+      };
+      if (animation && !calm()) {
+        const duration = animation.effect.getTiming().duration;
+        animation.effect.updateTiming({ iterations: Math.max(1, Math.ceil((animation.currentTime || 0) / duration)) });
+        animation.finished.then(done, done);
+      } else done();
     }
   };
   return b;
@@ -18704,7 +18792,7 @@ function tabKeys(tabs, sel) {
 // tab. A click on a tab, like every click, leaves the page where it is: the
 // tabs at the top stay where they were and the part comes in under them.
 // Picked in the sidebar, a part opens at its top (navSubs).
-const SET_TABS = ["general", "usage", "network", "models", "privacy", "otel", "sync", "about"];
+const SET_TABS = ["general", "usage", "network", "models", "privacy", "otel", "sync", "plugins", "about"];
 let setTab = "general";
 try { const k = localStorage.getItem("magpie.settingsTab"); if (SET_TABS.includes(k)) setTab = k; } catch {}
 let setShown = setTab; // the part shown: the one picked, or the first there
@@ -18724,7 +18812,9 @@ function setSetTab(tab, remember) {
     setTab = tab;
     try { localStorage.setItem("magpie.settingsTab", tab); } catch {}
   }
-  for (const id of SET_TABS) $("#setTab-" + id).hidden = featureHides($("#setTab-" + id)) || !partShows($("#setPage-" + id));
+  // Plugins is there while a plugin's panel is (magpie.panels' settings)
+  for (const id of SET_TABS) $("#setTab-" + id).hidden = featureHides($("#setTab-" + id)) || !partShows($("#setPage-" + id))
+    || (id === "plugins" && !$("#setPage-plugins .plugin-panel"));
   if (!SET_TABS.includes(tab) || $("#setTab-" + tab).hidden) tab = SET_TABS.find((id) => !$("#setTab-" + id).hidden) || "general";
   for (const id of SET_TABS) {
     const b = $("#setTab-" + id), on = id === tab;
@@ -22477,11 +22567,14 @@ for (const v of document.querySelectorAll(".view")) {
 }
 
 async function show(v) {
+  // a built-in page a plugin's page replaces (magpie.page.replaces) opens that
+  v = magpie.replacing?.(v) || v;
   // a page gateway mode leaves out (a link to it, an address kept) opens Providers
   if (gatewayMode && GATEWAY_HIDES.includes(v)) v = "providers";
   // and one a built-in plugin switched off has, Agents
   if (featureHides($(`#nav button[data-view="${v}"]`))) v = gatewayMode ? "providers" : "agents";
   if (v !== view) {
+    if (v === "plugins" && pluginUpdates) window.pluginTabTo?.("installed");
     if (view === "providers" && (editing !== null || importing || importingApps)) {
       if (!await cancelEdit(true)) return false;
     } else if (!$("#modal").hidden && !$("#modal").classList.contains("out")) {
@@ -23042,13 +23135,13 @@ function navSubs() {
   // a group none of whose pages shows (gateway mode's) leaves out its name
   for (const gl of nav.querySelectorAll(".nav-gl")) {
     let any = false;
-    for (let n = gl.nextElementSibling; n && !n.matches(".nav-gl"); n = n.nextElementSibling) if (n.dataset.view && !n.hidden) any = true;
+    for (let n = gl.nextElementSibling; n && !n.matches(".nav-gl"); n = n.nextElementSibling) if (n.dataset.view && !n.hidden && !n.dataset.replaced) any = true;
     gl.hidden = !any;
   }
   const side = sideNav();
   const items = side ? navSubItems(view) : [];
   const at = view === "settings" ? $("#prefs") : nav.querySelector(`button[data-view="${view}"]`);
-  const sig = [side, view, locale, ...items.map((b) => b.textContent.trim() + (b.classList.contains("on") ? "*" : ""))].join("|");
+  const sig = [side, view, locale, pluginUpdates, ...items.map((b) => b.textContent.trim() + (b.classList.contains("on") ? "*" : ""))].join("|");
   if (sig === navSubsAt) return;
   navSubsAt = sig;
   let box = document.querySelector(".nav-sub:not(.leaving)");
@@ -23084,7 +23177,11 @@ function navSubs() {
       s.setAttribute("aria-selected", String(cur));
       s.tabIndex = cur ? 0 : -1;
       s.append(el("span", "", name));
-      if (n) s.append(el("em", "", n));
+      if (b.dataset.sub === "installed" && pluginUpdates) {
+        const up = el("em", "up", t(pluginUpdates === 1 ? "1 update" : "{n} updates", { n: pluginUpdates }));
+        s.title = t("Newer versions of your plugins are out: update them under Installed");
+        s.append(up);
+      } else if (n) s.append(el("em", "", n));
       // the selection goes as the finger comes down, as iOS's does, not once
       // the page has drawn the tab; let go off the row, it goes back
       s.onpointerdown = (e) => { if (e.button === 0) navSubGlide(box, s); };
@@ -23218,7 +23315,7 @@ if (mode === "window") {
   // there or by a link) is drawn again in the sidebar, once a frame
   let queued = false;
   const again = () => { if (queued) return; queued = true; requestAnimationFrame(() => { queued = false; navSubs(); }); };
-  const mo = new MutationObserver(again);
+  const mo = new MutationObserver(() => { again(); if (document.body.classList.contains("side-nav")) tools(); });
   for (const v of Object.keys(NAV_SUBS)) mo.observe($("#view-" + v), { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "hidden"] });
   // a page whose head is only its tools (Library, Plugins, Settings) has them
   // in the title bar beside the sidebar (app.css): between where the reader
@@ -23230,12 +23327,52 @@ if (mode === "window") {
     if (toolsAt) return;
     toolsAt = requestAnimationFrame(() => {
       toolsAt = 0;
-      const top = $(".top"), c = $("#crumb").getBoundingClientRect(), a = $(".actions").getBoundingClientRect();
-      const st = document.documentElement.style;
+      const top = $(".top"), crumb = $("#crumb"), a = $(".actions").getBoundingClientRect();
+      const st = document.documentElement.style, body = document.body;
       const set = (k, v) => { if (st.getPropertyValue(k) !== v) st.setProperty(k, v); };
       set("--top-h", top.offsetHeight + "px");
-      set("--tools-l", Math.ceil(c.right + 16) + "px");
       set("--tools-r", Math.ceil(innerWidth - a.left + 8) + "px");
+      // the room the title and the tools share (#2625): the title whole and
+      // the tools with their words; else the tools as icons; else the title
+      // cut at its end, so nothing lies over it. Each step is laid out and
+      // read again here, in this frame, the next only if it ran over
+      const kids = [...crumb.children];
+      for (const e of kids) if (e.hidden) e.hidden = false;
+      if (!body.classList.contains("side-nav")) {
+        body.classList.remove("tools-tight");
+        set("--crumb-max", "none");
+        return;
+      }
+      const head = $(":is(#view-library .lib-head, #view-plugins .pm-head, #view-settings .set-head):not([hidden] *)");
+      const c = crumb.getBoundingClientRect(), gap = parseFloat(getComputedStyle(crumb).columnGap) || 0;
+      const wide = kids.map((e) => (e.tagName === "B" ? e.scrollWidth : e.getBoundingClientRect().width) + gap);
+      const whole = Math.ceil(wide.reduce((w, x) => w + x, 0) - (kids.length ? gap : 0));
+      const over = () => {
+        const h = head.getBoundingClientRect();
+        let left = h.right;
+        for (const e of head.querySelectorAll("button, label, input")) {
+          if (!e.getClientRects().length || e.closest(".lib-tabs, .set-tabs")) continue;
+          left = Math.min(left, e.getBoundingClientRect().left);
+        }
+        return { over: left < h.left - 0.5, need: h.right - left };
+      };
+      body.classList.remove("tools-tight");
+      set("--crumb-max", "none");
+      set("--tools-l", Math.ceil(c.left + whole + 16) + "px");
+      if (!head || !over().over) return;
+      body.classList.add("tools-tight");
+      const o = over();
+      if (!o.over) return;
+      const max = Math.max(0, Math.floor(a.left - 8 - 16 - o.need - c.left));
+      // where the reader is keeps its last word: "Work / Library /" goes,
+      // a part and its slash at a time, before "MCP servers" is cut
+      let w = whole;
+      for (let i = 0; i + 1 < kids.length - 1 && w > max; i += 2) {
+        kids[i].hidden = kids[i + 1].hidden = true;
+        w -= wide[i] + wide[i + 1];
+      }
+      set("--crumb-max", max + "px");
+      set("--tools-l", Math.ceil(c.left + max + 16) + "px");
     });
   };
   const ro = new ResizeObserver(tools);
@@ -23307,9 +23444,13 @@ async function renderPluginDot() {
   const u = await api("plugins/updates").catch(() => null);
   const n = u?.waiting?.length || 0;
   b.classList.toggle("has-dot", n > 0);
+  // the dot says itself where the reader acts on it: Installed, under
+  // Plugins in the sidebar, reads "1 update" in its count's place
+  if (pluginUpdates !== n) { pluginUpdates = n; navSubs(); }
   if (n) b.title = t(n === 1 ? "An update for {name} is out" : "Updates for {n} plugins are out", { n, name: u.waiting[0].package });
   else b.removeAttribute("title");
 }
+var pluginUpdates = 0;
 window.renderPluginDot = renderPluginDot;
 renderPluginDot();
 window.addEventListener("focus", renderPluginDot);

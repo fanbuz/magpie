@@ -109,13 +109,19 @@ func (s *Server) heapProfile(w http.ResponseWriter, r *http.Request) {
 // and corsGuard turn most of these away first; this holds where Handler
 // is served without them too.
 func heapRefused(r *http.Request) string {
+	return profileRefused(r, "heap profile", "magpie heap")
+}
+
+// profileRefused is heapRefused for any profile of this process (cpuRefused
+// too): what names the profile, cmd the command that asks for it.
+func profileRefused(r *http.Request, what, cmd string) string {
 	switch {
 	case !local(r):
-		return "magpie hands its heap profile only to a program on this computer, over loopback: run magpie heap there"
+		return "magpie hands its " + what + " only to a program on this computer, over loopback: run " + cmd + " there"
 	case fromBrowser(r):
-		return "magpie doesn't hand its heap profile to a web page: run magpie heap in a terminal"
+		return "magpie doesn't hand its " + what + " to a web page: run " + cmd + " in a terminal"
 	case !loopbackHost(r.Host):
-		return "magpie hands its heap profile only to a call to localhost or a loopback address, not " + r.Host + ": run magpie heap"
+		return "magpie hands its " + what + " only to a call to localhost or a loopback address, not " + r.Host + ": run " + cmd
 	}
 	return ""
 }

@@ -196,6 +196,11 @@ func (s *Server) relayCodexSocket(parent context.Context, r *http.Request, down,
 		if e.fromClient {
 			if v.Type == "response.create" {
 				_, routed := codexAccounts(r, v.Model)
+				if !routed {
+					// A recorded native compaction needs HTTP's writer and
+					// account checks, even with only the sign-in enabled.
+					_, routed = codexSealedFor(r, v.Model, e.data)
+				}
 				_, off := codexNativeOff(v.Model)
 				if !codexSocketPolicy(r) || v.Model == "" || strings.Contains(v.Model, "/") || routed || off || len(turns) >= 32 {
 					_ = write(down, websocket.MessageText, []byte(`{"type":"error","error":{"type":"invalid_request_error","code":"magpie_http_required","message":"This request requires Magpie HTTP routing; reconnect using HTTP/SSE."}}`))

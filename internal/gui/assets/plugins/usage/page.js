@@ -206,7 +206,7 @@ function renderUsageLoading() {
   for (const id of ["usageAgents", "usageAgentsHid", "usageModels", "usageKeys"]) $("#" + id).hidden = true;
   // the allowances' head is renderQuotas' alone: the quotas it heads are
   // still there while the period loads (#809, Hu9956: 用量界面红框这行会延迟几秒才会出现)
-  for (const h of $$("#view-usage .row-head:not(#quotaHead)")) h.hidden = true;
+  for (const h of $$("#view-usage .row-head:not(#quotaHead, .plugin-panel > .row-head)")) h.hidden = true;
   $("#usageNote").textContent = "";
 }
 
@@ -384,7 +384,7 @@ function renderUsage() {
   $("#chart").hidden = empty;
   for (const id of ["usageAgents", "usageModels"]) $("#" + id).hidden = empty;
   if (empty) $("#usageAgentsHid").hidden = true;
-  for (const h of $$("#view-usage .row-head:not(#quotaHead)")) h.hidden = empty;
+  for (const h of $$("#view-usage .row-head:not(#quotaHead, .plugin-panel > .row-head)")) h.hidden = empty;
   $("#usageKeysHead").hidden = $("#usageKeys").hidden = empty || !u.callerKeys?.length;
   // each subscription account's share, by the account that answered (#557)
   $("#usageAccountsHead").hidden = $("#usageAccounts").hidden = empty || !u.accounts?.length;

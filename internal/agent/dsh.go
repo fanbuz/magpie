@@ -442,14 +442,24 @@ func dshParse(path, raw string) (head []string, items []dshItem, err error) {
 	if b, ok := edit.BlockList(raw); ok {
 		raw = b
 	}
+	opened := false // a "---" or "[]" came before the first entry
 	for _, l := range splitLinesKeep(raw) {
 		t := strings.TrimSpace(l)
 		switch {
 		case strings.HasPrefix(l, "- ") || l == "-":
 			items = append(items, dshItem{lines: []string{l}})
 		case len(items) == 0:
-			if t != "" && !strings.HasPrefix(t, "#") && t != "[]" {
+			// "---" is YAML's document start marker: a patch list may open
+			// with one (#2667), and it stays in the head it is written back
+			// with, so the file keeps it. Only at the left edge and before
+			// anything but comments: a second one starts a second
+			// document, which is no list magpie can edit.
+			marker := dshDocStart(l) && !opened
+			if t != "" && !strings.HasPrefix(t, "#") && t != "[]" && !marker {
 				return nil, nil, fmt.Errorf("%s is not a list of entries magpie can edit", path)
+			}
+			if t != "" && !strings.HasPrefix(t, "#") {
+				opened = true
 			}
 			if t != "[]" {
 				head = append(head, l)
@@ -2176,3 +2186,20 @@ var (
 	noticeDsh4 = newNotice("~/.dsh/settings.yaml sets its own DeepSeek endpoint or key, which dsh puts over magpie's; clear it in dsh's Models page to go through magpie.")
 	noticeDsh5 = newNotice("DeepSeek Harness Desktop hasn't been opened yet: it starts on this the first time it opens.")
 )
+
+// dshDocStart says whether l is YAML's document start marker, "---" at the
+// left edge with at most a comment after it.
+func dshDocStart(l string) bool {
+	r, ok := strings.CutPrefix(l, "---")
+	if !ok {
+		return false
+	}
+	if r == "" {
+		return true
+	}
+	if r[0] != ' ' && r[0] != '\t' {
+		return false
+	}
+	r = strings.TrimSpace(r)
+	return r == "" || strings.HasPrefix(r, "#")
+}

@@ -564,6 +564,7 @@ function routingPage(part) {
     if (!f) return unrecorded(r) ? t("This request completed, but its routing details were not recorded.") : t("Nothing could take {model}.", { model: r.model });
     const w = who(f);
     if (r.sealedTask && r.leadAccount === f.id) return t("{who} goes first: it answered the parent agent and may be needed to read this encrypted task.", { who: w });
+    if (r.compaction && r.order.length === 1) return t("{who} compacted this conversation natively, and only it can read that compaction, so the conversation stays on it: other accounts aren't asked. Start a new conversation to use them.", { who: w });
     if (r.order.length === 1) {
       if (f.rest) return t("{who} is the only one, so it's tried though it is resting.", { who: w });
       return f.kind === "account" ? t("{who} is the only account on for {model} — nothing to choose between.", { who: w, model: wentOn(r) })
@@ -3538,7 +3539,7 @@ function routingPage(part) {
   const gNames = el("div", "rt-gnames");
   // the groups go with the routing groups built-in plugin; the pools stay
   for (const n of [gHead, gFound, gNames, gList]) n.dataset.feature = "groups";
-  // and off (a new install's Essentials leaves it off), where they were
+  // and off (the Essentials preset leaves it off), where they were
   // the page says so and turns it on (bigbenniu on X: past the requests
   // there was nothing, and no word of where New group had gone). The
   // groups magpie finds route all the same.
