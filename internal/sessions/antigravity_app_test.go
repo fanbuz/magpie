@@ -105,15 +105,18 @@ func TestAntigravityAppCalls(t *testing.T) {
 	}
 	slices.SortFunc(got, func(a, b Call) int { return a.Time.Compare(b.Time) })
 	want := []struct {
-		sec    int64
-		nanos  int64
-		model  string
-		tokens Tokens
+		sec       int64
+		nanos     int64
+		model     string
+		tokens    Tokens
+		reasoning int
+		ttft      int64
+		millis    int64
 	}{
-		{1791860318, 193779000, "gemini-3.8-flash", Tokens{Input: 13317, Output: 621}},
-		{1791860328, 770822000, "gemini-3.8-flash", Tokens{Input: 14184, Output: 164}},
-		{1791860333, 626675000, "gemini-3.8-flash", Tokens{Input: 15531, Output: 194}},
-		{1791860353, 992204000, "", Tokens{Input: 4254, Output: 276, CacheRead: 18561}},
+		{1791860318, 193779000, "gemini-3.8-flash", Tokens{Input: 13317, Output: 621}, 502, 10466, 10475},
+		{1791860328, 770822000, "gemini-3.8-flash", Tokens{Input: 14184, Output: 164}, 69, 4837, 4842},
+		{1791860333, 626675000, "gemini-3.8-flash", Tokens{Input: 15531, Output: 194}, 80, 3800, 9702},
+		{1791860353, 992204000, "", Tokens{Input: 4254, Output: 276, CacheRead: 18561}, 158, 6055, 10521},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("want %d calls (none from a step without a model call), got %d: %+v", len(want), len(got), got)
@@ -122,8 +125,10 @@ func TestAntigravityAppCalls(t *testing.T) {
 	for i, w := range want {
 		c := got[i]
 		at := time.Unix(w.sec, w.nanos)
-		if !c.Time.Equal(at) || c.Session != id || c.Tokens != w.tokens || c.Model != w.model {
-			t.Errorf("call %d: %v %s %q %+v, want %v %s %q %+v", i, c.Time, c.Session, c.Model, c.Tokens, at, id, w.model, w.tokens)
+		if !c.Time.Equal(at) || c.Session != id || c.Tokens != w.tokens || c.Model != w.model || c.Reasoning != w.reasoning || c.TTFT != w.ttft || c.Millis != w.millis {
+			t.Errorf("call %d: %v %s %q %+v r=%d ttft=%d ms=%d, want %v %s %q %+v r=%d ttft=%d ms=%d",
+				i, c.Time, c.Session, c.Model, c.Tokens, c.Reasoning, c.TTFT, c.Millis,
+				at, id, w.model, w.tokens, w.reasoning, w.ttft, w.millis)
 		}
 		if c.Msg == "" || msgs[c.Msg] {
 			t.Errorf("call %d: step id %q to count it once by is empty or taken", i, c.Msg)
@@ -199,21 +204,35 @@ func TestAntigravityAppDeploymentName(t *testing.T) {
 		return append([]byte{1<<3 | 2, byte(len(inner))}, inner...)
 	}
 	for in, want := range map[string]string{
-		"gemini-4-argon-d":      "gemini-4-argon",
-		"gemini-3.8-flash-n":    "gemini-3.8-flash",
-		"gemini-3.8-flash-lite": "gemini-3.8-flash-lite",
-		"gemini-3.8-flash-nano": "gemini-3.8-flash-nano",
-		"gemini-4-argon":        "gemini-4-argon",
-		"gemini-d":              "gemini-d",
-		"gpt-5-d":               "gpt-5-d",
-		"claude-sonnet-4-5-n":   "claude-sonnet-4-5-n",
-		"gemini-4-argon-D":      "gemini-4-argon-D",
+		"gemini-4-argon-d":          "gemini-4-argon",
+		"gemini-4-argon-trial":      "gemini-4-argon",
+		"gemini-4-argon-trial-high": "gemini-4-argon",
+		"gemini-3.8-flash-n":        "gemini-3.8-flash",
+		"gemini-3.8-flash-low-n":    "gemini-3.8-flash",
+		"gemini-3.8-flash-lite":     "gemini-3.8-flash-lite",
+		"gemini-3.8-flash-nano":     "gemini-3.8-flash-nano",
+		"gemini-4-argon":            "gemini-4-argon",
+		"claude-opus-5-5-high":      "claude-opus-5-5",
+		"gemini-d":                  "gemini-d",
+		"gemini-trial":              "gemini-trial",
+		"gpt-5-d":                   "gpt-5-d",
+		"gpt-5-trial":               "gpt-5-trial",
+		"claude-sonnet-4-5-n":       "claude-sonnet-4-5-n",
+		"gemini-4-argon-D":          "gemini-4-argon-D",
 	} {
 		for _, field := range []int{19, 21, 22} {
 			if got := agAppModel(gen(field, in)); got != want {
 				t.Errorf("field %d %q: %q, want %q", field, in, got, want)
 			}
 		}
+	}
+	if g := agAppGenOf(gen(19, "claude-opus-5-5-high")); g.model != "claude-opus-5-5" || g.effort != "high" {
+		t.Errorf("claude-opus-5-5-high: %+v", g)
+	}
+	named := append(append(binary.AppendUvarint(nil, 19<<3|2), byte(len("gemini-4-argon-trial"))), "gemini-4-argon-trial"...)
+	named = append(append(binary.AppendUvarint(named, 21<<3|2), byte(len("Gemini 4 Argon (High)"))), "Gemini 4 Argon (High)"...)
+	if g := agAppGenOf(append([]byte{1<<3 | 2, byte(len(named))}, named...)); g.model != "gemini-4-argon" || g.effort != "high" {
+		t.Errorf("gemini-4-argon-trial with display name: %+v", g)
 	}
 }
 

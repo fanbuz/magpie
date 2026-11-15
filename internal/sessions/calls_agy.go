@@ -95,6 +95,23 @@ func agyDBFiles(transcript string) []string {
 // agyStepModels is the model of each step of a conversation's database,
 // by the step's index; nil when the database can't be read.
 func agyStepModels(path string) map[int]string {
+	meta := agyStepMeta(path)
+	if len(meta) == 0 {
+		return nil
+	}
+	out := make(map[int]string, len(meta))
+	for step, g := range meta {
+		if g.model != "" {
+			out[step] = g.model
+		}
+	}
+	return out
+}
+
+// agyStepMeta is the generator and step metadata of each step of a
+// conversation's database, by the step's index; nil when the database
+// can't be read.
+func agyStepMeta(path string) map[int]agAppGen {
 	if _, err := os.Stat(path); err != nil {
 		return nil
 	}
@@ -108,8 +125,8 @@ func agyStepModels(path string) map[int]string {
 		return nil
 	}
 	defer tx.Rollback()
-	out := map[int]string{}
-	gens := map[int64]string{}
+	out := map[int]agAppGen{}
+	gens := map[int64]agAppGen{}
 	rows, err := tx.Query("SELECT idx, data FROM gen_metadata WHERE data IS NOT NULL")
 	if err != nil {
 		return nil
@@ -120,13 +137,13 @@ func agyStepModels(path string) map[int]string {
 		if rows.Scan(&idx, &b) != nil {
 			continue
 		}
-		m := agAppModel(b)
-		if m == "" {
+		g := agAppGenOf(b)
+		if g.model == "" && g.effort == "" && g.reasoning == 0 && g.ttft == 0 && g.millis == 0 {
 			continue
 		}
-		gens[idx] = m
-		if step, ok := agyGenStep(b); ok {
-			out[step] = m
+		gens[idx] = g
+		if g.step > 0 {
+			out[g.step] = g
 		}
 	}
 	rows.Close()
@@ -155,43 +172,21 @@ func agyStepModels(path string) map[int]string {
 		}) != nil {
 			continue
 		}
-		if m, ok := gens[gen]; ok {
-			out[int(idx)] = m
+		g, ok := gens[gen]
+		if sc, _, stepOK := agAppStep(b); stepOK {
+			if sc.reasoning > 0 {
+				g.reasoning = sc.reasoning
+			}
+			if sc.ttft > 0 || sc.millis > 0 {
+				g.ttft, g.millis = sc.ttft, sc.millis
+			}
+			ok = true
+		}
+		if ok {
+			out[int(idx)] = g
 		}
 	}
 	return out
-}
-
-// agyGenStep is the step a generator answered: its "last_step_index" n,
-// in field 1.20, is step n+1.
-func agyGenStep(b []byte) (int, bool) {
-	step, ok := 0, false
-	_ = pbWalk(b, func(num int, v uint64, d []byte) {
-		if num != 1 || d == nil {
-			return
-		}
-		_ = pbWalk(d, func(n int, v uint64, d []byte) {
-			if n != 20 || d == nil {
-				return
-			}
-			var key, val string
-			_ = pbWalk(d, func(n int, v uint64, d []byte) {
-				switch {
-				case d == nil:
-				case n == 1:
-					key = string(d)
-				case n == 2:
-					val = string(d)
-				}
-			})
-			if key == "last_step_index" {
-				if i, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && i >= 0 {
-					step, ok = i+1, true
-				}
-			}
-		})
-	})
-	return step, ok
 }
 
 type agyStep struct {
@@ -240,9 +235,12 @@ func readAgyCalls(f file) (*callFile, bool) {
 		}
 	}
 	if len(at) > 0 {
-		if models := agyStepModels(agyConversationDB(f.path)); len(models) > 0 {
+		if meta := agyStepMeta(agyConversationDB(f.path)); len(meta) > 0 {
 			for step, i := range at {
-				st.Calls[i].Model = models[step]
+				g := meta[step]
+				c := &st.Calls[i]
+				c.Model, c.Effort = g.model, st.str(g.effort)
+				c.Reasoning, c.TTFT, c.Millis = g.reasoning, g.ttft, g.millis
 			}
 		}
 	}

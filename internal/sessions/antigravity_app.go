@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/dirent"
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // The Antigravity app's (the desktop IDE's, agent "antigravity") own
@@ -31,18 +32,26 @@ import (
 // steps.metadata is a plain protobuf message:
 //
 //	1   the step's start (google.protobuf.Timestamp: 1 seconds, 2 nanos)
+//	6   when the first streamed chunk arrived (Timestamp; 6 − 1 is TTFT)
+//	7   when the streamed chunks ended (Timestamp; 7 − 1 is duration)
 //	9   the model call's usage, on a model's step:
 //	      2 input tokens, less what was read from the cache
-//	      3 output tokens
+//	      3 output tokens (reasoning + answer)
 //	      4 tokens written to the cache
 //	      5 tokens read from the cache
+//	      9 reasoning (thinking) tokens
 //	      11 the vendor's response id
 //	20  where the step sits: 3 the gen_metadata idx of its generator
 //	    (absent for generator 0)
 //
-// gen_metadata.data's field 1 is the message asked of the model, whose
-// field 19 is the model's id ("gemini-3.8-flash-n", counted as
-// gemini-3.8-flash), else 21 or 22 (cc-bar's reader). Nothing else of either column is read. Each call is the app's,
+// gen_metadata.data's field 1 is the message asked of the model: field 4
+// holds the call's usage (4.9 reasoning tokens), fields 11 and 12 the TTFT
+// and stream durations (google.protobuf.Duration: 11 + 12 is duration),
+// field 19 the model's id ("gemini-3.8-flash-n" or "gemini-4-argon-trial",
+// counted under the model; "claude-opus-5-5-high" at high), field 20
+// {1 key, 2 value} pairs ("last_step_index" n is step n+1), and field 21
+// the display name ("Gemini 4 Argon (High)", naming the thinking level) or
+// 22 (cc-bar's reader). Nothing else of either column is read. Each call is the app's,
 // under the model its generator names; one sent through magpie is the
 // gateway's to count, matched to the gateway's record by its tokens and
 // time as an agy step is (usage's agyGateway: the app sends no session
@@ -140,11 +149,25 @@ func antigravityCallFiles() []file { return antigravityFiles() }
 
 // agAppCall is one model call of a conversation.
 type agAppCall struct {
-	step     int64
-	at       time.Time
-	model    string
-	tokens   Tokens
-	response string
+	step      int64
+	at        time.Time
+	model     string
+	effort    string
+	tokens    Tokens
+	reasoning int
+	ttft      int64
+	millis    int64
+	response  string
+}
+
+// agAppGen is what a gen_metadata row says about its model call.
+type agAppGen struct {
+	step      int
+	model     string
+	effort    string
+	reasoning int
+	ttft      int64
+	millis    int64
 }
 
 // errAgApp is a protobuf that can't be read.
@@ -165,15 +188,13 @@ func antigravityRead(path string) ([]agAppCall, error) {
 		return nil, err
 	}
 	defer tx.Rollback()
-	models := map[int64]string{}
+	gens := map[int64]agAppGen{}
 	if rows, err := tx.Query("SELECT idx, data FROM gen_metadata WHERE data IS NOT NULL"); err == nil {
 		for rows.Next() {
 			var idx int64
 			var b []byte
 			if rows.Scan(&idx, &b) == nil {
-				if m := agAppModel(b); m != "" {
-					models[idx] = m
-				}
+				gens[idx] = agAppGenOf(b)
 			}
 		}
 		rows.Close()
@@ -195,7 +216,17 @@ func antigravityRead(path string) ([]agAppCall, error) {
 		if !ok {
 			continue
 		}
-		c.step, c.model = idx, models[gen]
+		g := gens[gen]
+		c.step, c.model, c.effort = idx, g.model, g.effort
+		if c.reasoning == 0 {
+			c.reasoning = g.reasoning
+		}
+		if c.ttft == 0 {
+			c.ttft = g.ttft
+		}
+		if c.millis == 0 && g.millis >= c.ttft {
+			c.millis = g.millis
+		}
 		if i, seen := byResponse[c.response]; seen && c.response != "" {
 			out[i] = c
 			continue
@@ -211,12 +242,21 @@ func antigravityRead(path string) ([]agAppCall, error) {
 // agAppStep is a step's model call and its generator, ok when the step is
 // a model's call with tokens and a time.
 func agAppStep(b []byte) (c agAppCall, gen int64, ok bool) {
+	var first, end time.Time
 	var usage []byte
 	err := pbWalk(b, func(num int, v uint64, d []byte) {
 		switch num {
 		case 1:
 			if d != nil {
 				c.at = pbTime(d)
+			}
+		case 6:
+			if d != nil {
+				first = pbTime(d)
+			}
+		case 7:
+			if d != nil {
+				end = pbTime(d)
 			}
 		case 9:
 			usage = d
@@ -242,6 +282,8 @@ func agAppStep(b []byte) (c agAppCall, gen int64, ok bool) {
 				c.tokens.CacheWrite = int(v)
 			case 5:
 				c.tokens.CacheRead = int(v)
+			case 9:
+				c.reasoning = int(v)
 			}
 		} else if num == 11 {
 			c.response = string(d)
@@ -249,13 +291,27 @@ func agAppStep(b []byte) (c agAppCall, gen int64, ok bool) {
 	}) != nil || c.tokens.zero() {
 		return c, 0, false
 	}
+	if first.After(c.at) {
+		c.ttft = first.Sub(c.at).Milliseconds()
+		if !end.Before(first) {
+			c.millis = end.Sub(c.at).Milliseconds()
+		}
+	}
 	return c, gen, true
 }
 
 // agAppModel is the model a generator's message names: its field 19, else
 // 21, else 22.
-func agAppModel(b []byte) string {
+func agAppModel(b []byte) string { return agAppGenOf(b).model }
+
+// agAppGenOf reads a generator's message: its model and effort (fields 19,
+// 21, 22), the step it answered (field 20's "last_step_index" n is step
+// n+1), its reasoning tokens (field 4.9), and its TTFT and stream duration
+// (fields 11 and 12).
+func agAppGenOf(b []byte) (g agAppGen) {
 	var named [3]string
+	var d11, d12 time.Duration
+	var has11, has12 bool
 	_ = pbWalk(b, func(num int, v uint64, d []byte) {
 		if num != 1 || d == nil {
 			return
@@ -265,8 +321,34 @@ func agAppModel(b []byte) string {
 				return
 			}
 			switch n {
+			case 4:
+				_ = pbWalk(d, func(u int, v uint64, d []byte) {
+					if u == 9 && d == nil {
+						g.reasoning = int(v)
+					}
+				})
+			case 11:
+				d11, has11 = pbDuration(d)
+			case 12:
+				d12, has12 = pbDuration(d)
 			case 19:
 				named[0] = strings.TrimSpace(string(d))
+			case 20:
+				var key, val string
+				_ = pbWalk(d, func(k int, v uint64, d []byte) {
+					switch {
+					case d == nil:
+					case k == 1:
+						key = string(d)
+					case k == 2:
+						val = string(d)
+					}
+				})
+				if key == "last_step_index" {
+					if i, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && i >= 0 {
+						g.step = i + 1
+					}
+				}
 			case 21:
 				named[1] = strings.TrimSpace(string(d))
 			case 22:
@@ -274,27 +356,42 @@ func agAppModel(b []byte) string {
 			}
 		})
 	})
+	if has11 && d11 > 0 {
+		g.ttft = d11.Milliseconds()
+		if has12 && d12 >= 0 {
+			g.millis = (d11 + d12).Milliseconds()
+		}
+	}
 	for _, m := range named {
 		if m != "" && len(m) <= 200 {
 			if base, ok := GeminiDeployment(m); ok {
-				return base
+				m = base
 			}
-			return m
+			m, g.effort = provider.AntigravityModelEffort(m, named[1])
+			if base, ok := GeminiDeployment(m); ok {
+				m = base
+			}
+			g.model = m
+			break
 		}
 	}
-	return ""
+	return g
 }
 
 // GeminiDeployment is the Gemini model a Google deployment's name stands
 // for, and whether m is such a name: a gemini-* id with one letter after
-// its last hyphen. Google names the deployment serving gemini-3.8-flash
-// "gemini-3.8-flash-n" (the owner's real Antigravity account, b2432754e)
-// and the one serving gemini-4-argon "gemini-4-argon-d" (oioio's
-// Antigravity database, 11-06): ids no request can ask for, which are that
+// its last hyphen, or "-trial" (#4805). Google names the deployment serving
+// gemini-3.8-flash "gemini-3.8-flash-n" (the owner's real Antigravity
+// account, b2432754e) and the one serving gemini-4-argon
+// "gemini-4-argon-d" (oioio's Antigravity database, 11-06) or
+// "gemini-4-argon-trial": ids no request can ask for, which are that
 // model, at its price. No Gemini model's own id ends in a lone letter
 // (-lite, -nano, -pro, -001 and -exp are longer), and other makers' ids
 // are left as written.
 func GeminiDeployment(m string) (string, bool) {
+	if base, ok := strings.CutSuffix(m, "-trial"); ok && strings.HasPrefix(base, "gemini-") && len(base) > len("gemini-") {
+		return base, true
+	}
 	i := strings.LastIndexByte(m, '-')
 	if i < 0 || len(m)-i != 2 || m[i+1] < 'a' || m[i+1] > 'z' {
 		return m, false
@@ -304,6 +401,23 @@ func GeminiDeployment(m string) (string, bool) {
 		return m, false
 	}
 	return base, true
+}
+
+// pbDuration is a google.protobuf.Duration.
+func pbDuration(b []byte) (time.Duration, bool) {
+	var sec, nanos uint64
+	if pbWalk(b, func(num int, v uint64, d []byte) {
+		switch {
+		case d != nil:
+		case num == 1:
+			sec = v
+		case num == 2:
+			nanos = v
+		}
+	}) != nil || sec > 1<<30 || nanos >= 1e9 {
+		return 0, false
+	}
+	return time.Duration(sec)*time.Second + time.Duration(nanos), true
 }
 
 // pbTime is a google.protobuf.Timestamp, zero when it has no seconds.
@@ -405,7 +519,8 @@ func readAntigravityCalls(f file) (*callFile, bool) {
 	}
 	for _, c := range calls {
 		st.Calls = append(st.Calls, Call{
-			Agent: "antigravity", Time: c.at, Session: st.Session, Model: c.model, Tokens: c.tokens,
+			Agent: "antigravity", Time: c.at, Session: st.Session, Model: c.model, Effort: st.str(c.effort),
+			Tokens: c.tokens, Reasoning: c.reasoning, TTFT: c.ttft, Millis: c.millis,
 			Msg: st.str("antigravity:" + st.Session + ":" + strconv.FormatInt(c.step, 10)),
 		})
 	}

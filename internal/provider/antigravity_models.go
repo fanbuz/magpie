@@ -47,6 +47,17 @@ func EffortFamily(id string) string {
 	return f
 }
 
+// AntigravityModelEffort is the model family and thinking level an
+// Antigravity generator's id and display name stand for ("claude-opus-5-5-high"
+// or "Gemini 4 Argon (High)" is at high).
+func AntigravityModelEffort(id, name string) (model, effort string) {
+	model, effort = splitAntigravityID(id)
+	if _, l := antigravityNameEffort(name); l != "" {
+		effort = l
+	}
+	return model, effort
+}
+
 // antigravityNameEffort is the level a name's last words in brackets say
 // ("Gemini 3.7 Flash (High)" is high), and the name without them.
 func antigravityNameEffort(name string) (string, string) {

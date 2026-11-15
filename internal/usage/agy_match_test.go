@@ -89,3 +89,35 @@ func TestAntigravityAppCallThroughMagpieCountedOnce(t *testing.T) {
 		t.Error("an app call made straight to Google was taken for the gateway's")
 	}
 }
+
+func TestAntigravityLocalCallTimingAndSpeed(t *testing.T) {
+	began := time.Unix(1791860318, 193779000)
+	calls := []sessions.Call{
+		// Step 1 of yygutn's #2190 rows: 9 ms stream window (a burst tool call)
+		{Time: began, Agent: "antigravity", Session: "s1", Model: "gemini-3.8-flash",
+			Tokens: sessions.Tokens{Input: 13317, Output: 621}, Reasoning: 502, TTFT: 10466, Millis: 10475, Msg: "antigravity:s1:1"},
+		// Step 5 of yygutn's #2190 rows: 5902 ms stream window
+		{Time: began.Add(15 * time.Second), Agent: "antigravity", Session: "s1", Model: "gemini-3.8-flash",
+			Tokens: sessions.Tokens{Input: 15531, Output: 194}, Reasoning: 80, TTFT: 3800, Millis: 9702, Msg: "antigravity:s1:5"},
+		// parkavenue9639's agy generator 0 (#3147): 5621 ms stream window
+		{Time: began.Add(30 * time.Second), Agent: "agy", Session: "s2", Model: "gemini-4-argon", Effort: "high",
+			Tokens: sessions.Tokens{Input: 11519, Output: 781}, Reasoning: 415, TTFT: 11988, Millis: 17609, Msg: "agy:s2:1"},
+	}
+	rows, _, _, _ := ledgerWith(time.Time{}, Filter{}, nil, calls)
+	if len(rows) != 3 {
+		t.Fatalf("want 3 rows, got %d", len(rows))
+	}
+	// rows are newest first
+	if n, w := rows[0].Decode(); rows[0].Effort != "high" || rows[0].Reasoning != 415 || rows[0].TTFT != 11988 || rows[0].Millis != 17609 || n != 781 || w != 5621 {
+		t.Errorf("agy row: effort=%q r=%d ttft=%d ms=%d decode=(%d,%d)", rows[0].Effort, rows[0].Reasoning, rows[0].TTFT, rows[0].Millis, n, w)
+	}
+	if n, w := rows[1].Decode(); rows[1].Reasoning != 80 || rows[1].TTFT != 3800 || rows[1].Millis != 9702 || n != 194 || w != 5902 {
+		t.Errorf("antigravity streamed step: r=%d ttft=%d ms=%d decode=(%d,%d)", rows[1].Reasoning, rows[1].TTFT, rows[1].Millis, n, w)
+	}
+	if n, w := rows[2].Decode(); rows[2].Reasoning != 502 || rows[2].TTFT != 10466 || rows[2].Millis != 10475 || n != 0 || w != 0 {
+		t.Errorf("antigravity burst tool step should keep timing but report no decode speed: r=%d ttft=%d ms=%d decode=(%d,%d)", rows[2].Reasoning, rows[2].TTFT, rows[2].Millis, n, w)
+	}
+	if !GeminiServing("gemini-4-argon", "gemini-4-argon-trial") {
+		t.Error("gemini-4-argon-trial not recognized as Gemini deployment of gemini-4-argon")
+	}
+}

@@ -128,18 +128,24 @@ func TestAgyCallsNameTheirModel(t *testing.T) {
 	putAgyModelDB(t, dir)
 	got := agyCallsNow()
 	want := []struct {
-		model  string
-		tokens Tokens
+		model     string
+		tokens    Tokens
+		reasoning int
+		ttft      int64
+		millis    int64
 	}{
-		{"gemini-4-argon", Tokens{Input: 11519, Output: 781}},
-		{"gemini-3.8-flash", Tokens{Input: 900, CacheRead: 100, Output: 40}},
+		{"gemini-4-argon", Tokens{Input: 11519, Output: 781}, 415, 11988, 17609},
+		{"gemini-3.8-flash", Tokens{Input: 900, CacheRead: 100, Output: 40}, 0, 0, 0},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("want %d calls, got %d: %+v", len(want), len(got), got)
 	}
 	for i, w := range want {
-		if got[i].Model != w.model || got[i].Tokens != w.tokens {
-			t.Errorf("call %d: %q %+v, want %q %+v", i, got[i].Model, got[i].Tokens, w.model, w.tokens)
+		c := got[i]
+		if c.Model != w.model || c.Tokens != w.tokens || c.Reasoning != w.reasoning || c.TTFT != w.ttft || c.Millis != w.millis {
+			t.Errorf("call %d: %q %+v r=%d ttft=%d ms=%d, want %q %+v r=%d ttft=%d ms=%d",
+				i, c.Model, c.Tokens, c.Reasoning, c.TTFT, c.Millis,
+				w.model, w.tokens, w.reasoning, w.ttft, w.millis)
 		}
 	}
 }
